@@ -7,6 +7,7 @@ import {
   PAGE_MIN_W,
   PANEL_BAND_COLORS,
   PANEL_MAX_BANDS,
+  PANEL_MAX_WRITES,
   PANEL_WIDGET_KINDS,
   activePanelPage,
   addPanelPage,
@@ -19,7 +20,10 @@ import {
   importPanelFile,
   movePanelWidget,
   panelFileName,
+  panelFrameProblem,
   panelNumericTarget,
+  parsePanelHex,
+  formatPanelHex,
   panelWidgetSpec,
   pastePanelWidget,
   removePanelPage,
@@ -41,6 +45,8 @@ import {
   type PanelToggle,
   type PanelButton,
   type PanelNumeric,
+  type PanelWrite,
+  type PanelFrameSend,
 } from "../panelPage";
 import {
   clampPanelNumber,
@@ -53,9 +59,11 @@ import {
   panelWidgetCapability,
   resolvePanelSource,
   type PanelActionContext,
+  type PanelFrameDef,
   type PanelView,
 } from "../panelBinding";
 import { FilePick } from "./FilePick";
+import { copyText } from "../clipboard";
 
 interface DragState {
   kind: "move" | "resize";
@@ -71,6 +79,27 @@ interface DragState {
 interface History {
   past: PanelPage[];
   future: PanelPage[];
+}
+
+type PageMenu =
+  | { kind: "widget"; x: number; y: number; id: string }
+  | { kind: "canvas"; x: number; y: number }
+  | { kind: "page"; x: number; y: number; id: string };
+
+/// The signal a read-only or setpoint cell watches, for "Copy signal key".
+function panelSignalKey(widget: PanelWidget): string {
+  if (
+    widget.kind === "value" ||
+    widget.kind === "lamp" ||
+    widget.kind === "bar" ||
+    widget.kind === "gauge"
+  ) {
+    return widget.source.trim();
+  }
+  if (widget.kind === "numeric" && panelNumericTarget(widget) === "signal") {
+    return widget.source.trim();
+  }
+  return "";
 }
 
 const EMPTY_HISTORY: History = { past: [], future: [] };
@@ -136,6 +165,509 @@ function NumericControl({
         />
         {unit && <em>{unit}</em>}
       </span>
+    </div>
+  );
+}
+
+function frameIdText(frame: PanelFrameSend | undefined): string {
+  return frame?.protocol === "can"
+    ? `0x${frame.id.toString(16).toUpperCase()}`
+    : "";
+}
+
+function zeroHex(length: number | null): string {
+  return length && length > 0
+    ? formatPanelHex(new Array(length).fill(0))
+    : "";
+}
+
+function FrameField({
+  frame,
+  canBuses,
+  frBuses,
+  ethBuses,
+  ethFrames,
+  frameDefs,
+  onFocus,
+  onChange,
+}: {
+  frame: PanelFrameSend | undefined;
+  canBuses: { index: number; name: string }[];
+  frBuses: { index: number; name: string }[];
+  ethBuses: { index: number; name: string }[];
+  ethFrames: { bus: number; name: string; length: number | null }[];
+  frameDefs: PanelFrameDef[];
+  onFocus: () => void;
+  onChange: (frame: PanelFrameSend) => void;
+}) {
+  const [idDraft, setIdDraft] = useState(() => frameIdText(frame));
+  const [slotDraft, setSlotDraft] = useState(() =>
+    frame?.protocol === "fr" ? String(frame.slot) : "",
+  );
+  const [dataDraft, setDataDraft] = useState(() => frame?.data ?? "");
+  const [valueDrafts, setValueDrafts] = useState<Record<string, string>>({});
+  const [editing, setEditing] = useState<"id" | "slot" | "data" | null>(null);
+  const [error, setError] = useState("");
+  const protocol = frame?.protocol ?? "can";
+
+  useEffect(() => {
+    if (editing !== "id") setIdDraft(frameIdText(frame));
+  }, [frame, editing]);
+  useEffect(() => {
+    if (editing !== "slot") {
+      setSlotDraft(frame?.protocol === "fr" ? String(frame.slot) : "");
+    }
+  }, [frame, editing]);
+  useEffect(() => {
+    if (editing !== "data") setDataDraft(frame?.data ?? "");
+  }, [frame, editing]);
+  useEffect(() => {
+    const next: Record<string, string> = {};
+    for (const entry of frame?.values ?? []) {
+      next[entry.name] = String(entry.value);
+    }
+    setValueDrafts(next);
+  }, [frame]);
+
+  const commit = (next: PanelFrameSend): boolean => {
+    const problem = panelFrameProblem(next);
+    if (problem) {
+      setError(problem);
+      return false;
+    }
+    setError("");
+    onChange(next);
+    return true;
+  };
+
+  /// Changing the addressed frame drops physical values: they belong to the
+  /// old signal set.
+  const readdress = (next: PanelFrameSend): boolean =>
+    commit({ ...next, mode: "raw", values: [] });
+
+  const defaultFor = (kind: "can" | "fr" | "eth"): PanelFrameSend => {
+    if (kind === "can") {
+      return {
+        protocol: "can",
+        channel: canBuses[0]?.index ?? 0,
+        id: 0x7df,
+        extended: false,
+        data: "",
+      };
+    }
+    if (kind === "fr") {
+      return {
+        protocol: "fr",
+        bus: frBuses[0]?.index ?? 0,
+        slot: 1,
+        data: "",
+      };
+    }
+    const bus = ethBuses[0]?.index ?? 0;
+    const def = ethFrames.find((entry) => entry.bus === bus);
+    return {
+      protocol: "eth",
+      bus,
+      frame: def?.name ?? "",
+      data: zeroHex(def?.length ?? null),
+    };
+  };
+
+  const base = (): PanelFrameSend => frame ?? defaultFor(protocol);
+  const ethDef =
+    frame?.protocol === "eth"
+      ? ethFrames.find(
+          (entry) => entry.bus === frame.bus && entry.name === frame.frame,
+        )
+      : undefined;
+  const frameDef = frame
+    ? frameDefs.find((entry) => {
+        if (entry.protocol !== frame.protocol) return false;
+        if (frame.protocol === "can") {
+          return (
+            entry.bus === frame.channel &&
+            entry.id === frame.id &&
+            Boolean(entry.extended) === frame.extended
+          );
+        }
+        if (frame.protocol === "fr") {
+          return entry.bus === frame.bus && entry.slot === frame.slot;
+        }
+        return entry.bus === frame.bus && entry.frame === frame.frame;
+      })
+    : undefined;
+  const physical = frame?.mode === "physical" && frameDef !== undefined;
+
+  const commitId = () => {
+    setEditing(null);
+    const raw = idDraft.trim().replace(/^0x/i, "");
+    const id = /^[0-9a-fA-F]+$/.test(raw) ? Number.parseInt(raw, 16) : Number.NaN;
+    const current = base();
+    if (!Number.isInteger(id) || current.protocol !== "can") {
+      setError("ID must be hex");
+      setIdDraft(frameIdText(frame));
+      return;
+    }
+    if (!readdress({ ...current, id })) setIdDraft(frameIdText(frame));
+  };
+
+  const commitSlot = () => {
+    setEditing(null);
+    const slot = Number.parseInt(slotDraft.trim(), 10);
+    const current = base();
+    if (!Number.isInteger(slot) || current.protocol !== "fr") {
+      setError("Slot must be a number");
+      setSlotDraft(frame?.protocol === "fr" ? String(frame.slot) : "");
+      return;
+    }
+    if (!readdress({ ...current, slot })) {
+      setSlotDraft(frame?.protocol === "fr" ? String(frame.slot) : "");
+    }
+  };
+
+  const commitData = () => {
+    setEditing(null);
+    const bytes = parsePanelHex(dataDraft);
+    if (bytes === null) {
+      setError("Data must be hex bytes");
+      setDataDraft(frame?.data ?? "");
+      return;
+    }
+    const current = base();
+    if (current.protocol === "eth") {
+      const def = ethFrames.find(
+        (entry) => entry.bus === current.bus && entry.name === current.frame,
+      );
+      if (def?.length != null && bytes.length !== def.length) {
+        setError(`Frame "${current.frame}" carries ${def.length} payload bytes`);
+        setDataDraft(frame?.data ?? "");
+        return;
+      }
+    }
+    if (!commit({ ...current, data: formatPanelHex(bytes) })) {
+      setDataDraft(frame?.data ?? "");
+    }
+  };
+
+  const commitValue = (name: string, raw: string) => {
+    const current = base();
+    const values = (current.values ?? []).filter((entry) => entry.name !== name);
+    const trimmed = raw.trim();
+    if (trimmed !== "") {
+      const value = Number(trimmed);
+      if (!Number.isFinite(value)) {
+        setError(`Value for ${name} must be a number`);
+        return;
+      }
+      values.push({ name, value });
+    }
+    commit({ ...current, mode: "physical", values });
+  };
+
+  const dataHint =
+    protocol === "can"
+      ? "Sends once when clicked."
+      : protocol === "fr"
+        ? "Session only — the FR port stays receive-only."
+        : `Session only — no Ethernet transmit port.${
+            ethDef?.length != null ? ` ${ethDef.length} payload bytes.` : ""
+          }`;
+
+  return (
+    <div class="page-frame">
+      <label>
+        Protocol
+        <select
+          value={protocol}
+          onFocus={onFocus}
+          onChange={(event) => {
+            const next = (event.target as HTMLSelectElement).value;
+            if (next !== "can" && next !== "fr" && next !== "eth") return;
+            setError("");
+            onChange(defaultFor(next));
+          }}
+        >
+          <option value="can">CAN</option>
+          <option value="fr">FlexRay</option>
+          <option value="eth">Ethernet</option>
+        </select>
+      </label>
+      {protocol === "can" ? (
+        <>
+          <label>
+            Bus
+            <select
+              value={
+                frame?.protocol === "can" ? String(frame.channel) : ""
+              }
+              onFocus={onFocus}
+              onChange={(event) => {
+                const value = (event.target as HTMLSelectElement).value;
+                const current = base();
+                if (value === "" || current.protocol !== "can") return;
+                readdress({ ...current, channel: Number(value) });
+              }}
+            >
+              <option value="">Select bus</option>
+              {canBuses.map((bus) => (
+                <option value={bus.index} key={bus.index}>
+                  {bus.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <div class="page-frame-row">
+            <label>
+              ID (hex)
+              <input
+                value={idDraft}
+                placeholder="0x7DF"
+                spellcheck={false}
+                onFocus={() => {
+                  onFocus();
+                  setEditing("id");
+                }}
+                onInput={(event) =>
+                  setIdDraft((event.target as HTMLInputElement).value)
+                }
+                onBlur={commitId}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    event.preventDefault();
+                    (event.target as HTMLInputElement).blur();
+                  } else if (event.key === "Escape") {
+                    event.preventDefault();
+                    setEditing(null);
+                    setIdDraft(frameIdText(frame));
+                    (event.target as HTMLInputElement).blur();
+                  }
+                }}
+              />
+            </label>
+            <label class="page-frame-ext">
+              <input
+                type="checkbox"
+                checked={frame?.protocol === "can" && frame.extended}
+                onFocus={onFocus}
+                onChange={(event) => {
+                  const current = base();
+                  if (current.protocol !== "can") return;
+                  readdress({
+                    ...current,
+                    extended: (event.target as HTMLInputElement).checked,
+                  });
+                }}
+              />
+              Extended
+            </label>
+          </div>
+        </>
+      ) : protocol === "fr" ? (
+        <>
+          <label>
+            Bus
+            <select
+              value={frame?.protocol === "fr" ? String(frame.bus) : ""}
+              onFocus={onFocus}
+              onChange={(event) => {
+                const value = (event.target as HTMLSelectElement).value;
+                const current = base();
+                if (value === "" || current.protocol !== "fr") return;
+                readdress({ ...current, bus: Number(value) });
+              }}
+            >
+              <option value="">Select bus</option>
+              {frBuses.map((bus) => (
+                <option value={bus.index} key={bus.index}>
+                  {bus.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            Slot
+            <input
+              type="number"
+              min={1}
+              max={2047}
+              value={slotDraft}
+              placeholder="1"
+              onFocus={() => {
+                onFocus();
+                setEditing("slot");
+              }}
+              onInput={(event) =>
+                setSlotDraft((event.target as HTMLInputElement).value)
+              }
+              onBlur={commitSlot}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  event.preventDefault();
+                  (event.target as HTMLInputElement).blur();
+                }
+              }}
+            />
+          </label>
+        </>
+      ) : (
+        <>
+          <label>
+            Bus
+            <select
+              value={frame?.protocol === "eth" ? String(frame.bus) : ""}
+              onFocus={onFocus}
+              onChange={(event) => {
+                const value = (event.target as HTMLSelectElement).value;
+                if (value === "") return;
+                const bus = Number(value);
+                const def = ethFrames.find((entry) => entry.bus === bus);
+                readdress({
+                  protocol: "eth",
+                  bus,
+                  frame: def?.name ?? "",
+                  data: zeroHex(def?.length ?? null),
+                });
+              }}
+            >
+              <option value="">Select bus</option>
+              {ethBuses.map((bus) => (
+                <option value={bus.index} key={bus.index}>
+                  {bus.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            Frame
+            <select
+              value={frame?.protocol === "eth" ? frame.frame : ""}
+              onFocus={onFocus}
+              onChange={(event) => {
+                const name = (event.target as HTMLSelectElement).value;
+                if (name === "" || frame?.protocol !== "eth") return;
+                const def = ethFrames.find(
+                  (entry) => entry.bus === frame.bus && entry.name === name,
+                );
+                readdress({
+                  ...frame,
+                  frame: name,
+                  data: zeroHex(def?.length ?? null),
+                });
+              }}
+            >
+              <option value="">Select frame</option>
+              {ethFrames
+                .filter(
+                  (entry) =>
+                    frame?.protocol === "eth" && entry.bus === frame.bus,
+                )
+                .map((entry) => (
+                  <option value={entry.name} key={entry.name}>
+                    {entry.name}
+                  </option>
+                ))}
+            </select>
+          </label>
+        </>
+      )}
+      {frameDef && (
+        <label>
+          Mode
+          <select
+            value={physical ? "physical" : "raw"}
+            onFocus={onFocus}
+            onChange={(event) => {
+              const mode =
+                (event.target as HTMLSelectElement).value === "physical"
+                  ? "physical"
+                  : "raw";
+              const current = base();
+              commit({
+                ...current,
+                mode,
+                ...(mode === "raw" ? { values: [] } : {}),
+              });
+            }}
+          >
+            <option value="raw">Raw</option>
+            <option value="physical">Physical</option>
+          </select>
+        </label>
+      )}
+      {physical && frameDef ? (
+        <div class="page-frame-values">
+          {frameDef.signals.map((signal) => (
+            <label
+              key={signal.name}
+              title={`${signal.name}${signal.unit ? ` · ${signal.unit}` : ""} · ${signal.min}..${signal.max}`}
+            >
+              <span>{signal.name}</span>
+              <input
+                type="number"
+                step="any"
+                value={valueDrafts[signal.name] ?? ""}
+                placeholder={
+                  signal.initial !== undefined ? String(signal.initial) : "0"
+                }
+                onFocus={onFocus}
+                onInput={(event) => {
+                  const value = (event.target as HTMLInputElement).value;
+                  setValueDrafts((drafts) => ({
+                    ...drafts,
+                    [signal.name]: value,
+                  }));
+                }}
+                onBlur={(event) =>
+                  commitValue(signal.name, (event.target as HTMLInputElement).value)
+                }
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    event.preventDefault();
+                    (event.target as HTMLInputElement).blur();
+                  }
+                }}
+              />
+              {signal.unit && <em>{signal.unit}</em>}
+            </label>
+          ))}
+          {frameDef.signals.length === 0 && (
+            <span class="page-frame-hint">
+              This frame declares no signals; use Raw for its payload.
+            </span>
+          )}
+        </div>
+      ) : (
+        <label>
+          Data (hex)
+          <input
+            value={dataDraft}
+            placeholder="02 10 03"
+            spellcheck={false}
+            maxLength={8192}
+            onFocus={() => {
+              onFocus();
+              setEditing("data");
+            }}
+            onInput={(event) =>
+              setDataDraft((event.target as HTMLInputElement).value)
+            }
+            onBlur={commitData}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") {
+                event.preventDefault();
+                (event.target as HTMLInputElement).blur();
+              } else if (event.key === "Escape") {
+                event.preventDefault();
+                setEditing(null);
+                setDataDraft(frame?.data ?? "");
+                (event.target as HTMLInputElement).blur();
+              }
+            }}
+          />
+        </label>
+      )}
+      {error && <span class="page-frame-error">{error}</span>}
+      <span class="page-frame-hint">{dataHint}</span>
     </div>
   );
 }
@@ -622,6 +1154,8 @@ export function PagePanel({
   const [addOpen, setAddOpen] = useState(false);
   const addTrigger = useRef<HTMLButtonElement>(null);
   const addMenu = useRef<HTMLDivElement>(null);
+  const [menu, setMenu] = useState<PageMenu | null>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     setSizeW(String(page.width * PAGE_GRID));
@@ -647,6 +1181,28 @@ export function PagePanel({
     if (!addOpen) return;
     addMenu.current?.querySelector<HTMLButtonElement>("button")?.focus();
   }, [addOpen]);
+
+  useEffect(() => {
+    if (!menu) return;
+    menuRef.current
+      ?.querySelector<HTMLButtonElement>("button:not(:disabled)")
+      ?.focus();
+    const close = (event: PointerEvent) => {
+      if (!menuRef.current?.contains(event.target as Node)) setMenu(null);
+    };
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      // Capture phase: the editor's Esc handler must not leave Edit too.
+      event.stopImmediatePropagation();
+      setMenu(null);
+    };
+    window.addEventListener("pointerdown", close);
+    window.addEventListener("keydown", onKey, true);
+    return () => {
+      window.removeEventListener("pointerdown", close);
+      window.removeEventListener("keydown", onKey, true);
+    };
+  }, [menu]);
 
   useEffect(() => {
     if (!addOpen) return;
@@ -771,15 +1327,13 @@ export function PagePanel({
     setSelected(null);
   };
 
-  const removeSelected = () => {
-    if (!selectedWidget) return;
-    commit(removePanelWidget(page, selectedWidget.id));
+  const removeWidget = (id: string) => {
+    commit(removePanelWidget(page, id));
     setSelected(null);
   };
 
-  const duplicateSelected = () => {
-    if (!selectedWidget) return;
-    const copy = duplicatePanelWidget(page, selectedWidget.id);
+  const duplicateWidget = (id: string) => {
+    const copy = duplicatePanelWidget(page, id);
     if (!copy) {
       onNotice("No free space for a copy");
       return;
@@ -788,8 +1342,30 @@ export function PagePanel({
     setSelected(copy.id);
   };
 
+  const copyWidget = (id: string) => {
+    const widget = page.widgets.find((entry) => entry.id === id);
+    if (widget) setClipboard({ ...widget });
+  };
+
+  const copySignalKey = (id: string) => {
+    const widget = page.widgets.find((entry) => entry.id === id);
+    const key = widget ? panelSignalKey(widget) : "";
+    if (!key) return;
+    void copyText(key).then((copied) =>
+      onNotice(copied ? `Copied ${key}` : "Could not copy the signal key"),
+    );
+  };
+
+  const removeSelected = () => {
+    if (selectedWidget) removeWidget(selectedWidget.id);
+  };
+
+  const duplicateSelected = () => {
+    if (selectedWidget) duplicateWidget(selectedWidget.id);
+  };
+
   const copySelected = () => {
-    if (selectedWidget) setClipboard({ ...selectedWidget });
+    if (selectedWidget) copyWidget(selectedWidget.id);
   };
 
   const pasteClipboard = () => {
@@ -848,7 +1424,7 @@ export function PagePanel({
     id: string,
     kind: "move" | "resize",
   ) => {
-    if (!editing) return;
+    if (!editing || event.button !== 0) return;
     const widget = page.widgets.find((entry) => entry.id === id);
     if (!widget) return;
     event.preventDefault();
@@ -886,8 +1462,8 @@ export function PagePanel({
     onBook(added.book);
   };
 
-  const copyPage = () => {
-    const copy = duplicatePanelPage(book, page.id);
+  const copyPageById = (id: string) => {
+    const copy = duplicatePanelPage(book, id);
     if (!copy) {
       onNotice("Cannot duplicate this page");
       return;
@@ -896,14 +1472,18 @@ export function PagePanel({
     onBook(copy.book);
   };
 
-  const deletePage = () => {
+  const deletePageById = (id: string) => {
     if (book.pages.length <= 1) {
       onNotice("Keep at least one page");
       return;
     }
     clearPageUi();
-    onBook(removePanelPage(book, page.id));
+    onBook(removePanelPage(book, id));
   };
+
+  const copyPage = () => copyPageById(page.id);
+
+  const deletePage = () => deletePageById(page.id);
 
   const commitRename = () => {
     if (!renaming) return;
@@ -926,9 +1506,10 @@ export function PagePanel({
     setSelected(added.id);
   };
 
-  const exportPage = () => {
-    const name = panelFileName(page.name);
-    const blob = new Blob([exportPanelFile(page)], {
+  const exportPageById = (id: string) => {
+    const target = book.pages.find((entry) => entry.id === id) ?? page;
+    const name = panelFileName(target.name);
+    const blob = new Blob([exportPanelFile(target)], {
       type: "application/json",
     });
     const url = URL.createObjectURL(blob);
@@ -939,6 +1520,8 @@ export function PagePanel({
     window.setTimeout(() => URL.revokeObjectURL(url), 0);
     onNotice(`Exported ${name}`);
   };
+
+  const exportPage = () => exportPageById(page.id);
 
   const importPage = (text: string) => {
     let raw: unknown;
@@ -986,6 +1569,22 @@ export function PagePanel({
     setSizeW(String(next.width * PAGE_GRID));
     setSizeH(String(next.height * PAGE_GRID));
   };
+
+  const menuWidget =
+    menu?.kind === "widget"
+      ? page.widgets.find((widget) => widget.id === menu.id)
+      : undefined;
+  const menuSignal = menuWidget ? panelSignalKey(menuWidget) : "";
+  // Flip above the click when the menu would run off the bottom; the canvas
+  // menu is the tallest (Paste, seven controls, Undo/Redo).
+  const menuHeight =
+    menu?.kind === "canvas" ? 330 : menu?.kind === "widget" ? 150 : 150;
+  const menuTop = menu
+    ? menu.y + menuHeight > window.innerHeight - 8
+      ? Math.max(8, menu.y - menuHeight)
+      : menu.y
+    : 0;
+  const menuLeft = menu ? Math.min(menu.x, window.innerWidth - 200) : 0;
 
   const capabilityOf = (widget: PanelWidget) =>
     panelWidgetCapability(widget, view, actionContext);
@@ -1157,12 +1756,11 @@ export function PagePanel({
         }}
       >
         {widget.label ||
-          (widget.action === "script"
-            ? widget.script || "Script"
-            : panelWidgetSpec(widget.kind).fields
-                .find((field) => field.key === "action")
-                ?.options?.find((option) => option.value === widget.action)
-                ?.label) ||
+          (widget.action === "none"
+            ? "Preset"
+            : widget.action === "send"
+              ? "Send"
+              : widget.script || "Script") ||
           "Button"}
       </button>
     );
@@ -1177,6 +1775,8 @@ export function PagePanel({
     if (!fieldSpec) return null;
     if (key === "script" && field(widget, "action") !== "script") return null;
     if (key === "argument" && field(widget, "action") !== "script") return null;
+    if (key === "writes" && field(widget, "action") !== "none") return null;
+    if (key === "frame" && field(widget, "action") !== "send") return null;
     if (
       widget.kind === "numeric" &&
       key === "sysvar" &&
@@ -1194,6 +1794,87 @@ export function PagePanel({
     const value = field(widget, fieldSpec.key);
     const update = (patch: PanelWidgetPatch) =>
       commit(updatePanelWidget(page, widget.id, patch));
+    if (fieldSpec.kind === "writes") {
+      const writes: PanelWrite[] =
+        widget.kind === "button" ? (widget.writes ?? []) : [];
+      return (
+        <div class="page-writes">
+          <span class="page-writes-label">{fieldSpec.label}</span>
+          {writes.map((write, index) => (
+            <div class="page-write-row" key={index}>
+              <SuggestionInput
+                value={write.source}
+                options={(view.writeTargets ?? []).map((target) => target.key)}
+                placeholder="channel:id:signal"
+                maxLength={120}
+                onFocus={pushHistory}
+                onCommit={(next) =>
+                  update({
+                    writes: writes.map((entry, at) =>
+                      at === index ? { ...entry, source: next } : entry,
+                    ),
+                  })
+                }
+              />
+              <span class="page-write-value">
+                Value
+                <DraftNumberInput
+                  value={write.value}
+                  placeholder="0"
+                  onFocus={pushHistory}
+                  onCommit={(next) =>
+                    update({
+                      writes: writes.map((entry, at) =>
+                        at === index ? { ...entry, value: next } : entry,
+                      ),
+                    })
+                  }
+                />
+              </span>
+              <button
+                type="button"
+                class="mini page-write-remove"
+                title="Remove signal write"
+                aria-label="Remove signal write"
+                onClick={() =>
+                  update({
+                    writes: writes.filter((_, at) => at !== index),
+                  })
+                }
+              >
+                <svg viewBox="0 0 16 16" aria-hidden="true">
+                  <path d="M4.5 4.5l7 7M11.5 4.5l-7 7" />
+                </svg>
+              </button>
+            </div>
+          ))}
+          <button
+            type="button"
+            class="mini page-write-add"
+            disabled={writes.length >= PANEL_MAX_WRITES}
+            onClick={() =>
+              update({ writes: [...writes, { source: "", value: 0 }] })
+            }
+          >
+            + Signal
+          </button>
+        </div>
+      );
+    }
+    if (fieldSpec.kind === "frame") {
+      return (
+        <FrameField
+          frame={widget.kind === "button" ? widget.frame : undefined}
+          canBuses={view.frameBuses ?? []}
+          frBuses={view.frBuses ?? []}
+          ethBuses={view.ethBuses ?? []}
+          ethFrames={view.ethFrames ?? []}
+          frameDefs={view.frameDefs ?? []}
+          onFocus={pushHistory}
+          onChange={(frame) => update({ frame })}
+        />
+      );
+    }
     if (fieldSpec.kind === "bands") {
       return (
         <BandsField
@@ -1368,6 +2049,17 @@ export function PagePanel({
                       setRenaming({ id: entry.id, name: entry.name });
                     }
                   }}
+                  onContextMenu={(event) => {
+                    if (!editing) return;
+                    event.preventDefault();
+                    if (entry.id !== page.id) switchPage(entry.id);
+                    setMenu({
+                      kind: "page",
+                      id: entry.id,
+                      x: event.clientX,
+                      y: event.clientY,
+                    });
+                  }}
                 >
                   {entry.name}
                 </button>
@@ -1539,6 +2231,16 @@ export function PagePanel({
                 setSelected(null);
               }
             }}
+            onContextMenu={(event) => {
+              if (!editing) return;
+              event.preventDefault();
+              setSelected(null);
+              setMenu({
+                kind: "canvas",
+                x: event.clientX,
+                y: event.clientY,
+              });
+            }}
           >
             {page.widgets.length === 0 && (
               <div class="page-empty">
@@ -1564,6 +2266,18 @@ export function PagePanel({
                   } else {
                     startDrag(event, widget.id, "move");
                   }
+                }}
+                onContextMenu={(event) => {
+                  if (!editing) return;
+                  event.preventDefault();
+                  event.stopPropagation();
+                  setSelected(widget.id);
+                  setMenu({
+                    kind: "widget",
+                    id: widget.id,
+                    x: event.clientX,
+                    y: event.clientY,
+                  });
                 }}
               >
                 {control(widget)}
@@ -1669,6 +2383,192 @@ export function PagePanel({
           </aside>
         )}
       </div>
+      {menu && (
+        <div
+          ref={menuRef}
+          class="trace-menu page-menu"
+          role="menu"
+          style={{
+            left: `${menuLeft}px`,
+            top: `${menuTop}px`,
+            maxHeight: `calc(100vh - ${menuTop + 8}px)`,
+          }}
+          onPointerDown={(event) => event.stopPropagation()}
+          onKeyDown={(event) => {
+            const items = [
+              ...(menuRef.current?.querySelectorAll<HTMLButtonElement>(
+                "button:not(:disabled)",
+              ) ?? []),
+            ];
+            const index = items.indexOf(
+              document.activeElement as HTMLButtonElement,
+            );
+            if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+              event.preventDefault();
+              const step = event.key === "ArrowDown" ? 1 : -1;
+              items[
+                index < 0
+                  ? 0
+                  : (index + step + items.length) % items.length
+              ]?.focus();
+            } else if (event.key === "Home" || event.key === "End") {
+              event.preventDefault();
+              items[event.key === "Home" ? 0 : items.length - 1]?.focus();
+            } else if (event.key === "Tab") {
+              setMenu(null);
+            }
+          }}
+        >
+          {menu.kind === "widget" && (
+            <>
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  setMenu(null);
+                  duplicateWidget(menu.id);
+                }}
+              >
+                Duplicate
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  setMenu(null);
+                  copyWidget(menu.id);
+                }}
+              >
+                Copy
+              </button>
+              {menuSignal && (
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    setMenu(null);
+                    copySignalKey(menu.id);
+                  }}
+                >
+                  Copy signal key
+                </button>
+              )}
+              <div class="page-menu-sep" role="separator" />
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  setMenu(null);
+                  removeWidget(menu.id);
+                }}
+              >
+                Delete
+              </button>
+            </>
+          )}
+          {menu.kind === "canvas" && (
+            <>
+              <button
+                type="button"
+                role="menuitem"
+                disabled={!clipboard}
+                onClick={() => {
+                  setMenu(null);
+                  pasteClipboard();
+                }}
+              >
+                Paste
+              </button>
+              <div class="page-menu-sep" role="separator" />
+              {PANEL_WIDGET_KINDS.map((entry) => (
+                <button
+                  type="button"
+                  role="menuitem"
+                  key={entry.kind}
+                  onClick={() => {
+                    setMenu(null);
+                    add(entry.kind);
+                  }}
+                >
+                  Add {entry.label}
+                </button>
+              ))}
+              <div class="page-menu-sep" role="separator" />
+              <button
+                type="button"
+                role="menuitem"
+                disabled={history.past.length === 0}
+                onClick={() => {
+                  setMenu(null);
+                  undo();
+                }}
+              >
+                Undo
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                disabled={history.future.length === 0}
+                onClick={() => {
+                  setMenu(null);
+                  redo();
+                }}
+              >
+                Redo
+              </button>
+            </>
+          )}
+          {menu.kind === "page" && (
+            <>
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  const target = book.pages.find((entry) => entry.id === menu.id);
+                  setMenu(null);
+                  if (!target) return;
+                  renameCanceled.current = false;
+                  setRenaming({ id: target.id, name: target.name });
+                }}
+              >
+                Rename
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  setMenu(null);
+                  copyPageById(menu.id);
+                }}
+              >
+                Duplicate page
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  setMenu(null);
+                  exportPageById(menu.id);
+                }}
+              >
+                Export page
+              </button>
+              <div class="page-menu-sep" role="separator" />
+              <button
+                type="button"
+                role="menuitem"
+                disabled={book.pages.length <= 1}
+                onClick={() => {
+                  setMenu(null);
+                  deletePageById(menu.id);
+                }}
+              >
+                Delete page
+              </button>
+            </>
+          )}
+        </div>
+      )}
       {fullscreen && toast && (
         <div class="page-toast" role="status">
           {toast}

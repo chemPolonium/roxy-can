@@ -1747,6 +1747,151 @@ body.col-resizing {
   gap: 4px;
 }
 
+.page-writes {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.page-writes-label {
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.page-write-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+}
+
+.page-write-row .page-suggest {
+  flex: 1 1 100%;
+  width: auto;
+  min-width: 0;
+}
+
+.page-write-value {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.page-write-row input[type="number"] {
+  flex: 0 0 58px;
+  width: 58px;
+  height: 22px;
+  padding: 0 4px;
+  font-size: 11px;
+}
+
+.page-write-row button.page-write-remove {
+  display: inline-flex;
+  flex: 0 0 18px;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  margin-left: auto;
+  padding: 0;
+  color: var(--muted);
+}
+
+.page-write-remove svg {
+  width: 11px;
+  height: 11px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.4;
+  stroke-linecap: round;
+}
+
+.page-write-remove:hover {
+  color: #d8e0ea;
+}
+
+.page-write-add {
+  align-self: flex-start;
+}
+
+.page-frame {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.page-frame-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 6px;
+}
+
+.page-frame-row > label:first-child {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.page-inspector .page-frame-ext {
+  flex: 0 0 auto;
+  flex-direction: row;
+  align-items: center;
+  gap: 4px;
+  padding-bottom: 4px;
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.page-inspector .page-frame-ext input {
+  width: auto;
+}
+
+.page-frame-error {
+  color: #e06c75;
+  font-size: 9.5px;
+}
+
+.page-frame-hint {
+  color: var(--muted);
+  font-size: 9.5px;
+}
+
+.page-frame-values {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 180px;
+  overflow: auto;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+}
+
+.page-frame-values label {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 64px auto;
+  align-items: center;
+  gap: 6px;
+}
+
+.page-frame-values label > span {
+  overflow: hidden;
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.page-frame-values input {
+  width: 64px;
+}
+
+.page-frame-values em {
+  color: var(--muted);
+  font-size: 9px;
+  font-style: normal;
+}
+
 .trace-body {
   display: flex;
   flex: 1 1 auto;
@@ -1855,6 +2000,21 @@ body.col-resizing {
 
 .trace-menu button:hover:not(:disabled) {
   background: #1b2836;
+}
+
+.page-menu {
+  min-width: 180px;
+  overflow-y: auto;
+}
+
+.page-menu button:disabled {
+  opacity: 0.45;
+}
+
+.page-menu-sep {
+  height: 1px;
+  margin: 4px 6px;
+  background: var(--line);
 }
 
 .table-scroll:focus {

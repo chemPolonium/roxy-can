@@ -4,7 +4,8 @@
 
 use super::parser::{BinOp, Expr, FnDecl, Item, OnDecl, OnKind, Program, SpannedStmt, Stmt, UnOp};
 use super::{
-    Function, HOST_FNS, Handler, HandlerKind, Op, Script, ScriptError, Value, WILDCARD_LABEL,
+    FrameInstance, Function, HOST_FNS, Handler, HandlerKind, Op, Script, ScriptError, Value,
+    WILDCARD_LABEL,
 };
 use std::collections::{HashMap, HashSet};
 
@@ -48,6 +49,11 @@ pub fn compile(program: Program) -> Result<Script, ScriptError> {
         send_refs: Vec::new(),
         recv_refs: Vec::new(),
         opaque_sends: Vec::new(),
+        frame_globals: HashMap::new(),
+        frame_locals: Vec::new(),
+        frame_sends: Vec::new(),
+        frame_fields: Vec::new(),
+        frame_consts: Vec::new(),
         timer_arms: Vec::new(),
     };
 
@@ -209,6 +215,9 @@ pub fn compile(program: Program) -> Result<Script, ScriptError> {
         recv_wildcard: c.recv_wildcard,
         sysvar_refs: c.sysvar_refs,
         opaque_sends: c.opaque_sends,
+        frame_sends: c.frame_sends,
+        frame_fields: c.frame_fields,
+        frame_consts: c.frame_consts,
         timer_arms: c.timer_arms,
     })
 }
@@ -269,6 +278,18 @@ struct Comp {
     send_refs: Vec<(String, u32, bool)>,
     /// R2 spike: sends whose id the compiler could not derive.
     opaque_sends: Vec<String>,
+    /// Statically known frame instance origins, by global variable name.
+    frame_globals: HashMap<String, String>,
+    /// Frame origins of locals/parameters; `None` means the value is not a
+    /// statically known frame instance.
+    frame_locals: Vec<(String, Option<String>, u32)>,
+    /// Frame paths a known `send_frame` may send.
+    frame_sends: Vec<String>,
+    /// `(frame path, signal)` written on a known instance.
+    frame_fields: Vec<(String, String)>,
+    /// Constant writes `(frame path, signal, physical value)`, for the host's
+    /// start-time range warning.
+    frame_consts: Vec<(String, String, f64)>,
     /// R2 response mapping: `(arming handler label, timer name)` per
     /// literal `set_timer` call.
     timer_arms: Vec<(String, String)>,
@@ -299,6 +320,18 @@ fn handler_label(kind: &HandlerKind) -> String {
             bus: Some(bus),
             slot,
         } => format!("<on fr {bus} slot {slot}>"),
+    }
+}
+
+/// The value a constant write states, when the expression is a literal or a
+/// negated literal. Anything else depends on runtime state and cannot be
+/// range-checked at start.
+fn const_number(e: &Expr) -> Option<f64> {
+    match e {
+        Expr::Int(i) => Some(*i as f64),
+        Expr::Float(f) => Some(*f),
+        Expr::Unary(UnOp::Neg, inner) => const_number(inner).map(|v| -v),
+        _ => None,
     }
 }
 
@@ -346,6 +379,45 @@ impl Comp {
             .and_then(|i| u8::try_from(i).ok())
     }
 
+    /// The catalog path a variable is known to hold, if any.
+    fn frame_origin(&self, name: &str) -> Option<String> {
+        if let Some((_, origin, _)) = self.frame_locals.iter().rev().find(|(n, _, _)| n == name) {
+            return origin.clone();
+        }
+        if self.resolve_local(name).is_some() {
+            return None;
+        }
+        self.frame_globals.get(name).cloned()
+    }
+
+    fn expr_frame_origin(&self, expr: &Expr) -> Option<String> {
+        match expr {
+            Expr::FrameNew(path) => Some(path.clone()),
+            Expr::Ident(name) => self.frame_origin(name),
+            _ => None,
+        }
+    }
+
+    fn note_frame_field(&mut self, path: &str, field: &str) {
+        let entry = (path.to_string(), field.to_string());
+        if !self.frame_fields.contains(&entry) {
+            self.frame_fields.push(entry);
+        }
+    }
+
+    fn note_frame_const(&mut self, path: &str, field: &str, value: f64) {
+        let entry = (path.to_string(), field.to_string(), value);
+        if !self.frame_consts.contains(&entry) {
+            self.frame_consts.push(entry);
+        }
+    }
+
+    fn note_frame_send(&mut self, path: &str) {
+        if !self.frame_sends.iter().any(|existing| existing == path) {
+            self.frame_sends.push(path.to_string());
+        }
+    }
+
     fn stmt(&mut self, s: &SpannedStmt) -> Result<(), ScriptError> {
         // Every op emitted for this statement reports the statement's
         // line at runtime; errors name the statement's column too.
@@ -355,6 +427,7 @@ impl Comp {
         match &s.stmt {
             Stmt::Let(name, expr) => {
                 self.expr(expr)?;
+                let origin = self.expr_frame_origin(expr);
                 if self.in_fn {
                     if self.resolve_local(name).is_some() {
                         return self.err(name, "duplicate variable in this scope");
@@ -366,20 +439,69 @@ impl Comp {
                     // on the stack for the variable's whole lifetime, so
                     // there is nothing to store.
                     self.locals.push((name.clone(), self.depth));
+                    self.frame_locals.push((name.clone(), origin, self.depth));
                 } else {
                     let slot = self.global_slot(name);
                     self.emit(Op::SetGlobal(slot));
+                    match origin {
+                        Some(path) => {
+                            self.frame_globals.insert(name.clone(), path);
+                        }
+                        None => {
+                            self.frame_globals.remove(name);
+                        }
+                    }
                 }
             }
             Stmt::Assign(name, expr) => {
                 self.expr(expr)?;
+                let origin = self.expr_frame_origin(expr);
                 if let Some(idx) = self.resolve_local(name) {
                     self.emit(Op::SetLocal(idx));
+                    if let Some(entry) = self
+                        .frame_locals
+                        .iter_mut()
+                        .rev()
+                        .find(|(n, _, _)| n == name)
+                    {
+                        entry.1 = origin;
+                    }
                 } else if self.globals.iter().any(|g| g == name) {
                     let slot = self.global_slot(name);
                     self.emit(Op::SetGlobal(slot));
+                    match origin {
+                        Some(path) => {
+                            self.frame_globals.insert(name.clone(), path);
+                        }
+                        None => {
+                            self.frame_globals.remove(name);
+                        }
+                    }
                 } else {
                     return self.err(name, "assignment to an undeclared variable");
+                }
+            }
+            Stmt::AssignMember(name, field, expr) => {
+                let origin = self.frame_origin(name);
+                self.expr(expr)?;
+                if let Some(path) = &origin {
+                    self.note_frame_field(path, field);
+                    if let Some(value) = const_number(expr) {
+                        self.note_frame_const(path, field, value);
+                    }
+                }
+                let f = self.constant(Value::Str(field.clone()));
+                if let Some(idx) = self.resolve_local(name) {
+                    self.emit(Op::SetFrameFieldLocal(idx, f));
+                } else if self.globals.iter().any(|g| g == name) {
+                    let slot = self.global_slot(name);
+                    self.emit(Op::SetFrameFieldGlobal(slot, f));
+                } else {
+                    return self.err(
+                        name,
+                        "signal reads are read-only: create a frame instance \
+                         with frame(...) and write its fields, or use set_sig/set_fr_sig",
+                    );
                 }
             }
             Stmt::AssignIndex(name, index, value) => {
@@ -544,6 +666,7 @@ impl Comp {
             self.locals.pop();
             self.emit(Op::Pop);
         }
+        self.frame_locals.retain(|(_, _, d)| *d <= depth);
     }
 
     /// Emits a jump with a placeholder target and returns the
@@ -587,6 +710,31 @@ impl Comp {
             Expr::Str(s) => {
                 let c = self.constant(Value::Str(s.clone()));
                 self.emit(Op::Const(c));
+            }
+            Expr::FrameNew(path) => {
+                let c = self.constant(Value::Frame(FrameInstance::new(path.clone())));
+                self.emit(Op::Const(c));
+            }
+            Expr::Member(base, field) => {
+                let Expr::Ident(name) = &**base else {
+                    return self.err(field, "only a variable holds a frame field");
+                };
+                if let Some(idx) = self.resolve_local(name) {
+                    self.emit(Op::GetLocal(idx));
+                    let f = self.constant(Value::Str(field.clone()));
+                    self.emit(Op::GetFrameField(f));
+                } else if self.globals.iter().any(|g| g == name) {
+                    let slot = self.global_slot(name);
+                    self.emit(Op::GetGlobal(slot));
+                    let f = self.constant(Value::Str(field.clone()));
+                    self.emit(Op::GetFrameField(f));
+                } else {
+                    // Existing database read: `Message.Signal`.
+                    self.expr(&Expr::Call(
+                        "sig_named".to_string(),
+                        vec![Expr::Str(name.clone()), Expr::Str(field.clone())],
+                    ))?;
+                }
             }
             Expr::Ident(name) => {
                 if let Some(idx) = self.resolve_local(name) {
@@ -689,6 +837,20 @@ impl Comp {
                             name,
                             &format!("expects {}..{} argument(s), got {}", min, max, args.len()),
                         );
+                    }
+                    if *name == "send_frame" {
+                        if args.len() == 1
+                            && let Some(path) = self.expr_frame_origin(&args[0])
+                        {
+                            self.note_frame_send(&path);
+                        } else {
+                            let why = "send_frame(...) gets a frame instance the compiler \
+                                       cannot resolve"
+                                .to_string();
+                            if !self.opaque_sends.contains(&why) {
+                                self.opaque_sends.push(why);
+                            }
+                        }
                     }
                     // Literal signal references to `sig` / `set_sig` are
                     // recorded so the host can check them against the
@@ -883,6 +1045,7 @@ impl Comp {
         let saved_locals_marks = std::mem::take(&mut self.local_marks);
         let saved_cur = self.cur_line;
         let saved_locals = std::mem::take(&mut self.locals);
+        let saved_frame_locals = std::mem::take(&mut self.frame_locals);
         let saved_depth = self.depth;
         let saved_in_fn = self.in_fn;
         // A plain function has no handler context: sends inside one are
@@ -896,6 +1059,7 @@ impl Comp {
             return self.err(&f.name, "too many parameters");
         }
         self.locals = f.params.iter().map(|p| (p.clone(), 1)).collect();
+        self.frame_locals = f.params.iter().map(|p| (p.clone(), None, 1)).collect();
         self.block(&f.body)?;
         // Implicit `return nil;` for bodies that fall off the end.
         let nil = self.constant(Value::Nil);
@@ -909,6 +1073,7 @@ impl Comp {
         self.local_marks = saved_locals_marks;
         self.cur_line = saved_cur;
         self.locals = saved_locals;
+        self.frame_locals = saved_frame_locals;
         self.depth = saved_depth;
         self.in_fn = saved_in_fn;
         self.cur_handler = saved_handler;
@@ -1011,6 +1176,7 @@ impl Comp {
         let saved_locals_marks = std::mem::take(&mut self.local_marks);
         let saved_cur = self.cur_line;
         let saved_locals = std::mem::take(&mut self.locals);
+        let saved_frame_locals = std::mem::take(&mut self.frame_locals);
         let saved_depth = self.depth;
         let saved_in_fn = self.in_fn;
         let saved_handler = self.cur_handler.take();
@@ -1027,6 +1193,11 @@ impl Comp {
             } => vec![(name.clone(), 1)],
             _ => Vec::new(),
         };
+        self.frame_locals = self
+            .locals
+            .iter()
+            .map(|(name, _)| (name.clone(), None, 1))
+            .collect();
         let arity = self.locals.len();
         // The handler context must be live while the body compiles: the
         // R2 spike attributes every derived send to this handler.
@@ -1051,6 +1222,7 @@ impl Comp {
         self.local_marks = saved_locals_marks;
         self.cur_line = saved_cur;
         self.locals = saved_locals;
+        self.frame_locals = saved_frame_locals;
         self.depth = saved_depth;
         self.in_fn = saved_in_fn;
         Ok(())
@@ -1062,6 +1234,51 @@ mod tests {
     use super::super::lexer::lex;
     use super::super::parser::parse;
     use super::*;
+
+    #[test]
+    fn frame_instances_report_paths_and_fields() {
+        let script = compile_ok(
+            r#"
+            on timer 10 {
+                let f = frame(EngineStatus);
+                f.EngineSpeed = 1000;
+                send_frame(f);
+            }
+            "#,
+        );
+        assert_eq!(script.frame_sends, ["EngineStatus"]);
+        assert_eq!(
+            script.frame_fields,
+            [("EngineStatus".to_string(), "EngineSpeed".to_string())]
+        );
+    }
+
+    #[test]
+    fn constant_frame_fields_are_recorded_for_range_checks() {
+        let script = compile_ok(
+            r#"
+            on timer 10 {
+                let f = frame(EngineStatus);
+                f.EngineTemp = -40;
+                f.EngineSpeed = 1000 + 1;
+                f.EngineSpeed = 2000;
+                send_frame(f);
+            }
+            "#,
+        );
+        assert_eq!(
+            script.frame_consts,
+            [
+                ("EngineStatus".to_string(), "EngineTemp".to_string(), -40.0),
+                (
+                    "EngineStatus".to_string(),
+                    "EngineSpeed".to_string(),
+                    2000.0
+                )
+            ],
+            "literals and negated literals only"
+        );
+    }
 
     fn compile_ok(src: &str) -> Script {
         let program = parse(lex(src).unwrap()).unwrap();

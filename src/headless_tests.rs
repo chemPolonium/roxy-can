@@ -434,6 +434,232 @@ fn the_threaded_core_runs_panel_actions() {
     app.stop();
 }
 
+/// `frame(...)` end to end: a script node sets physical fields on two
+/// independent instances and sends each once; the DBC turns them into payload
+/// bytes, with unwritten signals at physical 0 rather than raw 0.
+#[test]
+fn script_frame_instances_send_physical_values() {
+    let mut app = App::headless();
+    app.send(crate::bus::BusCommand::AddNode {
+        name: "frame-sender".into(),
+        channel: 0,
+        attached: None,
+    });
+    let id = app.snap.nodes[0].id;
+    app.send(crate::bus::BusCommand::SetNodeSource {
+        id,
+        source: r#"
+            on timer 50 {
+                let first = frame(EngineStatus);
+                first.EngineSpeed = 1000;
+                first.EngineTemp = 80;
+                send_frame(first);
+                let second = frame(EngineStatus);
+                second.EngineSpeed = 2000;
+                send_frame(second);
+            }
+        "#
+        .to_string(),
+    });
+    app.send(crate::bus::BusCommand::SetNodeEnabled { id, on: true });
+    app.start_virtual();
+    let mut now = 1_000;
+    for _ in 0..6 {
+        now += 20_000;
+        app.advance_clock(now);
+        app.tick(now);
+    }
+    let rows: Vec<&crate::can::frame::CanFrame> = app
+        .snap
+        .trace
+        .iter()
+        .filter(|frame| frame.id == 0x100 && !frame.extended)
+        .collect();
+    assert!(
+        rows.iter().any(|frame| {
+            frame.dir == crate::can::frame::Direction::Tx && frame.data[..3] == [0xA0, 0x0F, 0x78]
+        }),
+        "EngineSpeed 1000 / EngineTemp 80 encoded: {:?}",
+        rows.iter().map(|f| &f.data[..3]).collect::<Vec<_>>()
+    );
+    assert!(
+        rows.iter().any(|frame| {
+            frame.dir == crate::can::frame::Direction::Tx
+                // EngineSpeed 2000 -> 8000 raw; unwritten EngineTemp is
+                // physical 0 -> raw 40 because of the -40 offset.
+                && frame.data[..3] == [0x40, 0x1F, 0x28]
+        }),
+        "the second instance kept its own fields"
+    );
+    let node = &app.snap.nodes[0];
+    assert!(node.running, "{}", node.log.join("\n"));
+    app.stop();
+}
+
+/// Frame instances work for FlexRay and Ethernet too; both stay in this
+/// session and encode the physical fields through their descriptions.
+#[test]
+fn script_frame_instances_send_flexray_and_ethernet() {
+    let mut app = App::headless();
+    assert_eq!(
+        app.load_cluster_description(crate::test_assets::path("PowerTrain.arxml"), Some(0)),
+        Some(0)
+    );
+    assert_eq!(
+        app.load_eth_description(crate::test_assets::eth_arxml(), Some(0)),
+        Some(0)
+    );
+    app.send(crate::bus::BusCommand::AddNode {
+        name: "frame-sender".into(),
+        channel: 0,
+        attached: None,
+    });
+    let id = app.snap.nodes[0].id;
+    app.send(crate::bus::BusCommand::SetNodeSource {
+        id,
+        source: r#"
+            on timer 50 {
+                let f = frame(FR0.Frame_25_0_2);
+                f.EngSpeed = 3000;
+                send_frame(f);
+                let e = frame(ETH0.EthFrame);
+                e.Sig = 5;
+                send_frame(e);
+            }
+        "#
+        .to_string(),
+    });
+    app.send(crate::bus::BusCommand::SetNodeEnabled { id, on: true });
+    app.start_virtual();
+    let mut now = 1_000;
+    for _ in 0..6 {
+        now += 20_000;
+        app.advance_clock(now);
+        app.tick(now);
+    }
+    let fr = app
+        .snap
+        .fr_trace
+        .iter()
+        .find(|row| row.bus == 0 && row.slot == 25)
+        .expect("the FR frame instance reached the trace");
+    let db = app.fr_db(0).expect("cluster");
+    let ix = db.frame_ix_at(25, fr.cycle, 2).expect("frame resolves");
+    assert!(
+        db.decode_signals(ix, &fr.payload)
+            .iter()
+            .any(|signal| signal.name == "EngSpeed" && (signal.phys - 3000.0).abs() < 1e-9),
+        "EngSpeed physical field encoded"
+    );
+    let eth = app
+        .snap
+        .eth_trace
+        .iter()
+        .find(|row| row.bus == 0)
+        .expect("the Ethernet frame instance reached the trace");
+    let eth_db = std::sync::Arc::clone(&app.eth_buses.get(&0).expect("matrix").db);
+    let flow = crate::eth::db::EthFlow {
+        vlan: eth.vlan,
+        dst: eth.dst,
+        src: eth.src,
+        ethertype: eth.ethertype,
+        payload_len: eth.len(),
+    };
+    let decoded = eth_db.decode(&flow, &eth.payload, false).expect("decodes");
+    assert!(
+        decoded
+            .signals
+            .iter()
+            .any(|signal| signal.name == "Sig" && (signal.physical - 5.0).abs() < 1e-9),
+        "Sig physical field encoded"
+    );
+    app.stop();
+}
+
+/// Static frame checks catch a typo before the first timer fires.
+#[test]
+fn script_frame_checks_report_unknown_paths_and_fields() {
+    let mut app = App::headless();
+    app.send(crate::bus::BusCommand::AddNode {
+        name: "typo".into(),
+        channel: 0,
+        attached: None,
+    });
+    let id = app.snap.nodes[0].id;
+    app.send(crate::bus::BusCommand::SetNodeSource {
+        id,
+        source: r#"
+            on timer 50 {
+                let f = frame(EngineStatus);
+                f.NoSuchSignal = 1;
+                send_frame(f);
+                let g = frame(NoSuchMessage);
+                send_frame(g);
+            }
+        "#
+        .to_string(),
+    });
+    app.send(crate::bus::BusCommand::SetNodeEnabled { id, on: true });
+    app.start_virtual();
+    let mut now = 1_000;
+    for _ in 0..3 {
+        now += 20_000;
+        app.advance_clock(now);
+        app.tick(now);
+    }
+    let log = app.snap.nodes[0].log.join("\n");
+    assert!(
+        log.contains("signal not found") && log.contains("NoSuchSignal"),
+        "{log}"
+    );
+    assert!(log.contains("NoSuchMessage"), "{log}");
+    app.stop();
+}
+
+/// `on start` has no frame context; its sends are rejected consistently for
+/// raw frames and frame instances, instead of half of them firing on the
+/// first timer.
+#[test]
+fn script_start_sends_are_rejected() {
+    let mut app = App::headless();
+    app.send(crate::bus::BusCommand::AddNode {
+        name: "starter".into(),
+        channel: 0,
+        attached: None,
+    });
+    let id = app.snap.nodes[0].id;
+    app.send(crate::bus::BusCommand::SetNodeSource {
+        id,
+        source: r#"
+            on start {
+                send(0x123, 0x01);
+                let f = frame(EngineStatus);
+                f.EngineSpeed = 1000;
+                send_frame(f);
+            }
+        "#
+        .to_string(),
+    });
+    app.send(crate::bus::BusCommand::SetNodeEnabled { id, on: true });
+    app.start_virtual();
+    let mut now = 1_000;
+    for _ in 0..3 {
+        now += 20_000;
+        app.advance_clock(now);
+        app.tick(now);
+    }
+    let log = app.snap.nodes[0].log.join("\n");
+    assert!(log.contains("sends are ignored in on start"), "{log}");
+    assert!(
+        !app.snap
+            .trace
+            .iter()
+            .any(|frame| frame.id == 0x123 && frame.dir == crate::can::frame::Direction::Tx),
+        "the raw start send never reaches the bus"
+    );
+    app.stop();
+}
+
 /// The script node end to end, headless: add, edit source, start, and
 /// watch `print` land in the log and `send` land on the bus -- including
 /// the node reacting to its own frame.
@@ -1489,6 +1715,375 @@ fn panel_setpoints_write_a_flexray_signal() {
     assert!(
         app.status.contains("unknown FlexRay signal"),
         "an unknown FlexRay signal reports instead of sending: {}",
+        app.status
+    );
+    app.stop();
+}
+
+/// A Button preset writes its signals in one command: good entries land, and
+/// bad keys are reported together instead of aborting the whole preset.
+#[test]
+fn panel_presets_write_each_signal_and_report_failures() {
+    let mut app = App::headless();
+    assert_eq!(
+        app.load_cluster_description(crate::test_assets::path("PowerTrain.arxml"), Some(0)),
+        Some(0)
+    );
+    assert_eq!(
+        app.load_eth_description(crate::test_assets::eth_arxml(), Some(0)),
+        Some(0)
+    );
+    app.start_virtual();
+    let mut now = 1_000;
+    let laps = |app: &mut App, n: usize, now: &mut u64| {
+        for _ in 0..n {
+            *now += 10_000;
+            app.advance_clock(*now);
+            app.tick(*now);
+        }
+    };
+    laps(&mut app, 1, &mut now);
+    let (fr_before, eth_before) = (app.snap.fr_trace.len(), app.snap.eth_trace.len());
+
+    app.send(crate::bus::BusCommand::PanelWriteSignals {
+        writes: vec![
+            ("0:256:EngineSpeed".to_string(), 1234.0),
+            ("fr:0:25:EngSpeed".to_string(), 2000.0),
+            ("eth:0:EthFrame:Sig".to_string(), 4.5),
+            ("nope".to_string(), 1.0),
+            ("derived:Test".to_string(), 1.0),
+        ],
+    });
+    laps(&mut app, 1, &mut now);
+
+    assert_eq!(
+        app.snap.fr_trace.len(),
+        fr_before + 1,
+        "the FR entry landed"
+    );
+    assert_eq!(
+        app.snap.eth_trace.len(),
+        eth_before + 1,
+        "the ETH entry landed"
+    );
+    assert!(
+        app.status.contains("2 write(s) failed")
+            && app.status.contains("nope")
+            && app.status.contains("derived"),
+        "both bad entries are reported together: {}",
+        app.status
+    );
+    app.stop();
+}
+
+/// A Panel "Send message" button sends exactly one raw CAN frame, and refuses
+/// an oversized ID or a non-CAN-FD payload length instead of padding it.
+#[test]
+fn panel_buttons_send_one_raw_can_frame() {
+    let mut app = App::headless();
+    app.start_virtual();
+    let mut now = 1_000;
+    let laps = |app: &mut App, n: usize, now: &mut u64| {
+        for _ in 0..n {
+            *now += 10_000;
+            app.advance_clock(*now);
+            app.tick(*now);
+        }
+    };
+    laps(&mut app, 1, &mut now);
+
+    app.send(crate::bus::BusCommand::PanelSendFrame {
+        channel: 0,
+        id: 0x7df,
+        extended: false,
+        data: vec![0x02, 0x10, 0x03],
+        physical: false,
+        signals: Default::default(),
+    });
+    laps(&mut app, 1, &mut now);
+    let frame = app
+        .snap
+        .trace
+        .iter()
+        .rev()
+        .find(|frame| frame.id == 0x7df)
+        .expect("the raw frame reached the trace");
+    assert_eq!(
+        (frame.len, frame.dir),
+        (3, crate::can::frame::Direction::Tx)
+    );
+    assert_eq!(&frame.data[..3], &[0x02, 0x10, 0x03]);
+    assert!(!frame.flags.contains(crate::can::frame::FrameFlags::FD));
+
+    app.send(crate::bus::BusCommand::PanelSendFrame {
+        channel: 0,
+        id: 0x123,
+        extended: false,
+        data: vec![0xAA; 12],
+        physical: false,
+        signals: Default::default(),
+    });
+    laps(&mut app, 1, &mut now);
+    let fd = app
+        .snap
+        .trace
+        .iter()
+        .rev()
+        .find(|frame| frame.id == 0x123)
+        .expect("the FD frame reached the trace");
+    assert_eq!(fd.len, 12);
+    assert!(fd.flags.contains(crate::can::frame::FrameFlags::FD));
+
+    app.send(crate::bus::BusCommand::PanelSendFrame {
+        channel: 0,
+        id: 0x800,
+        extended: false,
+        data: vec![1],
+        physical: false,
+        signals: Default::default(),
+    });
+    laps(&mut app, 1, &mut now);
+    assert!(
+        app.status.contains("standard IDs stop at 0x7FF"),
+        "{}",
+        app.status
+    );
+    app.send(crate::bus::BusCommand::PanelSendFrame {
+        channel: 0,
+        id: 0x123,
+        extended: false,
+        data: vec![0; 9],
+        physical: false,
+        signals: Default::default(),
+    });
+    laps(&mut app, 1, &mut now);
+    assert!(
+        app.status.contains("CAN FD data must be"),
+        "a 9-byte payload reports instead of padding: {}",
+        app.status
+    );
+
+    app.stop();
+    app.send(crate::bus::BusCommand::PanelSendFrame {
+        channel: 0,
+        id: 0x7df,
+        extended: false,
+        data: vec![1],
+        physical: false,
+        signals: Default::default(),
+    });
+    laps(&mut app, 1, &mut now);
+    assert!(app.status.contains("running measurement"), "{}", app.status);
+}
+
+/// Raw FlexRay and Ethernet sends stay inside this session: the FR row lands
+/// with its slot payload, the ETH row matches its matrix identity, and wrong
+/// addresses or payload lengths report instead of being padded.
+#[test]
+fn panel_buttons_send_raw_flexray_and_ethernet_frames() {
+    let mut app = App::headless();
+    assert_eq!(
+        app.load_cluster_description(crate::test_assets::path("PowerTrain.arxml"), Some(0)),
+        Some(0)
+    );
+    assert_eq!(
+        app.load_eth_description(crate::test_assets::eth_arxml(), Some(0)),
+        Some(0)
+    );
+    app.start_virtual();
+    let mut now = 1_000;
+    let laps = |app: &mut App, n: usize, now: &mut u64| {
+        for _ in 0..n {
+            *now += 10_000;
+            app.advance_clock(*now);
+            app.tick(*now);
+        }
+    };
+    laps(&mut app, 1, &mut now);
+
+    app.send(crate::bus::BusCommand::PanelSendFrFrame {
+        bus: 0,
+        slot: 25,
+        data: vec![0xAA; 26],
+        physical: false,
+        signals: Default::default(),
+    });
+    laps(&mut app, 1, &mut now);
+    let fr = app.snap.fr_trace.last().expect("the FR row");
+    assert_eq!((fr.bus, fr.slot, fr.payload.len()), (0, 25, 26));
+    assert_eq!(fr.payload[0], 0xAA);
+
+    app.send(crate::bus::BusCommand::PanelSendEthFrame {
+        bus: 0,
+        frame: "EthFrame".to_string(),
+        data: vec![0x5A; 22],
+        physical: false,
+        signals: Default::default(),
+    });
+    laps(&mut app, 1, &mut now);
+    let eth = app.snap.eth_trace.last().expect("the ETH row");
+    assert_eq!((eth.bus, eth.len(), eth.vlan), (0, 22, Some(100)));
+    assert_eq!(eth.payload[0], 0x5A);
+    let db = std::sync::Arc::clone(&app.eth_buses.get(&0).expect("matrix").db);
+    let flow = crate::eth::db::EthFlow {
+        vlan: eth.vlan,
+        dst: eth.dst,
+        src: eth.src,
+        ethertype: eth.ethertype,
+        payload_len: eth.len(),
+    };
+    assert!(db.decode(&flow, &eth.payload, false).is_some());
+
+    app.send(crate::bus::BusCommand::PanelSendFrFrame {
+        bus: 0,
+        slot: 0,
+        data: vec![1],
+        physical: false,
+        signals: Default::default(),
+    });
+    laps(&mut app, 1, &mut now);
+    assert!(
+        app.status.contains("slot must be 1..2047"),
+        "{}",
+        app.status
+    );
+    app.send(crate::bus::BusCommand::PanelSendEthFrame {
+        bus: 0,
+        frame: "EthFrame".to_string(),
+        data: vec![1],
+        physical: false,
+        signals: Default::default(),
+    });
+    laps(&mut app, 1, &mut now);
+    assert!(
+        app.status.contains("carries 22 payload bytes"),
+        "{}",
+        app.status
+    );
+    app.stop();
+}
+
+/// A physical Panel send encodes catalog signals into the declared frame:
+/// named fields are clamped and written, untouched ones keep their start
+/// value (physical 0 in this database).
+#[test]
+fn panel_buttons_send_physical_can_signals() {
+    let mut app = App::headless();
+    app.start_virtual();
+    let mut now = 1_000;
+    let laps = |app: &mut App, n: usize, now: &mut u64| {
+        for _ in 0..n {
+            *now += 10_000;
+            app.advance_clock(*now);
+            app.tick(*now);
+        }
+    };
+    laps(&mut app, 1, &mut now);
+
+    let mut signals = std::collections::BTreeMap::new();
+    signals.insert("EngineSpeed".to_string(), 1000.0);
+    signals.insert("EngineTemp".to_string(), 80.0);
+    app.send(crate::bus::BusCommand::PanelSendFrame {
+        channel: 0,
+        id: 0x100,
+        extended: false,
+        data: Vec::new(),
+        physical: true,
+        signals,
+    });
+    laps(&mut app, 1, &mut now);
+    let frame = app
+        .snap
+        .trace
+        .iter()
+        .rev()
+        .find(|frame| frame.id == 0x100 && frame.data[..3] == [0xA0, 0x0F, 0x78])
+        .expect("the physical frame reached the trace");
+    assert_eq!(frame.len, 8, "the declared DLC wins");
+    assert_eq!(frame.data[3], 0, "ThrottlePos keeps physical 0");
+
+    app.send(crate::bus::BusCommand::PanelSendFrame {
+        channel: 0,
+        id: 0x100,
+        extended: false,
+        data: Vec::new(),
+        physical: true,
+        signals: [("NotASignal".to_string(), 1.0)].into_iter().collect(),
+    });
+    laps(&mut app, 1, &mut now);
+    assert!(
+        app.status.contains("has no signal \"NotASignal\""),
+        "{}",
+        app.status
+    );
+    app.stop();
+}
+
+/// Physical sends cover FlexRay and Ethernet too: the encoded session frame
+/// keeps the declared width and unknown signal names report.
+#[test]
+fn panel_buttons_send_physical_flexray_and_ethernet_signals() {
+    let mut app = App::headless();
+    assert_eq!(
+        app.load_cluster_description(crate::test_assets::path("PowerTrain.arxml"), Some(0)),
+        Some(0)
+    );
+    assert_eq!(
+        app.load_eth_description(crate::test_assets::eth_arxml(), Some(0)),
+        Some(0)
+    );
+    app.start_virtual();
+    let mut now = 1_000;
+    let laps = |app: &mut App, n: usize, now: &mut u64| {
+        for _ in 0..n {
+            *now += 10_000;
+            app.advance_clock(*now);
+            app.tick(*now);
+        }
+    };
+    laps(&mut app, 1, &mut now);
+
+    app.send(crate::bus::BusCommand::PanelSendFrFrame {
+        bus: 0,
+        slot: 25,
+        data: Vec::new(),
+        physical: true,
+        signals: [("EngSpeed".to_string(), 1234.0)].into_iter().collect(),
+    });
+    laps(&mut app, 1, &mut now);
+    let fr = app.snap.fr_trace.last().expect("the FR row");
+    assert_eq!((fr.bus, fr.slot, fr.payload.len()), (0, 25, 26));
+    assert!(
+        fr.payload.iter().any(|byte| *byte != 0),
+        "the signal reached the payload"
+    );
+
+    app.send(crate::bus::BusCommand::PanelSendEthFrame {
+        bus: 0,
+        frame: "EthFrame".to_string(),
+        data: Vec::new(),
+        physical: true,
+        signals: [("Sig".to_string(), 7.0)].into_iter().collect(),
+    });
+    laps(&mut app, 1, &mut now);
+    let eth = app.snap.eth_trace.last().expect("the ETH row");
+    assert_eq!((eth.bus, eth.len(), eth.vlan), (0, 22, Some(100)));
+    assert!(
+        eth.payload.iter().any(|byte| *byte != 0),
+        "the signal reached the payload"
+    );
+
+    app.send(crate::bus::BusCommand::PanelSendFrFrame {
+        bus: 0,
+        slot: 25,
+        data: Vec::new(),
+        physical: true,
+        signals: [("NotASignal".to_string(), 1.0)].into_iter().collect(),
+    });
+    laps(&mut app, 1, &mut now);
+    assert!(
+        app.status.contains("has no signal \"NotASignal\""),
+        "{}",
         app.status
     );
     app.stop();

@@ -75,6 +75,7 @@ import type { SysVarEdit } from "./components/SysVarsModal";
 import { TimeJump } from "./components/TimeJump";
 import { TraceTable } from "./components/TraceTable";
 import type { TraceJump } from "./components/TraceTable";
+import { traceQueryPredicate } from "./traceFilter";
 import {
   EMPTY_TRACE_FILTER,
   TraceFilterModal,
@@ -106,11 +107,12 @@ import {
 } from "./traceLayout";
 import {
   defaultPanelBook,
-  panelActionCommand,
   panelNumericTarget,
   parsePanelBook,
+  parsePanelHex,
   type PanelBook,
   type PanelButton,
+  type PanelFrameSend,
   type PanelNumeric,
   type PanelPage,
   type PanelToggle,
@@ -121,6 +123,7 @@ import {
   panelSourceOptions,
   runningPanelActions,
   type PanelActionContext,
+  type PanelFrameDef,
   type PanelView,
   type PanelWriteTarget,
 } from "./panelBinding";
@@ -284,19 +287,6 @@ function loadLayout(): Layout {
   } catch {
     return DEFAULT_LAYOUT;
   }
-}
-
-function matches(frame: Frame, query: string): boolean {
-  if (!query) return true;
-  const needle = query.toLowerCase();
-  const id = `0x${frame.id.toString(16)}`;
-  return (
-    frame.name.toLowerCase().includes(needle) ||
-    frame.busName.toLowerCase().includes(needle) ||
-    frame.addr.toLowerCase().includes(needle) ||
-    id.includes(needle) ||
-    frame.data.toLowerCase().includes(needle)
-  );
 }
 
 function seconds(us: number, digits = 3): string {
@@ -1768,6 +1758,7 @@ export function App() {
     );
   }, [state?.stats, panelQuery]);
 
+  const tracePredicate = useMemo(() => traceQueryPredicate(query), [query]);
   const visibleRows = useMemo(() => {
     const payload = traceFilter.payload.trim().toUpperCase().replace(/\s+/g, "");
     const from = traceFilter.from.trim() === "" ? null : Number(traceFilter.from) * 1e6;
@@ -1785,9 +1776,13 @@ export function App() {
       }
       if (from != null && frame.tUs < from) return false;
       if (to != null && frame.tUs > to) return false;
-      return matches(frame, query);
+      return tracePredicate(frame);
     });
-  }, [traceRows, query, bus, traceFilter]);
+  }, [traceRows, tracePredicate, bus, traceFilter]);
+  const traceFilterKey = useMemo(
+    () => JSON.stringify([query, bus, traceFilter]),
+    [query, bus, traceFilter],
+  );
 
   const canControl = Boolean(state) && online && !busy;
   const measuring = state?.measuring ?? false;
@@ -2353,7 +2348,51 @@ export function App() {
 
   const showStandard = () => switchMainView(standardView.current);
 
+  // The physical mode ships chosen signal values; the core encodes them and
+  // keeps the database's start value for everything else.
+  const panelPhysical = (frame: PanelFrameSend) => {
+    if (frame.mode !== "physical") return {};
+    const signals: Record<string, number> = {};
+    for (const entry of frame.values ?? []) signals[entry.name] = entry.value;
+    return { physical: true, signals };
+  };
+
   const runPanelAction = (widget: PanelButton) => {
+    if (widget.action === "send") {
+      const frame = widget.frame;
+      const data = frame ? parsePanelHex(frame.data) : null;
+      if (!frame || data === null) {
+        showToast("This button has no valid message");
+        return;
+      }
+      if (frame.protocol === "can") {
+        void run({
+          type: "panel_send_frame",
+          channel: frame.channel,
+          id: frame.id,
+          extended: frame.extended,
+          data,
+          ...panelPhysical(frame),
+        });
+      } else if (frame.protocol === "fr") {
+        void run({
+          type: "panel_send_fr_frame",
+          bus: frame.bus,
+          slot: frame.slot,
+          data,
+          ...panelPhysical(frame),
+        });
+      } else {
+        void run({
+          type: "panel_send_eth_frame",
+          bus: frame.bus,
+          frame: frame.frame,
+          data,
+          ...panelPhysical(frame),
+        });
+      }
+      return;
+    }
     if (widget.action === "script") {
       const name = widget.script?.trim() ?? "";
       if (!name) {
@@ -2363,8 +2402,12 @@ export function App() {
       void run({ type: "run_panel_action", name, value: widget.argument });
       return;
     }
-    const command = panelActionCommand(widget.action);
-    if (command) void run(command);
+    const writes = (widget.writes ?? [])
+      .map((write) => ({ source: write.source.trim(), value: write.value }))
+      .filter((write) => write.source.length > 0);
+    if (writes.length > 0) {
+      void run({ type: "panel_write_signals", writes });
+    }
   };
 
   const pageWriteTargets = useMemo<PanelWriteTarget[]>(() => {
@@ -2391,8 +2434,62 @@ export function App() {
       signals,
       sysvars: state?.sysvars ?? [],
       writeTargets: pageWriteTargets,
+      frameBuses: (catalog?.channels ?? [])
+        .filter((channel) => channel.kind === "can")
+        .map((channel) => ({ index: channel.index, name: channel.name })),
+      frBuses: (state?.frBuses ?? []).map((bus) => ({
+        index: bus.bus,
+        name: bus.name,
+      })),
+      ethBuses: (state?.ethBuses ?? []).map((bus) => ({
+        index: bus.bus,
+        name: bus.name,
+      })),
+      ethFrames: (catalog?.channels ?? [])
+        .filter((channel) => channel.kind === "eth")
+        .flatMap((channel) =>
+          channel.messages.map((message) => ({
+            bus: channel.index,
+            name: message.frame ?? message.name,
+            length: message.length ?? null,
+          })),
+        ),
+      frameDefs: (catalog?.channels ?? []).flatMap(
+        (channel): PanelFrameDef[] => {
+        const signals = (message: (typeof channel.messages)[number]) =>
+          message.signals.map((signal) => ({
+            name: signal.name,
+            unit: signal.unit,
+            min: signal.min,
+            max: signal.max,
+            initial: signal.initial,
+          }));
+        if (channel.kind === "can") {
+          return channel.messages.map((message) => ({
+            protocol: "can" as const,
+            bus: channel.index,
+            id: message.id,
+            extended: message.extended,
+            signals: signals(message),
+          }));
+        }
+        if (channel.kind === "fr") {
+          return channel.messages.map((message) => ({
+            protocol: "fr" as const,
+            bus: channel.index,
+            slot: message.id,
+            signals: signals(message),
+          }));
+        }
+        return channel.messages.map((message) => ({
+          protocol: "eth" as const,
+          bus: channel.index,
+          frame: message.frame ?? message.name,
+          signals: signals(message),
+        }));
+      }),
     }),
-    [signals, state?.sysvars, pageWriteTargets],
+    [signals, state?.sysvars, state?.frBuses, state?.ethBuses, pageWriteTargets, catalog],
   );
 
   // Setpoint readback: subscribe each written signal as a Read signal so its
@@ -2951,8 +3048,9 @@ export function App() {
         <section class={`panel trace-panel ${mainView}`}>
           {mainView === "trace" ? (
           <TraceTable
-            key={`${bus}:${query}:${traceEpoch}`}
+            key={`${bus}:${traceEpoch}`}
             rows={visibleRows}
+            filterKey={traceFilterKey}
             columns={traceColumns}
             onColumnsChange={setTraceColumns}
             jump={traceJump}
@@ -3021,6 +3119,9 @@ export function App() {
                   type="search"
                   value={query}
                   placeholder="Filter id, name, data…"
+                  title={
+                    "Space-separated, all must match. Fields: id:0x100, bus:CAN1, dir:tx, name:RPM, data:A00F, addr, kind. Prefix - excludes (-tx, -id:0x100). Quotes keep spaces."
+                  }
                   onInput={(e) =>
                     setQuery((e.target as HTMLInputElement).value)
                   }
@@ -3348,7 +3449,7 @@ export function App() {
                   readRange={readRange}
                   readCount={readSeries.length}
                 />
-                {!chartSplit && (
+                {!chartSplit && (chartFullscreen || chartCursors.length > 0) && (
                   <CursorAnalysis
                     series={cursorSeries}
                     cursors={chartCursors}

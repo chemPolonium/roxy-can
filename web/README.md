@@ -167,12 +167,24 @@ npm run dev                 # http://127.0.0.1:5173, proxies /api to :2010
   lamp, toggle, setpoint), drags and resizes
   them with live grid snapping (per-kind minimum sizes), refuses overlaps, and
   changes the canvas width/height in 8px steps; shrinking is refused while any
-  control would fall outside. The inspector is generated from each kind's field
+  control would fall outside. **Right-click** opens context menus in Edit: a
+  control offers Duplicate / Copy / Copy signal key / Delete, the blank canvas
+  offers Paste, the seven control types and Undo/Redo, and a page tab offers
+  Rename / Duplicate / Export / Delete; arrow keys, Home/End and Esc navigate or
+  close them (Esc does not leave Edit). The inspector is generated from each kind's field
   schema and stays visible for the whole Edit session: a selected control shows
   its properties, a blank click shows the **Panel** properties (canvas W×H and
   control count), so changing the selection never shifts the canvas. It edits a
-  button command or **Script action** name with an optional argument
-  (`on panel_action("…", value)` in every running node), a value source (signal
+  button **On click** mode, one of: *Write signals* (applies the **Signal writes**
+  list below — signal keys and values in order; failures are listed together and
+  the rest still apply), *Send message* (one raw frame per click: CAN by bus, hex
+  ID, extended flag and hex data — IDs outside the DBC welcome; FlexRay by bus,
+  slot and hex payload, padded to the declared frame and kept in this session;
+  Ethernet by bus, matrix frame and hex payload, which must match the frame's
+  declared length and is also session-only), or a **Script action** name with
+  an optional argument (`on panel_action("…", value)` in every running node).
+  Start/Stop/Pause and friends live in the top bar only, not on panel buttons;
+  put sequencing logic in the script. Also edited here: a value source (signal
   key, `derived:Name` or `sysvar:ns::name`) with decimals, a bar/gauge range, a
   lamp source with its lit threshold and colour, a toggle's sysvar, or a
   **Setpoint**: choose **Target** = *System variable* (name, decimals, step;

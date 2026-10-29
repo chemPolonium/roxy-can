@@ -74,6 +74,9 @@ pub struct Vm {
     /// drains this after each handler run and decides what "send" means (here:
     /// a row into the session, because no FlexRay port transmits yet).
     pub fr_outbox: Vec<(u8, u16, Vec<u8>)>,
+    /// Frame instances queued by `send_frame(instance)`. The host resolves
+    /// the catalog path, encodes the physical fields and sends one frame.
+    pub frame_outbox: Vec<super::FrameInstance>,
     /// Signal writes queued by `set_fr_sig(路, 槽, "Name", 值)`. The host holds
     /// the cluster description that says where the signal sits, so the encoding
     /// happens there, not in the kernel.
@@ -157,6 +160,7 @@ impl Vm {
             output: Vec::new(),
             outbox: Vec::new(),
             fr_outbox: Vec::new(),
+            frame_outbox: Vec::new(),
             fr_sig_sets: Vec::new(),
             emitted: Vec::new(),
             sys_sets: Vec::new(),
@@ -605,6 +609,23 @@ impl Vm {
                     Err(e) => return Err(VmError(e)),
                 }
             }
+            Op::GetFrameField(field) => {
+                let value = self.pop()?;
+                let Value::Frame(frame) = value else {
+                    return Err(VmError("field read needs a frame instance".into()));
+                };
+                let Value::Str(name) = self.script.constants[field as usize].clone() else {
+                    return Err(VmError("bad frame field constant".into()));
+                };
+                let v = frame.values.get(&name).copied().unwrap_or(0.0);
+                self.stack.push(Value::Float(v));
+            }
+            Op::SetFrameFieldLocal(slot, field) => {
+                self.set_frame_field(field, true, slot as u16)?;
+            }
+            Op::SetFrameFieldGlobal(slot, field) => {
+                self.set_frame_field(field, false, slot)?;
+            }
             Op::Pop => {
                 self.pop()?;
             }
@@ -616,6 +637,41 @@ impl Vm {
                 self.frames.pop();
             }
         }
+        Ok(())
+    }
+
+    /// Stores one numeric field on a frame held by a local/global. The frame
+    /// instance is plain data, so this mutates exactly that variable's copy.
+    fn set_frame_field(&mut self, field: u16, local: bool, slot: u16) -> Result<(), VmError> {
+        let value = self.pop()?;
+        let number = match value {
+            Value::Int(n) => n as f64,
+            Value::Float(f) if f.is_finite() => f,
+            other => {
+                return Err(VmError(format!(
+                    "frame signals take numbers, got {}",
+                    kind(&other)
+                )));
+            }
+        };
+        let Value::Str(name) = self.script.constants[field as usize].clone() else {
+            return Err(VmError("bad frame field constant".into()));
+        };
+        let target = if local {
+            let base = self.frames.last().expect("frame").base;
+            self.stack.get_mut(base + slot as usize)
+        } else {
+            self.globals.get_mut(slot as usize)
+        };
+        let Some(target) = target else {
+            return Err(VmError("frame variable out of range".into()));
+        };
+        let Value::Frame(frame) = target else {
+            return Err(VmError(format!(
+                "\"{name}\" is not a frame instance; create one with frame(...)"
+            )));
+        };
+        frame.values.insert(name, number);
         Ok(())
     }
 
@@ -958,6 +1014,18 @@ impl Vm {
                     data
                 };
                 self.outbox.push((id, force_ext, data));
+            }
+            // `send_frame(instance)`: hand the frame to the host, which
+            // resolves its catalog path, encodes every written physical signal
+            // and sends one frame (CAN on the wire, FR/ETH into the session).
+            "send_frame" => {
+                let Value::Frame(frame) = &args[0] else {
+                    return Err(VmError(format!(
+                        "send_frame needs a frame instance, got {}",
+                        kind(&args[0])
+                    )));
+                };
+                self.frame_outbox.push(frame.clone());
             }
             // `fr_send(bus, slot, b0, ...)` or `fr_send(bus, slot, buf)`: the
             // FlexRay twin of `send`. Only the numbers and the payload's extent
@@ -1532,6 +1600,7 @@ fn kind(v: &Value) -> &'static str {
         Value::Str(_) => "string",
         Value::Bytes(_) => "buffer",
         Value::Array(_) => "array",
+        Value::Frame(_) => "frame",
     }
 }
 
@@ -2170,6 +2239,38 @@ mod tests {
     /// never sees, so the only limits checked here are the numbers themselves and
     /// the 254-byte FlexRay payload ceiling. What the host does with the queue is
     /// the bus's business (see the app-level FlexRay script tests).
+    /// A frame instance is a value: two variables made from one catalog frame
+    /// carry independent physical fields, and `send_frame` queues a snapshot
+    /// for the host to encode.
+    #[test]
+    fn frame_instances_hold_physical_fields_and_queue_snapshot() {
+        let mut vm = Vm::new(
+            compile(
+                r#"
+                let a = frame(CAN1.EngineStatus);
+                let b = a;
+                a.EngineSpeed = 1000;
+                a.EngineTemp = 80;
+                b.EngineSpeed = 2000;
+                send_frame(a);
+                send_frame(b);
+                print(a.EngineSpeed);
+                "#,
+            )
+            .unwrap(),
+        );
+        vm.run().unwrap();
+        assert_eq!(vm.frame_outbox.len(), 2);
+        assert_eq!(vm.frame_outbox[0].path, "CAN1.EngineStatus");
+        assert_eq!(vm.frame_outbox[0].values["EngineSpeed"], 1000.0);
+        assert_eq!(vm.frame_outbox[0].values["EngineTemp"], 80.0);
+        assert_eq!(vm.frame_outbox[1].values["EngineSpeed"], 2000.0);
+        assert_eq!(vm.output, ["1000.0"]);
+
+        let mut vm = Vm::new(compile("send_frame(1);").unwrap());
+        assert!(vm.run().unwrap_err().to_string().contains("frame instance"));
+    }
+
     #[test]
     fn fr_send_queues_the_slot_address_and_payload() {
         let mut vm = Vm::new(compile("fr_send(1, 20, 0x11, 0x22);").unwrap());

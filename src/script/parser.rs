@@ -90,6 +90,8 @@ pub enum Stmt {
     /// a plain variable; buffers carry reference semantics, so the store
     /// mutates the one shared buffer.
     AssignIndex(String, Expr, Expr),
+    /// `name.field = v` -- frame-instance field write.
+    AssignMember(String, String, Expr),
     If {
         cond: Expr,
         then: Vec<SpannedStmt>,
@@ -122,6 +124,12 @@ pub enum Expr {
     Ident(String),
     /// `container[index]` -- byte buffers for now.
     Index(Box<Expr>, Box<Expr>),
+    /// `name.field` -- a frame field when `name` is a variable, otherwise
+    /// the existing database `Message.Signal` read (resolved by the
+    /// compiler).
+    Member(Box<Expr>, String),
+    /// `frame(CAN1.EngineStatus)`: one fresh instance of a catalog frame.
+    FrameNew(String),
     Unary(UnOp, Box<Expr>),
     Binary(BinOp, Box<Expr>, Box<Expr>),
     Call(String, Vec<Expr>),
@@ -207,6 +215,7 @@ fn reserved_identifier(name: &str) -> Option<&'static str> {
         "this" => Some("`this` is the triggering frame context"),
         "node" => Some("`node` is the script's own context"),
         "FR" | "ETH" => Some("`FR` / `ETH` start a bus selector"),
+        "frame" => Some("`frame(...)` creates a frame instance"),
         _ if bus_qualifier(name, "FR").is_some() => Some("`FRn` is a FlexRay bus selector"),
         _ if bus_qualifier(name, "ETH").is_some() => Some("`ETHn` is an Ethernet bus selector"),
         _ => None,
@@ -220,6 +229,8 @@ enum AssignAhead {
     Plain,
     /// `x[i] = v` or `x[i] op= v`.
     Index,
+    /// `x.field = v` or `x.field op= v`.
+    Member,
 }
 
 impl P {
@@ -280,6 +291,22 @@ impl P {
                 Ok(name)
             }
             _ => self.err(&format!("expected {what}")),
+        }
+    }
+
+    /// One segment of a `frame(...)` path: a bare name or a quoted name for
+    /// catalog identifiers that are not valid identifiers (`"Frame Name"`).
+    fn frame_path_segment(&mut self) -> Result<String, ScriptError> {
+        match self.toks.get(self.pos).map(|t| t.tok.clone()) {
+            Some(Tok::Ident(name)) => {
+                self.advance();
+                Ok(name)
+            }
+            Some(Tok::Str(name)) => {
+                self.advance();
+                Ok(name)
+            }
+            _ => self.err("expected a frame name inside frame(...)"),
         }
     }
 
@@ -396,28 +423,44 @@ impl P {
     /// followed by an assignment operator. Those reads are read-only.
     fn signal_write_ahead(&self) -> bool {
         let tok = |i: usize| self.toks.get(self.pos + i).map(|t| &t.tok);
-        if !matches!(tok(0), Some(Tok::Ident(_))) {
-            return false;
-        }
+        let first = match tok(0) {
+            Some(Tok::Ident(name)) => name.as_str(),
+            _ => return false,
+        };
         let mut i = 1;
-        let mut qualified = false;
+        let mut dots = 0usize;
+        let mut brackets = 0usize;
         loop {
             match tok(i) {
                 Some(Tok::Dot) if matches!(tok(i + 1), Some(Tok::Ident(_))) => {
                     i += 2;
-                    qualified = true;
+                    dots += 1;
                 }
                 Some(Tok::LBracket)
                     if matches!(tok(i + 1), Some(Tok::Str(_)))
                         && matches!(tok(i + 2), Some(Tok::RBracket)) =>
                 {
                     i += 3;
-                    qualified = true;
+                    brackets += 1;
                 }
                 _ => break,
             }
         }
-        qualified
+        // A single `name.field =` may be a frame-instance write; the
+        // compiler reports the database-signal read-only error when the
+        // left name is not a variable. Everything else keeps the direct
+        // guidance below.
+        if dots == 1
+            && brackets == 0
+            && first != "this"
+            && first != "FR"
+            && first != "ETH"
+            && bus_qualifier(first, "FR").is_none()
+            && bus_qualifier(first, "ETH").is_none()
+        {
+            return false;
+        }
+        (dots + brackets) > 0
             && matches!(
                 tok(i),
                 Some(
@@ -810,6 +853,7 @@ impl P {
         let (shape, op) = match second {
             Tok::Assign => (AssignAhead::Plain, None),
             Tok::LBracket => (AssignAhead::Index, None),
+            Tok::Dot => (AssignAhead::Member, None),
             Tok::AssignAdd => (AssignAhead::Plain, Some(BinOp::Add)),
             Tok::AssignSub => (AssignAhead::Plain, Some(BinOp::Sub)),
             Tok::AssignMul => (AssignAhead::Plain, Some(BinOp::Mul)),
@@ -832,6 +876,21 @@ impl P {
             return self.err("expected an assignment");
         };
         let name = self.var_ident("variable name")?;
+        if shape == AssignAhead::Member {
+            self.advance();
+            let field = self.ident("a frame field after '.'")?;
+            let op = self.assign_op_here();
+            let value = if let Some(op) = op {
+                let lhs = Expr::Member(Box::new(Expr::Ident(name.clone())), field.clone());
+                self.advance();
+                let rhs = self.expr()?;
+                Expr::Binary(op, Box::new(lhs), Box::new(rhs))
+            } else {
+                self.expect(&Tok::Assign, "'='")?;
+                self.expr()?
+            };
+            return Ok(Stmt::AssignMember(name, field, value));
+        }
         if shape == AssignAhead::Index {
             self.advance();
             let idx = self.expr()?;
@@ -1297,6 +1356,34 @@ impl P {
             }
             Some(Tok::Ident(name)) => {
                 self.advance();
+                // `frame(CAN1.EngineStatus)` / `frame(CAN1["Frame Name"])`:
+                // one fresh instance of a catalog frame. The path is kept
+                // literal and resolved by the host at send time.
+                if name == "frame" && self.at(&Tok::LParen) {
+                    self.advance();
+                    let mut path = vec![self.frame_path_segment()?];
+                    loop {
+                        if self.eat(&Tok::Dot) {
+                            path.push(self.frame_path_segment()?);
+                        } else if self.eat(&Tok::LBracket) {
+                            let Some(Tok::Str(name)) =
+                                self.toks.get(self.pos).map(|t| t.tok.clone())
+                            else {
+                                return self.err("frame(...) brackets take a quoted frame name");
+                            };
+                            self.advance();
+                            self.expect(&Tok::RBracket, "']'")?;
+                            path.push(name);
+                        } else {
+                            break;
+                        }
+                    }
+                    self.expect(&Tok::RParen, "')'")?;
+                    if path.len() > 2 {
+                        return self.err("frame(...) takes Bus.Frame or Frame, not a signal path");
+                    }
+                    return Ok(Expr::FrameNew(path.join(".")));
+                }
                 // `this` / `node` are contexts, not values: they only make
                 // sense with a field behind them. `this` is the triggering
                 // frame, `node` the script itself.
@@ -1378,12 +1465,19 @@ impl P {
                         vec![Expr::Int(bus as i64), Expr::Str(frame), Expr::Str(signal)],
                     ));
                 }
-                // `Message.Signal` keeps both names as literals so the host
-                // can resolve and check them against the node's DBC at start.
-                // A non-literal bracket index still falls through to ordinary
-                // byte-buffer indexing.
-                if self.at(&Tok::Dot) || self.at_literal_bracket() {
-                    let signal = self.member("a signal name after '.'")?;
+                // `Message.Signal` keeps both names literal so the host can
+                // resolve them against the node's DBC at start. When the
+                // left side names a variable the compiler turns this into a
+                // frame-instance field read instead.
+                if self.at(&Tok::Dot) {
+                    self.advance();
+                    let signal = self.ident("a signal name after '.'")?;
+                    return Ok(Expr::Member(Box::new(Expr::Ident(name)), signal));
+                }
+                // A non-literal bracket index falls through to ordinary
+                // byte-buffer indexing below.
+                if self.at_literal_bracket() {
+                    let signal = self.member("a signal name in brackets")?;
                     return Ok(Expr::Call(
                         "sig_named".to_string(),
                         vec![Expr::Str(name), Expr::Str(signal)],
@@ -1425,17 +1519,12 @@ mod tests {
             vec![("EngineStatus".to_string(), "RPM".to_string())],
             "the host resolves the pair against the node's DBC"
         );
-        let Expr::Call(name, args) = expr_of("EngineStatus.RPM") else {
-            panic!("a dotted read must compile to a host call");
+        let Expr::Member(base, signal) = expr_of("EngineStatus.RPM") else {
+            panic!("a dotted read must stay a member expression");
         };
-        assert_eq!(name, "sig_named");
         assert!(
-            matches!(
-                args.as_slice(),
-                [Expr::Str(message), Expr::Str(signal)]
-                    if message == "EngineStatus" && signal == "RPM"
-            ),
-            "the names stay literal for the host's DBC resolution"
+            matches!(&*base, Expr::Ident(message) if message == "EngineStatus") && signal == "RPM",
+            "the compiler resolves it as a database read when no variable exists"
         );
     }
 
@@ -1569,6 +1658,25 @@ mod tests {
                 "{src}: {error}"
             );
         }
+    }
+
+    #[test]
+    fn frame_paths_accept_quoted_names() {
+        for (src, want) in [
+            ("frame(CAN1[\"Frame Name\"])", "CAN1.Frame Name"),
+            ("frame(\"Frame Name\")", "Frame Name"),
+            ("frame(CAN1.EngineStatus)", "CAN1.EngineStatus"),
+        ] {
+            let Expr::FrameNew(path) = expr_of(src) else {
+                panic!("{src} must parse as frame(...)");
+            };
+            assert_eq!(path, want, "{src}");
+        }
+        let error =
+            crate::script::compile("on start { print(frame(CAN1[\"Frame\"][\"Signal\"])); }")
+                .unwrap_err()
+                .to_string();
+        assert!(error.contains("Bus.Frame"), "{error}");
     }
 
     #[test]

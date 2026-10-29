@@ -12,8 +12,13 @@
 - Panel 操作页是固定画布（默认 1280×720）、8px 网格，不做缩放或流式重排；
   控件坐标按格保存，拖动/缩放必须吸附网格。画幅尺寸也按格保存，缩小前
   必须保证所有控件仍在画布内。全屏用应用内固定层，不调用浏览器原生
-  Fullscreen API，画布尺寸保持不变。控件类型先有 Button（命令/脚本动作，脚本动作
-  可带一个数值参数）、Value（只读信号/派生/SysVar，可按升序上限分段染数字颜色）、
+  Fullscreen API，画布尺寸保持不变。控件类型先有 Button（**On click** 三选一：
+  Write signals / Send message / 脚本动作；Write signals 只应用一组 Signal writes，
+  逐项写入并汇总失败；Send message 按一次发一条 CAN/FlexRay/Ethernet 报文
+  （CAN 可发 DBC 外 ID 并进硬件，FR/ETH 只进本会话；命中目录帧时
+  （CAN 按 ID、FR 按槽、ETH 按矩阵帧）可切 Raw / Physical，Physical 按目录
+  信号物理值编码，未写信号取声明初始值）；
+  仿真控制只在顶部工具栏，不再放进面板按钮；脚本动作可带一个数值参数）、Value（只读信号/派生/SysVar，可按升序上限分段染数字颜色）、
   Bar / Gauge（按 min/max 填充，复用同一套色段）、Lamp（源值达到阈值时点亮，
   颜色可选）、Toggle（写 SysVar 0/1）与 Setpoint（Target 选 SysVar 或信号：
   SysVar 按 min/max 夹取，CAN/FlexRay/Ethernet 信号按目录声明的范围夹取并回读总线实际值；
@@ -27,6 +32,10 @@
   控件按页保存。自绘菜单（Add / 建议下拉 / 品牌菜单）的行必须显式覆盖亮色
   主题的全局 `button` 底色与边框，否则每一行都会变成独立按钮；菜单用
   `role="menu"/"menuitem"`，支持 ↑/↓/Home/End/Esc（Esc 回到触发按钮）。
+- Edit 下的右键菜单：控件 = Duplicate / Copy / Copy signal key / Delete；空白画布 =
+  Paste / 添加七类控件 / Undo / Redo；页签 = Rename / Duplicate / Export / Delete。
+  菜单同样用 `role="menu"/"menuitem"`、↑/↓/Home/End/Tab 导航，Esc 只关菜单、
+  不退出 Edit；右键按下的主键判断要排除，不能触发拖动。
 - 页面文件 `.rxpanel` 只在前端序列化（format + version + page，无控件 id），
   Export 用 Blob 下载，Import 用 `FilePick` 在浏览器读文本并作为新页面追加。
   导入必须严格校验：未知类型、越界、低于最小尺寸、重叠都报错且不改动现有

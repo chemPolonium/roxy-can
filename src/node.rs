@@ -110,6 +110,8 @@ struct NodeRuntime {
     fr_out: Vec<(u8, u16, Vec<u8>)>,
     /// Signal writes queued by `set_fr_sig`, same lifecycle as `emitted`.
     fr_sig: Vec<(u8, u16, String, f64)>,
+    /// Frame instances queued by `send_frame`, same lifecycle as `emitted`.
+    frames: Vec<crate::script::FrameInstance>,
     /// One slot per Timer handler, in handler order; named one-shot slots
     /// join on `set_timer`. `next_due_us == 0` means "not armed yet": the
     /// first step after start arms periodic slots one period out.
@@ -240,7 +242,7 @@ impl ScriptNode {
         self.errored = false;
         self.issue = None;
         self.tests.clear();
-        let script = match compile(&self.source) {
+        let mut script = match compile(&self.source) {
             Ok(s) => s,
             Err(e) => {
                 self.panel_actions.clear();
@@ -259,6 +261,7 @@ impl ScriptNode {
         // 装配层校验（DBC 部分）：信号引用、发送集对照、反向漏实现、
         // set_sig 字面量范围。GUI 与 `--check-script --dbc` 共用同一套。
         if let Some(db) = &dbc {
+            resolve_frame_send_refs(&mut script, db);
             let attached = self.attached.as_ref().map(|(_, n)| n.as_str());
             for line in dbc_checks(&script, db, attached) {
                 Self::push_log_into(
@@ -268,6 +271,14 @@ impl ScriptNode {
                     line,
                 );
             }
+        }
+        for line in frame_checks(&script, dbc.as_deref(), fr_dbs, eth_dbs) {
+            Self::push_log_into(
+                &mut self.log,
+                &mut self.log_dirty,
+                &mut self.pending_lines,
+                line,
+            );
         }
         // 装配层校验：脚本引用的系统变量须已在系统变量管理器中定义，
         // 否则 sys_get 读到 0、sys_set 的写入被丢弃——提前报出来。
@@ -462,6 +473,7 @@ impl ScriptNode {
             pending_sys: Vec::new(),
             fr_out: Vec::new(),
             fr_sig: Vec::new(),
+            frames: Vec::new(),
             timers,
         };
         // `on start` handlers, in declaration order.
@@ -479,6 +491,17 @@ impl ScriptNode {
             &mut self.log_dirty,
             &mut self.pending_lines,
         );
+        if !rt.vm.outbox.is_empty() || !rt.vm.fr_outbox.is_empty() || !rt.frames.is_empty() {
+            rt.vm.outbox.clear();
+            rt.vm.fr_outbox.clear();
+            rt.frames.clear();
+            Self::push_log_into(
+                &mut self.log,
+                &mut self.log_dirty,
+                &mut self.pending_lines,
+                "[start] sends are ignored in on start; use a timer or frame handler".to_string(),
+            );
+        }
         self.runtime = Some(rt);
     }
 
@@ -1333,6 +1356,7 @@ impl ScriptNode {
         rt.pending_sys.append(&mut rt.vm.sys_sets);
         rt.fr_out.append(&mut rt.vm.fr_outbox);
         rt.fr_sig.append(&mut rt.vm.fr_sig_sets);
+        rt.frames.append(&mut rt.vm.frame_outbox);
     }
 
     /// Hands the bus everything `emit_value` queued since the last call.
@@ -1365,6 +1389,14 @@ impl ScriptNode {
         self.runtime
             .as_mut()
             .map(|rt| std::mem::take(&mut rt.fr_sig))
+            .unwrap_or_default()
+    }
+
+    /// Hands the bus every `send_frame` instance queued since the last call.
+    pub fn take_frames(&mut self) -> Vec<crate::script::FrameInstance> {
+        self.runtime
+            .as_mut()
+            .map(|rt| std::mem::take(&mut rt.frames))
             .unwrap_or_default()
     }
 
@@ -1481,6 +1513,174 @@ fn eth_signal_check(
             "Ethernet signal \"{sig}\" is not in frame \"{frame}\" (ETH{bus})"
         ))
     }
+}
+
+/// Turns statically known `frame(...)` sends into numeric send-set facts when
+/// the catalog path resolves on this node's CAN database. Unknown paths are
+/// left to `frame_checks`; FR/ETH paths have no numeric send set here.
+pub fn resolve_frame_send_refs(script: &mut crate::script::Script, db: &crate::dbc::SymbolTable) {
+    for path in script.frame_sends.clone() {
+        let mut parts = path.split('.');
+        let first = parts.next().unwrap_or_default();
+        let second = parts.next();
+        if second.is_some() && (first.starts_with("FR") || first.starts_with("ETH")) {
+            continue;
+        }
+        let name = second.unwrap_or(first);
+        let Some(key) = db.message_key_by_name(name) else {
+            continue;
+        };
+        if !script
+            .send_refs
+            .iter()
+            .any(|(_, id, ext)| (*id, *ext) == key)
+        {
+            script
+                .send_refs
+                .push((format!("<frame {path}>"), key.0, key.1));
+        }
+    }
+}
+
+/// Checks the catalog paths and physical fields of statically known
+/// `frame(...)` instances against the loaded descriptions, plus the declared
+/// range of constant field writes. A typo or an out-of-range constant here is
+/// an assembly warning, not a dropped frame on the first click.
+pub fn frame_checks(
+    script: &crate::script::Script,
+    dbc: Option<&crate::dbc::SymbolTable>,
+    fr_dbs: Option<&std::collections::BTreeMap<u8, std::sync::Arc<crate::fr_db::FrDb>>>,
+    eth_dbs: Option<&std::collections::BTreeMap<u8, std::sync::Arc<crate::eth::db::EthDb>>>,
+) -> Vec<String> {
+    let mut lines = Vec::new();
+    let check = |path: &str, field: Option<&str>| -> Result<(), String> {
+        let mut parts = path.split('.');
+        let first = parts.next().unwrap_or_default();
+        let second = parts.next();
+        if parts.next().is_some() || first.is_empty() {
+            return Err(format!("[check] frame path is malformed: \"{path}\""));
+        }
+        if let Some(bus) = first.strip_prefix("FR").filter(|_| second.is_some()) {
+            let bus: u8 = bus
+                .parse()
+                .map_err(|_| format!("[check] frame path has a bad FlexRay bus: \"{path}\""))?;
+            let name = second.expect("checked");
+            let Some(db) = fr_dbs.and_then(|dbs| dbs.get(&bus)) else {
+                return Err(format!("[check] FR{bus} has no description for \"{path}\""));
+            };
+            let Some(ix) = db.frames.iter().position(|frame| frame.name == name) else {
+                return Err(format!("[check] frame not found: \"{path}\""));
+            };
+            if let Some(field) = field {
+                let slot = db.frame_index(ix).expect("index").triggering.slot_id as u16;
+                if db.slot_signal(slot, field).is_none() {
+                    return Err(format!("[check] signal not found: \"{path}\" \"{field}\""));
+                }
+            }
+            return Ok(());
+        }
+        if let Some(bus) = first.strip_prefix("ETH").filter(|_| second.is_some()) {
+            let bus: u8 = bus
+                .parse()
+                .map_err(|_| format!("[check] frame path has a bad Ethernet bus: \"{path}\""))?;
+            let name = second.expect("checked");
+            let Some(db) = eth_dbs.and_then(|dbs| dbs.get(&bus)) else {
+                return Err(format!(
+                    "[check] ETH{bus} has no description for \"{path}\""
+                ));
+            };
+            let Some(frame) = db.frames.iter().find(|frame| frame.name == name) else {
+                return Err(format!("[check] frame not found: \"{path}\""));
+            };
+            if let Some(field) = field
+                && !frame
+                    .pdus
+                    .iter()
+                    .flat_map(|pdu| &pdu.signals)
+                    .any(|signal| signal.name == field)
+            {
+                return Err(format!("[check] signal not found: \"{path}\" \"{field}\""));
+            }
+            return Ok(());
+        }
+        let name = second.unwrap_or(first);
+        let Some(db) = dbc else {
+            return Err(format!("[check] CAN database not loaded for \"{path}\""));
+        };
+        let Some(id) = db.message_id_by_name(name) else {
+            return Err(format!("[check] message not found: \"{path}\""));
+        };
+        if let Some(field) = field
+            && !db
+                .message_of(id)
+                .is_some_and(|message| message.signals.iter().any(|s| s.name == field))
+        {
+            return Err(format!("[check] signal not found: \"{path}\" \"{field}\""));
+        }
+        Ok(())
+    };
+    for path in &script.frame_sends {
+        if let Err(line) = check(path, None) {
+            lines.push(line);
+        }
+    }
+    for (path, field) in &script.frame_fields {
+        if let Err(line) = check(path, Some(field)) {
+            lines.push(line);
+        }
+    }
+    for (path, field, value) in &script.frame_consts {
+        let Some((min, max)) = frame_signal_bounds(path, field, dbc, fr_dbs, eth_dbs) else {
+            continue;
+        };
+        if *value < min || *value > max {
+            let name = path.rsplit('.').next().unwrap_or(path);
+            lines.push(format!(
+                "[check] frame \"{name}\" signal \"{field}\" value {value} is outside [{min}, {max}]"
+            ));
+        }
+    }
+    lines.sort();
+    lines.dedup();
+    lines
+}
+
+/// The declared physical range of one frame field, when the description
+/// states a non-empty one. Ethernet signals carry no range here, and an
+/// unknown path is a `frame_checks` error of its own.
+fn frame_signal_bounds(
+    path: &str,
+    field: &str,
+    dbc: Option<&crate::dbc::SymbolTable>,
+    fr_dbs: Option<&std::collections::BTreeMap<u8, std::sync::Arc<crate::fr_db::FrDb>>>,
+    _eth_dbs: Option<&std::collections::BTreeMap<u8, std::sync::Arc<crate::eth::db::EthDb>>>,
+) -> Option<(f64, f64)> {
+    let mut parts = path.split('.');
+    let first = parts.next()?;
+    let second = parts.next();
+    if parts.next().is_some() {
+        return None;
+    }
+    if let Some(bus) = first.strip_prefix("FR").filter(|_| second.is_some()) {
+        let bus: u8 = bus.parse().ok()?;
+        let db = fr_dbs?.get(&bus)?;
+        let name = second?;
+        let ix = db.frames.iter().position(|frame| frame.name == name)?;
+        let slot = db.frame_index(ix)?.triggering.slot_id as u16;
+        let signal = db.slot_signal(slot, field)?;
+        return (signal.max > signal.min).then_some((signal.min, signal.max));
+    }
+    if first.starts_with("ETH") && second.is_some() {
+        return None;
+    }
+    let key = dbc?.message_key_by_name(second.unwrap_or(first))?;
+    let signal = dbc?
+        .messages
+        .get(&key)?
+        .signals
+        .iter()
+        .find(|signal| signal.name == field)?;
+    (signal.max > signal.min).then_some((signal.min, signal.max))
 }
 
 /// The DBC-backed assembly checks a compiled script must pass at start:
@@ -3220,6 +3420,56 @@ BO_ 512 Status: 8 ECU
         assert_eq!(
             out,
             vec![(0x200, false, vec![0xA0, 0x0F, 0, 0, 0, 0, 0, 0])]
+        );
+    }
+
+    /// A catalog frame send joins the numeric send-set facts used by the
+    /// ownership and reverse-coverage checks.
+    #[test]
+    fn frame_sends_join_the_static_send_set() {
+        let db = crate::dbc::load_dbc_str(crate::sample_data::SAMPLE_DBC).unwrap();
+        let mut script = crate::script::compile(
+            r#"
+            on timer 10 {
+                let f = frame(CAN1.EngineStatus);
+                f.EngineSpeed = 1000;
+                send_frame(f);
+            }
+            "#,
+        )
+        .unwrap();
+        resolve_frame_send_refs(&mut script, &db);
+        assert!(
+            script
+                .send_refs
+                .iter()
+                .any(|(_, id, ext)| (*id, *ext) == (0x100, false)),
+            "{:?}",
+            script.send_refs
+        );
+    }
+
+    /// Constant writes outside a signal's declared range are reported at
+    /// assembly, while in-range constants stay silent.
+    #[test]
+    fn constant_frame_writes_warn_outside_the_declared_range() {
+        let db = crate::dbc::load_dbc_str(crate::sample_data::SAMPLE_DBC).unwrap();
+        let script = crate::script::compile(
+            r#"
+            on timer 10 {
+                let f = frame(CAN1.EngineStatus);
+                f.EngineSpeed = 1000;
+                f.EngineTemp = -50;
+                send_frame(f);
+            }
+            "#,
+        )
+        .unwrap();
+        let lines = frame_checks(&script, Some(&db), None, None);
+        assert_eq!(lines.len(), 1, "{lines:?}");
+        assert!(
+            lines[0].contains("EngineTemp") && lines[0].contains("outside"),
+            "{lines:?}"
         );
     }
 }

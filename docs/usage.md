@@ -47,8 +47,10 @@ roxy-can -h                               完整帮助
 - 在 **Buses…** 里打开 **Scripts…** 新建脚本：选总线与 DBC 节点即完成绑定（总线跟随节点），创建后就在同一个编辑器里写代码。
 - **角色是开关**：所属节点不是"模拟"时脚本一律不发送（`on start`、定时器、事件发帧全部被禁止）。未绑定脚本保持未绑定，不会被自动归到某个 DBC 节点。
 - **Apply** 下发源码（测量中即时重编译重启该节点）；**运行**开关、保存/加载 `.rxcan`、节点日志都在编辑器里。
-- 编辑器三栏：左栏**大纲**（每个处理器一行，点击跳转）与**收发**（静态事实表：发送集按 DBC 归属标 `*` 本节点 / `!` 他节点 / `-` 不在库，接收集、系统变量、响应映射）；中栏源码与日志；右栏**函数 / SysVar / 报文 / FlexRay** 四个插入页——FlexRay 单独一页是因为它长（一个真实集群动辄上百个槽），每行写成"`名字 (FRn)` slot N · 帧名"，点选插入 `fr_sig(n, N, "名")`，三个参数都不用另开窗口去查。输入 `Message.`、`FR0.`、`FR.集群名.`、`ETH0.`、`ETH0.帧名.` 或 `ETH.集群名.帧名.` 会自动列出名字；**Alt+/** 手动唤出补全（Ctrl+Space 在中文输入法下是切换中英文的快捷键，所以不用它）。
+- 编辑器三栏：左栏**大纲**（每个处理器一行，点击跳转）与**收发**（静态事实表：发送集按 DBC 归属标 `*` 本节点 / `!` 他节点 / `-` 不在库，接收集、系统变量、响应映射）；中栏源码与日志；右栏**函数 / SysVar / 报文 / FlexRay** 四个插入页——FlexRay 单独一页是因为它长（一个真实集群动辄上百个槽），每行写成"`名字 (FRn)` slot N · 帧名"，点选插入 `fr_sig(n, N, "名")`，三个参数都不用另开窗口去查。输入 `Message.`、`FR0.`、`FR.集群名.`、`ETH0.`、`ETH0.帧名.` 或 `ETH.集群名.帧名.` 会自动列出名字；`frame(` 后列出 `Bus.Frame`（带空格的名字插入 `CAN1["Frame Name"]`），`frame("` / `frame(CAN1["` 内按帧名过滤；对 `let` 声明、重新赋值和函数参数里的帧实例，`.` 后补全该帧的信号。**Alt+/** 手动唤出补全（Ctrl+Space 在中文输入法下是切换中英文的快捷键，所以不用它）。
 - 事件：`on start`、`on message <id>`（`*` 收所有数据帧）、`on extended message <id>`、`on fr slot <槽>` / `on fr <路> slot <槽>`（FlexRay 帧到达；不写路号就是所有路）、`on errorFrame`、`on timer <ms>`（周期）、`on timer "名"`（一次性，`set_timer` 武装、`cancel_timer` 取消）。
+- `on start` 里不发帧：`send` / `fr_send` / `send_frame` 会被丢弃并在日志提示改用定时器或帧处理器。能在 CAN 目录解析的 `send_frame` 会进左侧收发表的发送集，来源写作 `<frame Bus.Frame>`；`--check-script` 同样报告。
+- `frame(...)` 没写过的 CAN 信号取描述里的初始值（DBC `GenSigStartValue` / ARXML `I-SIGNAL/INIT-VALUE`），浮点信号及 FR/ETH 没有初始值时按物理 0。常量字段写入越界会在节点日志和 `--check-script` 里记 `[check]`（发送时仍夹取）。
 - **FlexRay 事件里的帧上下文**：`frame_id()` 是槽号、`frame_dlc()` 是字节数、`frame_byte(i)` 读载荷、`fr_cycle()` 是这次到达的通信周期号。一个静态槽按周期相位轮流排好几帧，处理器读到的是**实际到达那一帧**。`send(frame_id())` 在这种处理器里是编译错误——把槽号当 CAN id 发出去是两套编号混用最典型的错。
 - 节点会收到**自己发出的帧**：通配或同 ID 处理器里无条件发帧会自激成环，用 `frame_id()` 过滤。
 - 帧处理器里用 `this` 读触发帧：`this.bus` / `this.id`（CAN）/ `this.slot`、`this.cycle`（FlexRay）/ `this.len` / `this[i]` / `this.signal("名")`；`node.bus` 是脚本自己的 CAN 通道，定时器里也能用。网关脚本因此不用硬编码触发帧的 id 或总线号。
@@ -147,8 +149,8 @@ roxy-can -h                               完整帮助
 ## Signals（曲线）
 
 - **两条游标 A/B**（工具栏 **Cursors**）：双击图面放下一个（两条都在了，双击移动离得远的那条），按住游标线拖动微调。右上角读数给 `A`/`B` 两个时刻与 **Δt**（自动换单位，B 在 A 前就读负数），下面每个 **Plot** 或 **Read** 信号一行 `名字 A值 → B值 Δ差值`。
-- **Read 信号**：Signals 选择器里每个信号都有 **Plot / Read** 两段式模式开关。Read 只订阅、不画 lane，但读数表始终存在：没有游标时显示 **Live values** 与最新值（列头 `Now`），有游标时切到游标值，A/B 时一起显示 A/B/Δ 与区间统计。点当前模式可取消，切换另一段直接换模式，Ctrl-click 信号名也能切换 Read。图上一个 lane 都没有时仍可拖游标读数，Read 集合随工程 workspace 保存。
-- **全屏读数**：Signals 全屏时读数表变成左侧竖栏，信号名与 A/B/Δ 值同行紧挨，图表占右侧；非全屏仍保留图下方的读数表。
+- **Read 信号**：Signals 选择器里每个信号都有 **Plot / Read** 两段式模式开关。Read 只订阅、不画 lane，读数表按需出现：没有游标时只有 **Live values**（列头 `Now`），且只在 Signals 全屏时显示；有游标时切到游标值，A/B 时一起显示 A/B/Δ 与区间统计。点当前模式可取消，切换另一段直接换模式，Ctrl-click 信号名也能切换 Read。图上一个 lane 都没有时仍可拖游标读数，Read 集合随工程 workspace 保存。
+- **读数表占用**：非全屏且没有游标时不显示读数表，图表占满图表面板，避免 Live values 挤掉曲线；放下游标后才在图下方出现游标表（双图分栏时不显示）。全屏时读数表始终存在并变成左侧竖栏，信号名与 A/B/Δ 值同行紧挨，图表占右侧。
 - 游标记的是**时间**：平移、缩放、实时推进都让线跟着视图走，标的点不动；跑出视野的游标不画线，时刻仍留在读数里。没打上的那条印 `-`，没有样本的时刻也印 `-`——不把 0 当成一个读数显示。
 - 游标位置与 Read 集合保存在 Web workspace 里，随工程保存恢复。
 
@@ -156,8 +158,8 @@ roxy-can -h                               完整帮助
 
 - 画布上方是页面标签栏：点击切换页面；Edit 下 `+` 新建空页、**Duplicate** 复制当前页、**Delete** 删除当前页（至少保留一页），双击页名就地重命名。每页有自己的画幅尺寸和控件，切换页面会清空选区、撤销历史和剪贴板，但保留 Edit 模式。
 - 顶栏 **Standard / Panel** 进入操作页：固定画布默认 **1280×720**，始终显示 **8px 网格线**；画幅 W×H 在未选中控件时显示于右侧 Panel 属性，按 8px 取整，缩小到会把控件挤出画布时会拒绝；窗口不够大时画布出现滚动条，不缩放、不重排。
-- **Edit** 进入编辑：右侧属性栏常驻，点控件显示控件属性，点空白显示 **Panel** 属性（画幅 W×H 与控件数），切换选区时画布宽度不变。**+ Add** 菜单添加 Button / Value / Bar / Gauge / Lamp / Toggle / Setpoint，拖动控件移动、拖右下角缩放，位置和尺寸实时吸附网格；最小尺寸按类型，重叠的落点会被拒绝。编辑时控件不触发动作。
-- 选中控件后右侧属性栏按类型编辑：**Button** 选 Action（已有命令或 **Script action** + 动作名，Script action 还能填 **Argument** 随点击发送）；**Value** 填 Source（信号 key、`derived:Name` 或 `sysvar:ns::name`）与小数位，只读显示实时值；**Bar / Gauge** 填 Source、最小值/最大值与小数位，按比例填充并同样可用 **Color bands**；**Lamp** 填 Source、点亮阈值（Lit at or above）与点亮颜色，源值达到阈值时亮起；**Toggle** 填系统变量名，显示 ON/OFF 并写 1/0；**Setpoint** 先选 **Target**：**System variable** 填变量名、小数位与步进（Step），输入后按 Enter/失焦写入并按 SysVar 的 min/max 夹取；**Signal** 填目录里的信号 key（CAN、FlexRay 或 Ethernet），显示该信号**在总线上的实际值**，输入后按声明范围夹取（没有声明范围就不夹取）：CAN 写进该信号的发送帧并摘掉原来的波形驱动以保持该值；FlexRay 与 Ethernet 只在本次测量内注入一帧（FR 端口仍只收、Ethernet 没有发送端口），悬停提示标注 session only；派生信号会提示不可写。两种 Target 都可选 **Script action**，在写入后再带值触发脚本；Signal 的悬停提示同时给出总线实际值与 written 写入值，控件会把该信号以 **Read** 方式订阅用于回读，删除控件或改绑后自动释放它添加的订阅，不影响你手动 Plot/Read 的选择。**Color bands** 在所有只读控件上一致：按升序添加上限（`≤`）并为每段选 Neutral / OK / Warning / Critical，可再加一条 `above` 兜底最高段，只改数字/填充颜色、不改卡片底色。属性栏里的 **Duplicate** 与 **Delete** 复制/删除控件。旧页面里的 Numeric / Setpoint 会自动迁移为 Target 对应的 Setpoint。
+- **Edit** 进入编辑：右侧属性栏常驻，点控件显示控件属性，点空白显示 **Panel** 属性（画幅 W×H 与控件数），切换选区时画布宽度不变。**+ Add** 菜单添加 Button / Value / Bar / Gauge / Lamp / Toggle / Setpoint，拖动控件移动、拖右下角缩放，位置和尺寸实时吸附网格；最小尺寸按类型，重叠的落点会被拒绝。编辑时控件不触发动作。编辑时也可用右键菜单：控件上是 Duplicate / Copy / Copy signal key / Delete，空白画布上是 Paste、添加各类控件与 Undo/Redo，页签上是 Rename / Duplicate / Export / Delete；菜单支持 ↑/↓/Home/End 与 Esc（只关菜单，不退出 Edit）。
+- 选中控件后右侧属性栏按类型编辑：**Button** 的 **On click** 三选一：**Write signals** 只应用下面 **Signal writes** 里的「信号 + 值」（逐项写入，失败项列在状态行，其余继续）；**Send message** 按一次发一条报文：**CAN** 选 **Bus**、填 **ID (hex)**、可选 **Extended**、写 0–8 或 12/16/20/24/32/48/64 字节 **Data (hex)**，可发 DBC 之外 ID；**FlexRay** 选 Bus、填 **Slot**（1..2047）与 hex 载荷，按该槽声明长度补齐，只进本会话；**Ethernet** 选 Bus、矩阵 **Frame** 与 hex 载荷（选择帧时会预填对应长度的零），长度必须与帧声明一致，只进本会话；命中目录帧时（CAN 按 ID、FlexRay 按槽、Ethernet 按矩阵帧）多出 **Mode**，可从 **Raw** 切到 **Physical**，按目录列出的信号填物理值（未填的取声明初始值，写出时按范围夹取），Raw 仍用 hex 载荷；**Script action** 填动作名，可再填 **Argument** 随点击发送。启动/停止/暂停等仿真控制使用顶部工具栏，不再做成面板按钮；需要“先写后做”的逻辑请写进脚本；**Value** 填 Source（信号 key、`derived:Name` 或 `sysvar:ns::name`）与小数位，只读显示实时值；**Bar / Gauge** 填 Source、最小值/最大值与小数位，按比例填充并同样可用 **Color bands**；**Lamp** 填 Source、点亮阈值（Lit at or above）与点亮颜色，源值达到阈值时亮起；**Toggle** 填系统变量名，显示 ON/OFF 并写 1/0；**Setpoint** 先选 **Target**：**System variable** 填变量名、小数位与步进（Step），输入后按 Enter/失焦写入并按 SysVar 的 min/max 夹取；**Signal** 填目录里的信号 key（CAN、FlexRay 或 Ethernet），显示该信号**在总线上的实际值**，输入后按声明范围夹取（没有声明范围就不夹取）：CAN 写进该信号的发送帧并摘掉原来的波形驱动以保持该值；FlexRay 与 Ethernet 只在本次测量内注入一帧（FR 端口仍只收、Ethernet 没有发送端口），悬停提示标注 session only；派生信号会提示不可写。两种 Target 都可选 **Script action**，在写入后再带值触发脚本；Signal 的悬停提示同时给出总线实际值与 written 写入值，控件会把该信号以 **Read** 方式订阅用于回读，删除控件或改绑后自动释放它添加的订阅，不影响你手动 Plot/Read 的选择。**Color bands** 在所有只读控件上一致：按升序添加上限（`≤`）并为每段选 Neutral / OK / Warning / Critical，可再加一条 `above` 兜底最高段，只改数字/填充颜色、不改卡片底色。属性栏里的 **Duplicate** 与 **Delete** 复制/删除控件。旧页面里的 Numeric / Setpoint 会自动迁移为 Target 对应的 Setpoint。
 - 页面文件：Edit 下 **Export** 把当前页下载成 `.rxpanel`（带格式与版本，不含控件 id），**Import** 在浏览器里读取文件并作为新页面追加（名称自动去重）。导入严格校验画幅、控件类型、最小尺寸与重叠，任何一条不合格都给出提示且不改动现有页面。
 - 编辑快捷键：**Ctrl+C / Ctrl+V** 复制粘贴（自动找空位并选中副本），**Ctrl+Z** 撤销、**Ctrl+Shift+Z** 或 **Ctrl+Y** 重做（工具条也有 Undo/Redo），**Delete** 删除选中控件。不做手动微调与对齐工具——位置、尺寸一律吸附网格。
 - 控件会表达可用性：未测量时 Start/Stop 等按钮自动禁用并在悬停提示原因；脚本动作只在有运行中的同名处理器时可用；Setpoint 的 SysVar target 需要已定义变量，Signal target 只在测量中且信号在目录里时可用（派生信号提示只读）；未绑定或指向未知对象的 Value/Toggle 显示占位并提示原因。
@@ -219,6 +221,8 @@ roxy-can -h                               完整帮助
 
 - **虚拟滚动**：几十万行也能流畅滚动与排序。容量下拉 50k–2M 帧（随工程保存），**上限按帧行计**——展开的信号子行不占额度，所以展开与否看得见同样多的历史帧。超出容量时最旧的帧写入临时归档（不丢），窗口顶部提示"已归档 N 帧"，**Export Trace 会先回放归档再写热环**，导出的 ASC 覆盖整段运行；文件名选 `.pcap` 时导出以太网热环（以太网没有归档）。
 - **过滤**：总线范围 / 方向 / 仅 DBC / payload 字节搜索（hex 对，如 `11 22 3F`）/ 帧类型 / 文本（id 或报文名子串）/ 时间范围（两个秒数框，留空 = 不限）/ 信号值条件（`Name>10`，运算符 `> >= < <= == != =`）。只管这个窗口的显示。
+- **文本过滤的字段语法**：空格分隔、全部满足；裸词仍是原来的 name/bus/addr/id/data 子串搜索（含方向 `tx`/`rx`）。可用 `id:1AB`（hex，也认 `0x1AB`）、`bus:CAN1` 或 `bus:0`、`dir:tx`、`name:RPM`、`data:A00F`、`addr:slot`、`kind:fr`；前缀 `-` 表示排除（`-tx`、`-id:1AB`、`-error`）。带空格的值用双引号括起（`name:"Engine Status"`）。未知字段退回普通子串，不静默清空。
+- **过滤时保持位置**：改文本或筛选条件时，选中行若仍匹配就保持选中；视口跟着过滤前顶部可见的帧（选中行在视口内时跟选中行），不回到最新一行。锚点帧被过滤掉时从结果头部开始，清空条件后选中行会重新出现。
 - **`筛选 ·N`**：payload / 帧类型 / 仅 DBC / 时间范围 挤在可折叠行里，行收起时条件照旧在生效——所以按钮上写明此刻真在生效几条，悬停点名是哪几项（填了但解析不出来的不算）。行右键 **Clear filter** 一次清除全部条件，**唯独不动 Manual 手动勾选的集合**（那是你一条条勾的名单，不是一时输入的过滤式）。
 - **精确地址**：普通文本是子串搜索（`13` 同时命中槽 113、槽 130 和名字里带 13 的帧）。只要这一个地址就写前缀：`id:1AB`、`id:1ABCDEFx`（29 位扩展帧）、`slot:13`（十进制）。两套编号不互解。行右键 **Filter this ID** 写的就是精确形式。**输入不完整时不猜测**：`id:` 后不是 hex、`slot:` 后不是合法数字时，整串按普通子串处理（表里通常就空了，改一个字符即恢复）。
 - **信号值条件两种总线都算**：CAN 行问 DBC，FlexRay 行问这一帧在自己那路描述里解出的物理值——与曲线上画的、展开子行里印的是同一个数。这一帧没这个信号或这路没有加载描述，该行不出。多个条件是"且"。

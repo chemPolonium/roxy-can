@@ -1623,6 +1623,12 @@ async fn upload(
 }
 
 #[derive(Deserialize)]
+struct PanelWriteEntry {
+    source: String,
+    value: f64,
+}
+
+#[derive(Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum WebCommand {
     Start,
@@ -1672,6 +1678,41 @@ enum WebCommand {
     PanelWriteSignal {
         source: String,
         value: f64,
+    },
+    /// A Button preset: write several signals in one command. Each entry is
+    /// attempted; failures come back together in the status line.
+    PanelWriteSignals {
+        writes: Vec<PanelWriteEntry>,
+    },
+    /// Send one raw CAN frame once from a Panel button. `physical` encodes
+    /// `signals` against the catalog message instead; `data` is ignored then.
+    PanelSendFrame {
+        channel: u8,
+        id: u32,
+        extended: bool,
+        data: Vec<u8>,
+        #[serde(default)]
+        physical: bool,
+        #[serde(default)]
+        signals: std::collections::BTreeMap<String, f64>,
+    },
+    PanelSendFrFrame {
+        bus: u8,
+        slot: u16,
+        data: Vec<u8>,
+        #[serde(default)]
+        physical: bool,
+        #[serde(default)]
+        signals: std::collections::BTreeMap<String, f64>,
+    },
+    PanelSendEthFrame {
+        bus: u8,
+        frame: String,
+        data: Vec<u8>,
+        #[serde(default)]
+        physical: bool,
+        #[serde(default)]
+        signals: std::collections::BTreeMap<String, f64>,
     },
     OpenProject {
         path: String,
@@ -2260,6 +2301,70 @@ fn app_loop(
                             app.status = "[panel] setpoint source must be a signal key".to_string();
                         }
                     }
+                }
+                WebCommand::PanelWriteSignals { writes } => {
+                    if writes.is_empty() {
+                        app.status = "[panel] no signal writes".to_string();
+                    } else if writes.len() > crate::bus::PANEL_WRITE_BATCH_MAX {
+                        app.status = format!(
+                            "[panel] too many signal writes (limit {})",
+                            crate::bus::PANEL_WRITE_BATCH_MAX
+                        );
+                    } else {
+                        app.send(BusCommand::PanelWriteSignals {
+                            writes: writes
+                                .into_iter()
+                                .map(|entry| (entry.source, entry.value))
+                                .collect(),
+                        });
+                    }
+                }
+                WebCommand::PanelSendFrame {
+                    channel,
+                    id,
+                    extended,
+                    data,
+                    physical,
+                    signals,
+                } => {
+                    app.send(BusCommand::PanelSendFrame {
+                        channel,
+                        id,
+                        extended,
+                        data,
+                        physical,
+                        signals,
+                    });
+                }
+                WebCommand::PanelSendFrFrame {
+                    bus,
+                    slot,
+                    data,
+                    physical,
+                    signals,
+                } => {
+                    app.send(BusCommand::PanelSendFrFrame {
+                        bus,
+                        slot,
+                        data,
+                        physical,
+                        signals,
+                    });
+                }
+                WebCommand::PanelSendEthFrame {
+                    bus,
+                    frame,
+                    data,
+                    physical,
+                    signals,
+                } => {
+                    app.send(BusCommand::PanelSendEthFrame {
+                        bus,
+                        frame,
+                        data,
+                        physical,
+                        signals,
+                    });
                 }
                 WebCommand::OpenProject { path } => {
                     if app.snap.measuring {
@@ -4070,6 +4175,9 @@ struct WebCatalogMessage {
     comment: String,
     /// CAN FD, either declared by `VFrameFormat` or implied by a long DLC.
     fd: bool,
+    /// Ethernet payload bytes after the project's L2-header convention.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    length: Option<u32>,
     signals: Vec<WebCatalogSignal>,
 }
 
@@ -4081,6 +4189,10 @@ struct WebCatalogSignal {
     unit: String,
     min: f64,
     max: f64,
+    /// Declared start value in physical units; the physical send mode shows
+    /// it as the placeholder for an untouched field.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    initial: Option<f64>,
     /// `CM_ SG_` description; omitted when the database has none.
     #[serde(skip_serializing_if = "String::is_empty")]
     comment: String,
@@ -4155,6 +4267,7 @@ fn build_catalog(app: &App) -> WebCatalog {
                                 frame: None,
                                 comment: message.comment.clone(),
                                 fd: message.fd || message.dlc > 8,
+                                length: None,
                                 signals: message
                                     .signals
                                     .iter()
@@ -4169,6 +4282,7 @@ fn build_catalog(app: &App) -> WebCatalog {
                                         unit: signal.unit.clone(),
                                         min: signal.min,
                                         max: signal.max,
+                                        initial: signal.initial,
                                         comment: signal.comment.clone(),
                                     })
                                     .collect(),
@@ -4191,6 +4305,7 @@ fn build_catalog(app: &App) -> WebCatalog {
                 frame: None,
                 comment: String::new(),
                 fd: false,
+                length: None,
                 signals: names
                     .into_iter()
                     .map(|name| {
@@ -4201,6 +4316,7 @@ fn build_catalog(app: &App) -> WebCatalog {
                             unit: meta.map(|signal| signal.unit.clone()).unwrap_or_default(),
                             min: meta.map(|signal| signal.min).unwrap_or(0.0),
                             max: meta.map(|signal| signal.max).unwrap_or(0.0),
+                            initial: None,
                             comment: meta
                                 .map(|signal| signal.comment.clone())
                                 .unwrap_or_default(),
@@ -4249,6 +4365,11 @@ fn build_catalog(app: &App) -> WebCatalog {
                 frame: Some(frame.name.clone()),
                 comment: String::new(),
                 fd: false,
+                length: Some(if app.eth_length_includes_header {
+                    frame.length.saturating_sub(14)
+                } else {
+                    frame.length
+                } as u32),
                 signals: frame
                     .pdus
                     .iter()
@@ -4259,6 +4380,7 @@ fn build_catalog(app: &App) -> WebCatalog {
                         unit: signal.unit.clone(),
                         min: 0.0,
                         max: 0.0,
+                        initial: None,
                         comment: String::new(),
                     })
                     .collect(),

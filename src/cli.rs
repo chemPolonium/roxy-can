@@ -1029,7 +1029,10 @@ pub fn check_scripts(check: &ScriptCheck) -> Result<String, String> {
     for path in &check.scripts {
         match std::fs::read_to_string(path) {
             Ok(src) => match crate::script::compile(&src) {
-                Ok(script) => {
+                Ok(mut script) => {
+                    if let Some(db) = &dbc {
+                        crate::node::resolve_frame_send_refs(&mut script, db);
+                    }
                     lines.push(format!(
                         "ok      {path} ({} handlers)",
                         script.handlers.len()

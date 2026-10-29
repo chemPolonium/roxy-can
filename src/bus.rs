@@ -170,6 +170,39 @@ pub enum BusCommand {
         key: SigKey,
         value: f64,
     },
+    /// Applies a Button's preset: every entry is attempted in order and the
+    /// failures are reported together, because session frames cannot be
+    /// rolled back and one bad key must not hide the good writes.
+    PanelWriteSignals {
+        writes: Vec<(String, f64)>,
+    },
+    /// A Button preset that sends one CAN frame once: raw bytes on the wire
+    /// (and into this session), not through a generator entry. `physical`
+    /// encodes `signals` against the catalog message and ignores `data`.
+    PanelSendFrame {
+        channel: u8,
+        id: u32,
+        extended: bool,
+        data: Vec<u8>,
+        physical: bool,
+        signals: std::collections::BTreeMap<String, f64>,
+    },
+    /// One-shot FlexRay frame into this session (the port stays receive-only).
+    PanelSendFrFrame {
+        bus: u8,
+        slot: u16,
+        data: Vec<u8>,
+        physical: bool,
+        signals: std::collections::BTreeMap<String, f64>,
+    },
+    /// One-shot Ethernet frame into this session's flow ring (no port).
+    PanelSendEthFrame {
+        bus: u8,
+        frame: String,
+        data: Vec<u8>,
+        physical: bool,
+        signals: std::collections::BTreeMap<String, f64>,
+    },
     /// Resets the per-message counters the Messages / Statistics windows
     /// read. Load, spec memory and the trace are untouched.
     ClearAggregates,
@@ -617,6 +650,15 @@ pub(crate) const SYSVAR_STREAM_ID: u64 = u64::MAX;
 
 /// Oldest Write-window lines fall off once the list outgrows this.
 pub(crate) const WRITE_LOG_CAP: usize = 1000;
+
+/// Upper bound on one Button preset's signal writes.
+pub(crate) const PANEL_WRITE_BATCH_MAX: usize = 32;
+
+/// CAN FD payload lengths a one-shot frame may carry: classic sizes plus the
+/// FD DLC ladder. A length in between is refused rather than silently padded.
+fn panel_frame_length_ok(len: usize) -> bool {
+    matches!(len, 0..=8 | 12 | 16 | 20 | 24 | 32 | 48 | 64)
+}
 
 /// One line of the Write window: a system event stamped on the bus
 /// timeline. `kind` only drives the color.
@@ -1157,6 +1199,9 @@ pub struct BusCore {
     /// Panel setpoint writes for FlexRay slots, encoded at command time and
     /// landed with the same generator block as script frames.
     pub(crate) panel_fr_frames: Vec<(u8, u16, Vec<u8>, u8)>,
+    /// One-shot CAN frames from Panel send buttons, built at the next step's
+    /// sim clock so a queued click never carries a stale timestamp.
+    pub(crate) panel_frames: Vec<(u8, u32, bool, Vec<u8>)>,
     /// The load rollups as of the last publish. Rebuilt only when a step
     /// (or a channel add/remove) touched them; the Bus Statistics window
     /// reads this, never the live state. FlexRay's rollups ride the same
@@ -1378,6 +1423,7 @@ impl BusCore {
             injected: Vec::new(),
             fr_from_scripts: Vec::new(),
             panel_fr_frames: Vec::new(),
+            panel_frames: Vec::new(),
             published_loads,
             published_fr_loads: Arc::new(Default::default()),
             loads_dirty: false,
@@ -1453,32 +1499,175 @@ impl BusCore {
             BusCommand::PanelWriteSignal { key, value } => {
                 if !self.measuring {
                     *status = "[panel] writing a signal needs a running measurement".to_string();
+                } else if let Err(error) = self.apply_panel_write(key, value) {
+                    *status = format!("[panel] {error}");
+                }
+            }
+            BusCommand::PanelWriteSignals { writes } => {
+                if !self.measuring {
+                    *status = "[panel] writing signals needs a running measurement".to_string();
+                } else if writes.len() > PANEL_WRITE_BATCH_MAX {
+                    *status =
+                        format!("[panel] too many signal writes (limit {PANEL_WRITE_BATCH_MAX})");
                 } else {
-                    match key {
-                        SigKey::Can { ch, id, name, .. } => {
-                            match self.panel_write_signal(ch, id, &name, value) {
-                                Ok(()) => self.injected.push((ch, id)),
-                                Err(error) => *status = format!("[panel] {error}"),
+                    let mut failed: Vec<String> = Vec::new();
+                    for (source, value) in writes {
+                        let result = match crate::observe::SigKey::from_text(source.trim()) {
+                            None => Err("unknown signal key".to_string()),
+                            Some(_) if !value.is_finite() => {
+                                Err("value must be a number".to_string())
                             }
-                        }
-                        SigKey::Fr { bus, slot, name } => {
-                            match self.panel_write_fr_signal(bus, slot, &name, value) {
-                                Ok((payload, cycle)) => {
-                                    self.panel_fr_frames.push((bus, slot, payload, cycle));
-                                }
-                                Err(error) => *status = format!("[panel] {error}"),
-                            }
-                        }
-                        SigKey::Eth { bus, frame, name } => {
-                            match self.panel_write_eth_signal(bus, &frame, &name, value) {
-                                Ok(()) => {}
-                                Err(error) => *status = format!("[panel] {error}"),
-                            }
-                        }
-                        SigKey::Derived { .. } => {
-                            *status = "[panel] derived signals are read-only".to_string();
+                            Some(key) => self.apply_panel_write(key, value),
+                        };
+                        if let Err(error) = result {
+                            failed.push(format!("{source}: {error}"));
                         }
                     }
+                    if !failed.is_empty() {
+                        *status = format!(
+                            "[panel] {} write(s) failed: {}",
+                            failed.len(),
+                            failed
+                                .iter()
+                                .take(3)
+                                .cloned()
+                                .collect::<Vec<_>>()
+                                .join("; ")
+                        );
+                    }
+                }
+            }
+            BusCommand::PanelSendFrame {
+                channel,
+                id,
+                extended,
+                data,
+                physical,
+                signals,
+            } => {
+                if !self.measuring {
+                    *status = "[panel] sending a frame needs a running measurement".to_string();
+                } else if channel as usize >= self.channels.len() {
+                    *status = format!("[panel] CAN channel {channel} does not exist");
+                } else if extended && id > 0x1fff_ffff {
+                    *status = "[panel] extended IDs stop at 0x1FFFFFFF".to_string();
+                } else if !extended && id > 0x7ff {
+                    *status = "[panel] standard IDs stop at 0x7FF".to_string();
+                } else if physical {
+                    match self.panel_can_signal_payload(channel, id, extended, &signals) {
+                        Ok(payload) => self.panel_frames.push((channel, id, extended, payload)),
+                        Err(error) => *status = format!("[panel] {error}"),
+                    }
+                } else if !panel_frame_length_ok(data.len()) {
+                    *status = "[panel] CAN FD data must be 0-8, 12, 16, 20, 24, 32, 48 or 64 bytes"
+                        .to_string();
+                } else {
+                    self.panel_frames.push((channel, id, extended, data));
+                }
+            }
+            BusCommand::PanelSendFrFrame {
+                bus,
+                slot,
+                data,
+                physical,
+                signals,
+            } => {
+                if !self.measuring {
+                    *status = "[panel] sending a frame needs a running measurement".to_string();
+                } else if !(1..=2047).contains(&slot) {
+                    *status = "[panel] FlexRay slot must be 1..2047".to_string();
+                } else if physical {
+                    match self.panel_fr_signal_payload(bus, slot, &signals) {
+                        Ok((payload, cycle)) => {
+                            self.panel_fr_frames.push((bus, slot, payload, cycle))
+                        }
+                        Err(error) => *status = format!("[panel] {error}"),
+                    }
+                } else if data.len() > crate::generator::MAX_FR_PAYLOAD_LEN {
+                    *status = format!(
+                        "[panel] FlexRay data must be at most {} bytes",
+                        crate::generator::MAX_FR_PAYLOAD_LEN
+                    );
+                } else {
+                    let Some(db) = self.fr_dbs.get(&bus).cloned() else {
+                        *status = format!("[panel] FR{bus} has no cluster description");
+                        return;
+                    };
+                    let frame_ix = db.frame_ix_of_slot(slot);
+                    let declared = frame_ix
+                        .and_then(|ix| db.frame_index(ix))
+                        .map(|frame| frame.length as usize);
+                    let payload = match declared {
+                        Some(width) if data.len() > width => {
+                            *status = format!("[panel] FR{bus} slot {slot} carries {width} bytes");
+                            return;
+                        }
+                        Some(width) => {
+                            let mut payload = data;
+                            payload.resize(width, 0);
+                            payload
+                        }
+                        None => data,
+                    };
+                    let now_cycle = crate::generator::fr_cycle_at(&db, self.sim_t_us);
+                    let cycle = if db.frame_ix_at(slot, now_cycle, 2).is_some() {
+                        now_cycle
+                    } else {
+                        frame_ix
+                            .and_then(|ix| db.frame_index(ix))
+                            .map(|frame| frame.triggering.base_cycle as u8)
+                            .unwrap_or(now_cycle)
+                    };
+                    self.panel_fr_frames.push((bus, slot, payload, cycle));
+                }
+            }
+            BusCommand::PanelSendEthFrame {
+                bus,
+                frame,
+                data,
+                physical,
+                signals,
+            } => {
+                if !self.measuring {
+                    *status = "[panel] sending a frame needs a running measurement".to_string();
+                } else {
+                    let Some(db) = self.eth_dbs.get(&bus).cloned() else {
+                        *status = format!("[panel] ETH{bus} has no matrix description");
+                        return;
+                    };
+                    let Some(def) = db.frames.iter().find(|entry| entry.name == frame) else {
+                        *status = format!("[panel] unknown Ethernet frame \"{frame}\"");
+                        return;
+                    };
+                    let payload = if physical {
+                        match self.panel_eth_signal_payload(&db, &frame, &signals) {
+                            Ok(payload) => payload,
+                            Err(error) => {
+                                *status = format!("[panel] {error}");
+                                return;
+                            }
+                        }
+                    } else {
+                        let expected = if self.eth_length_includes_header {
+                            def.length.saturating_sub(14)
+                        } else {
+                            def.length
+                        };
+                        if data.len() != expected {
+                            *status = format!(
+                                "[panel] frame \"{frame}\" carries {expected} payload bytes"
+                            );
+                            return;
+                        }
+                        data
+                    };
+                    let vlan = def.vlan;
+                    let ethertype = def
+                        .ethertype_hint
+                        .unwrap_or(crate::eth::EthFrame::SESSION_ETHERTYPE);
+                    let injected =
+                        crate::eth::EthFrame::session(self.sim_t_us, bus, vlan, ethertype, payload);
+                    self.ingest_eth(injected);
                 }
             }
             BusCommand::ClearAggregates => self.clear_aggregates(status),
@@ -2480,6 +2669,7 @@ impl BusCore {
         let mut fr_sends: Vec<(u64, u8, u16, Vec<u8>)> = Vec::new();
         let mut fr_sig_writes: Vec<(u64, u8, u16, String, f64)> = Vec::new();
         let mut node_lines: Vec<(String, String)> = Vec::new();
+        let mut node_frames: Vec<(u64, u8, bool, crate::script::FrameInstance)> = Vec::new();
         for node in &mut self.nodes {
             let input = inputs.get(&node.channel).cloned().unwrap_or_default();
             // 绑定脚本的发帧受所属 DBC 节点的角色开关：节点离线时脚本同样
@@ -2498,6 +2688,11 @@ impl BusCore {
                 }
             }
             Self::drain_node_fr(node, &mut fr_sends, &mut fr_sig_writes);
+            node_frames.extend(
+                node.take_frames()
+                    .into_iter()
+                    .map(|frame| (node.id, node.channel, script_allowed, frame)),
+            );
             for (name, v) in node.take_emitted() {
                 derived.push((node.channel, node.id, node.name.clone(), name, v));
             }
@@ -2518,6 +2713,7 @@ impl BusCore {
         self.apply_sys_writes(sys_writes);
         self.fr_from_scripts.append(&mut fr_sends);
         self.apply_fr_sig_writes(fr_sig_writes);
+        self.send_node_frames(node_frames);
         for (node_name, line) in node_lines {
             self.write_node_line(&node_name, &line);
         }
@@ -2537,6 +2733,7 @@ impl BusCore {
         let mut fr_sig_writes: Vec<(u64, u8, u16, String, f64)> = Vec::new();
         let mut node_lines: Vec<(String, String)> = Vec::new();
         let mut missing: Vec<String> = Vec::new();
+        let mut node_frames: Vec<(u64, u8, bool, crate::script::FrameInstance)> = Vec::new();
         for (action, value) in actions {
             let mut ran = 0usize;
             for node in &mut self.nodes {
@@ -2559,6 +2756,11 @@ impl BusCore {
                     }
                 }
                 Self::drain_node_fr(node, &mut fr_sends, &mut fr_sig_writes);
+                node_frames.extend(
+                    node.take_frames()
+                        .into_iter()
+                        .map(|frame| (node.id, node.channel, script_allowed, frame)),
+                );
                 for (name, v) in node.take_emitted() {
                     derived.push((node.channel, node.id, node.name.clone(), name, v));
                 }
@@ -2583,6 +2785,7 @@ impl BusCore {
         self.apply_sys_writes(sys_writes);
         self.fr_from_scripts.append(&mut fr_sends);
         self.apply_fr_sig_writes(fr_sig_writes);
+        self.send_node_frames(node_frames);
         for (node_name, line) in node_lines {
             self.write_node_line(&node_name, &line);
         }
@@ -2615,6 +2818,7 @@ impl BusCore {
         let mut node_lines: Vec<(String, String)> = Vec::new();
         let mut fr_sends: Vec<(u64, u8, u16, Vec<u8>)> = Vec::new();
         let mut fr_sig_writes: Vec<(u64, u8, u16, String, f64)> = Vec::new();
+        let mut node_frames: Vec<(u64, u8, bool, crate::script::FrameInstance)> = Vec::new();
         let data = &f.data[..f.len as usize];
         for node in &mut self.nodes {
             // 绑定脚本的发帧受所属 DBC 节点的角色开关（见 run_node_timers）。
@@ -2635,6 +2839,11 @@ impl BusCore {
             }
             out.extend(node_out);
             Self::drain_node_fr(node, &mut fr_sends, &mut fr_sig_writes);
+            node_frames.extend(
+                node.take_frames()
+                    .into_iter()
+                    .map(|frame| (node.id, node.channel, script_allowed, frame)),
+            );
             for (name, v) in node.take_emitted() {
                 derived.push((node.channel, node.id, node.name.clone(), name, v));
             }
@@ -2655,6 +2864,7 @@ impl BusCore {
         self.apply_sys_writes(sys_writes);
         self.fr_from_scripts.append(&mut fr_sends);
         self.apply_fr_sig_writes(fr_sig_writes);
+        self.send_node_frames(node_frames);
         for (node_name, line) in node_lines {
             self.write_node_line(&node_name, &line);
         }
@@ -2685,6 +2895,7 @@ impl BusCore {
         let mut node_lines: Vec<(String, String)> = Vec::new();
         let mut fr_sends: Vec<(u64, u8, u16, Vec<u8>)> = Vec::new();
         let mut fr_sig_writes: Vec<(u64, u8, u16, String, f64)> = Vec::new();
+        let mut node_frames: Vec<(u64, u8, bool, crate::script::FrameInstance)> = Vec::new();
         for node in &mut self.nodes {
             if !node.waits_on_flexray() {
                 continue;
@@ -2706,6 +2917,11 @@ impl BusCore {
                 queued.push(frame);
             }
             Self::drain_node_fr(node, &mut fr_sends, &mut fr_sig_writes);
+            node_frames.extend(
+                node.take_frames()
+                    .into_iter()
+                    .map(|frame| (node.id, node.channel, script_allowed, frame)),
+            );
             for (name, v) in node.take_emitted() {
                 derived.push((node.channel, node.id, node.name.clone(), name, v));
             }
@@ -2726,6 +2942,7 @@ impl BusCore {
         self.apply_sys_writes(sys_writes);
         self.fr_from_scripts.append(&mut fr_sends);
         self.apply_fr_sig_writes(fr_sig_writes);
+        self.send_node_frames(node_frames);
         for (node_name, line) in node_lines {
             self.write_node_line(&node_name, &line);
         }
@@ -4382,6 +4599,123 @@ impl BusCore {
     /// `(ch, id)`, creating that entry from the database when absent, drop
     /// the signal's waveform source so the value holds, and let the next
     /// step send one frame. Values are clamped into the DBC range.
+    /// Encodes a Button's physical CAN frame from catalog signal values:
+    /// declared start values first, then each named signal clamped to its
+    /// range, at the message's declared DLC.
+    fn panel_can_signal_payload(
+        &self,
+        channel: u8,
+        id: u32,
+        extended: bool,
+        signals: &std::collections::BTreeMap<String, f64>,
+    ) -> Result<Vec<u8>, String> {
+        let Some(table) = self.channel_dbc(channel) else {
+            return Err(format!("CAN{} has no database", channel + 1));
+        };
+        let key = (id, extended);
+        let Some(message) = table.messages.get(&key) else {
+            return Err(format!(
+                "CAN{} has no message {id:#X}{}",
+                channel + 1,
+                if extended { "x" } else { "" }
+            ));
+        };
+        let len = message.dlc.min(crate::can::frame::MAX_CAN_FD_LEN as u64) as usize;
+        let mut data = [0u8; crate::can::frame::MAX_CAN_FD_LEN];
+        for signal in &message.signals {
+            table.encode_signal_in(key, &signal.name, signal.initial.unwrap_or(0.0), &mut data);
+        }
+        for (name, value) in signals {
+            let Some(signal) = message.signals.iter().find(|signal| &signal.name == name) else {
+                return Err(format!(
+                    "message \"{}\" has no signal \"{name}\"",
+                    message.name
+                ));
+            };
+            let value = if signal.max > signal.min {
+                value.clamp(signal.min, signal.max)
+            } else {
+                *value
+            };
+            if !table.encode_signal_in(key, name, value, &mut data) {
+                return Err(format!(
+                    "signal \"{name}\" does not fit \"{}\"",
+                    message.name
+                ));
+            }
+        }
+        Ok(data[..len].to_vec())
+    }
+
+    /// Encodes a Button's physical FlexRay frame from catalog signal values,
+    /// using the occupant the slot actually carries at this cycle.
+    fn panel_fr_signal_payload(
+        &self,
+        bus: u8,
+        slot: u16,
+        signals: &std::collections::BTreeMap<String, f64>,
+    ) -> Result<(Vec<u8>, u8), String> {
+        let Some(db) = self.fr_dbs.get(&bus) else {
+            return Err(format!("FR{bus} has no cluster description"));
+        };
+        let now_cycle = crate::generator::fr_cycle_at(db, self.sim_t_us);
+        let Some(ix) = db
+            .frame_ix_at(slot, now_cycle, 2)
+            .or_else(|| db.frame_ix_of_slot(slot))
+        else {
+            return Err(format!("FR{bus} has no frame in slot {slot}"));
+        };
+        let Some(frame) = db.frame_index(ix) else {
+            return Err(format!("FR{bus} has no frame in slot {slot}"));
+        };
+        let mut payload = vec![0u8; frame.length as usize];
+        for (name, value) in signals {
+            let Some(signal) = db.slot_signal(slot, name) else {
+                return Err(format!("slot {slot} has no signal \"{name}\""));
+            };
+            let value = if signal.max > signal.min {
+                value.clamp(signal.min, signal.max)
+            } else {
+                *value
+            };
+            if !db.encode_signal(ix, name, value, &mut payload) {
+                return Err(format!("signal \"{name}\" does not fit slot {slot}"));
+            }
+        }
+        let cycle = if db.frame_ix_at(slot, now_cycle, 2).is_some() {
+            now_cycle
+        } else {
+            frame.triggering.base_cycle as u8
+        };
+        Ok((payload, cycle))
+    }
+
+    /// Encodes a Button's physical Ethernet frame at the declared payload
+    /// width. Ethernet signals carry no declared range here.
+    fn panel_eth_signal_payload(
+        &self,
+        db: &crate::eth::db::EthDb,
+        frame: &str,
+        signals: &std::collections::BTreeMap<String, f64>,
+    ) -> Result<Vec<u8>, String> {
+        let Some(ix) = db.frames.iter().position(|entry| entry.name == frame) else {
+            return Err(format!("unknown Ethernet frame \"{frame}\""));
+        };
+        let def = &db.frames[ix];
+        let width = if self.eth_length_includes_header {
+            def.length.saturating_sub(14)
+        } else {
+            def.length
+        };
+        let mut payload = vec![0u8; width];
+        for (name, value) in signals {
+            if !db.encode_signal(ix, name, *value, &mut payload) {
+                return Err(format!("frame \"{frame}\" has no signal \"{name}\""));
+            }
+        }
+        Ok(payload)
+    }
+
     fn panel_write_signal(&mut self, ch: u8, id: u32, name: &str, phys: f64) -> Result<(), String> {
         let (min, max, msg_size) = {
             let Some(table) = self.channels.get(ch as usize).and_then(|c| c.dbc.as_ref()) else {
@@ -4426,6 +4760,251 @@ impl BusCore {
         let len = tx.len.max(msg_size);
         crate::generator::set_tx_base(tx, data, len);
         Ok(())
+    }
+
+    fn send_node_frames(&mut self, frames: Vec<(u64, u8, bool, crate::script::FrameInstance)>) {
+        for (node_id, channel, allowed, frame) in frames {
+            if let Err(error) = self.send_script_frame(channel, allowed, &frame)
+                && let Some(node) = self.nodes.iter_mut().find(|node| node.id == node_id)
+            {
+                node.note(format!("[send_frame] {error}"));
+            }
+        }
+    }
+
+    /// Sends one `frame(...)` instance from a script node. The path is
+    /// `Frame`, `Bus.Frame`; CAN requires the node's own bus (the node's
+    /// role gate still applies), FR/ETH stay session-only.
+    fn send_script_frame(
+        &mut self,
+        node_channel: u8,
+        allowed: bool,
+        frame: &crate::script::FrameInstance,
+    ) -> Result<(), String> {
+        let parts: Vec<&str> = frame.path.split('.').collect();
+        if parts.len() > 2 || parts.iter().any(|part| part.is_empty()) {
+            return Err(format!("frame({}) needs Frame or Bus.Frame", frame.path));
+        }
+        let bus_name = parts.len() == 2;
+        if let Some(bus) = parts
+            .first()
+            .and_then(|part| part.strip_prefix("FR"))
+            .filter(|_| bus_name)
+            .and_then(|rest| rest.parse::<u8>().ok())
+        {
+            return self.send_script_fr_frame(bus, parts[1], frame);
+        }
+        if let Some(bus) = parts
+            .first()
+            .and_then(|part| part.strip_prefix("ETH"))
+            .filter(|_| bus_name)
+            .and_then(|rest| rest.parse::<u8>().ok())
+        {
+            return self.send_script_eth_frame(bus, parts[1], frame);
+        }
+        let (channel, name) = if bus_name {
+            let channel = self
+                .channels
+                .iter()
+                .position(|channel| channel.name.eq_ignore_ascii_case(parts[0]))
+                .ok_or_else(|| format!("unknown CAN bus \"{}\"", parts[0]))?
+                as u8;
+            (channel, parts[1])
+        } else {
+            (node_channel, parts[0])
+        };
+        self.send_script_can_frame(channel, node_channel, name, allowed, frame)
+    }
+
+    fn send_script_can_frame(
+        &mut self,
+        channel: u8,
+        node_channel: u8,
+        name: &str,
+        allowed: bool,
+        frame: &crate::script::FrameInstance,
+    ) -> Result<(), String> {
+        if channel != node_channel {
+            return Err(format!(
+                "frame({}) names another CAN bus; a node sends on its own bus",
+                frame.path
+            ));
+        }
+        let Some(table) = self.channel_dbc(channel) else {
+            return Err(format!("CAN{} has no database", channel + 1));
+        };
+        let key = table
+            .order
+            .iter()
+            .copied()
+            .find(|key| {
+                table
+                    .messages
+                    .get(key)
+                    .is_some_and(|message| message.name == name)
+            })
+            .ok_or_else(|| format!("unknown CAN message \"{name}\""))?;
+        let message = table.messages.get(&key).expect("key from order");
+        let len = message.dlc.min(crate::can::frame::MAX_CAN_FD_LEN as u64) as usize;
+        let mut data = [0u8; crate::can::frame::MAX_CAN_FD_LEN];
+        // Unwritten signals carry the database's declared start value in
+        // physical units (or 0 when it declares none); explicit fields are
+        // encoded on top.
+        for signal in &message.signals {
+            table.encode_signal_in(key, &signal.name, signal.initial.unwrap_or(0.0), &mut data);
+        }
+        for (signal_name, value) in &frame.values {
+            let Some(signal) = message
+                .signals
+                .iter()
+                .find(|signal| &signal.name == signal_name)
+            else {
+                return Err(format!(
+                    "message \"{name}\" has no signal \"{signal_name}\""
+                ));
+            };
+            let value = if signal.max > signal.min {
+                value.clamp(signal.min, signal.max)
+            } else {
+                *value
+            };
+            if !table.encode_signal_in(key, signal_name, value, &mut data) {
+                return Err(format!("signal \"{signal_name}\" does not fit \"{name}\""));
+            }
+        }
+        let out = CanFrame {
+            t_us: self.sim_t_us,
+            channel,
+            id: key.0,
+            extended: key.1,
+            len: len as u8,
+            data,
+            dir: crate::can::frame::Direction::Tx,
+            flags: if len > 8 {
+                crate::can::frame::FrameFlags::FD
+            } else {
+                crate::can::frame::FrameFlags::NONE
+            },
+        };
+        if allowed {
+            self.hw.write_if_live(channel, &out);
+        }
+        self.buf.push(out);
+        Ok(())
+    }
+
+    fn send_script_fr_frame(
+        &mut self,
+        bus: u8,
+        name: &str,
+        frame: &crate::script::FrameInstance,
+    ) -> Result<(), String> {
+        let Some(db) = self.fr_dbs.get(&bus).cloned() else {
+            return Err(format!("FR{bus} has no cluster description"));
+        };
+        let ix = db
+            .frames
+            .iter()
+            .position(|frame| frame.name == name)
+            .ok_or_else(|| format!("FR{bus} has no frame \"{name}\""))?;
+        let slot = db
+            .frame_index(ix)
+            .expect("index from frames")
+            .triggering
+            .slot_id as u16;
+        let mut data = vec![0u8; db.frame_index(ix).expect("index").length as usize];
+        for (at, _, names) in db.slot_signals() {
+            if at == slot {
+                for signal_name in names {
+                    db.encode_signal(ix, &signal_name, 0.0, &mut data);
+                }
+            }
+        }
+        for (signal_name, value) in &frame.values {
+            let Some(signal) = db.slot_signal(slot, signal_name) else {
+                return Err(format!("frame \"{name}\" has no signal \"{signal_name}\""));
+            };
+            let value = if signal.max > signal.min {
+                value.clamp(signal.min, signal.max)
+            } else {
+                *value
+            };
+            if !db.encode_signal(ix, signal_name, value, &mut data) {
+                return Err(format!("signal \"{signal_name}\" does not fit \"{name}\""));
+            }
+        }
+        let now_cycle = crate::generator::fr_cycle_at(&db, self.sim_t_us);
+        let cycle = if db.frame_ix_at(slot, now_cycle, 2).is_some() {
+            now_cycle
+        } else {
+            db.frame_index(ix).expect("index").triggering.base_cycle as u8
+        };
+        self.panel_fr_frames.push((bus, slot, data, cycle));
+        Ok(())
+    }
+
+    fn send_script_eth_frame(
+        &mut self,
+        bus: u8,
+        name: &str,
+        frame: &crate::script::FrameInstance,
+    ) -> Result<(), String> {
+        let Some(db) = self.eth_dbs.get(&bus).cloned() else {
+            return Err(format!("ETH{bus} has no matrix description"));
+        };
+        let ix = db
+            .frames
+            .iter()
+            .position(|frame| frame.name == name)
+            .ok_or_else(|| format!("ETH{bus} has no frame \"{name}\""))?;
+        let def = &db.frames[ix];
+        let len = if self.eth_length_includes_header {
+            def.length.saturating_sub(14)
+        } else {
+            def.length
+        };
+        let mut data = vec![0u8; len];
+        for pdu in &def.pdus {
+            for signal in &pdu.signals {
+                db.encode_signal(ix, &signal.name, 0.0, &mut data);
+            }
+        }
+        for (signal_name, value) in &frame.values {
+            if !db.encode_signal(ix, signal_name, *value, &mut data) {
+                return Err(format!(
+                    "frame \"{name}\" has no signal \"{signal_name}\" or it does not fit"
+                ));
+            }
+        }
+        let vlan = def.vlan;
+        let ethertype = def
+            .ethertype_hint
+            .unwrap_or(crate::eth::EthFrame::SESSION_ETHERTYPE);
+        let injected = crate::eth::EthFrame::session(self.sim_t_us, bus, vlan, ethertype, data);
+        self.ingest_eth(injected);
+        Ok(())
+    }
+
+    /// Writes one signal through the path its protocol owns. The single
+    /// setpoint and a Button's preset share this so both report the same
+    /// reasons.
+    fn apply_panel_write(&mut self, key: SigKey, value: f64) -> Result<(), String> {
+        match key {
+            SigKey::Can { ch, id, name, .. } => {
+                self.panel_write_signal(ch, id, &name, value)?;
+                self.injected.push((ch, id));
+                Ok(())
+            }
+            SigKey::Fr { bus, slot, name } => {
+                let (payload, cycle) = self.panel_write_fr_signal(bus, slot, &name, value)?;
+                self.panel_fr_frames.push((bus, slot, payload, cycle));
+                Ok(())
+            }
+            SigKey::Eth { bus, frame, name } => {
+                self.panel_write_eth_signal(bus, &frame, &name, value)
+            }
+            SigKey::Derived { .. } => Err("derived signals are read-only".to_string()),
+        }
     }
 
     /// Panel setpoint write into a FlexRay slot: encode the named signal into
@@ -4749,6 +5328,7 @@ impl BusCore {
         self.injected.clear();
         self.fr_from_scripts.clear();
         self.panel_fr_frames.clear();
+        self.panel_frames.clear();
         for tx in &mut self.tx_list {
             tx.next_t_us = 0;
         }
@@ -5124,6 +5704,29 @@ impl BusCore {
             self.sim_t_us = t;
         }
         let sim = self.sim_t_us;
+
+        // One-shot Panel frames join the same walk as generated traffic, so
+        // they are recorded, counted, decoded and sent to attached hardware
+        // exactly like a generator frame.
+        for (channel, id, extended, data) in std::mem::take(&mut self.panel_frames) {
+            let len = data.len() as u8;
+            let mut payload = [0u8; crate::can::frame::MAX_CAN_FD_LEN];
+            payload[..data.len()].copy_from_slice(&data);
+            self.buf.push(CanFrame {
+                t_us: sim,
+                channel,
+                id,
+                extended,
+                len,
+                data: payload,
+                dir: crate::can::frame::Direction::Tx,
+                flags: if len > 8 {
+                    crate::can::frame::FrameFlags::FD
+                } else {
+                    crate::can::frame::FrameFlags::NONE
+                },
+            });
+        }
 
         // Generators transmit in every running mode: an active entry during
         // replay injects onto the log timeline, which is what makes
@@ -7109,5 +7712,37 @@ mod tests {
         core.remove_channel(1, &mut status);
         assert_eq!(core.replay_map.target(LogBusKind::Can, 4), None);
         assert_eq!(core.replay_map.target(LogBusKind::Can, 5), Some(1));
+    }
+
+    /// A `frame(...)` send fills unwritten signals from the database's
+    /// declared start value, in physical units; the explicit field wins.
+    #[test]
+    fn frame_sends_start_from_the_declared_initial_values() {
+        let dbc = r#"VERSION ""
+NS_ :
+
+BU_: ECU
+
+BO_ 512 Status: 8 ECU
+ SG_ RPM : 0|16@1+ (0.25,10) [0|255] "rpm" ECU
+ SG_ Temp : 16|8@1+ (1,0) [0|255] "degC" ECU
+
+BA_DEF_ SG_ "GenSigStartValue" FLOAT 0 100000;
+BA_ "GenSigStartValue" SG_ 512 RPM 4000;
+BA_ "GenSigStartValue" SG_ 512 Temp 80;
+"#;
+        let db = std::sync::Arc::new(crate::dbc::load_dbc_str(dbc).expect("DBC parses"));
+        let mut core = BusCore::new(Vec::new());
+        core.add_channel_with_dbc("CAN1".to_string(), db, 500, &mut String::new());
+        let mut frame = crate::script::FrameInstance::new("Status");
+        frame.values.insert("Temp".to_string(), 20.0);
+        core.send_script_can_frame(0, 0, "Status", false, &frame)
+            .expect("the frame encodes");
+        let out = core.buf.last().expect("one frame queued");
+        assert_eq!(
+            out.payload(),
+            [0xA0, 0x0F, 20, 0, 0, 0, 0, 0],
+            "RPM keeps raw 4000 (physical 1010), Temp is the explicit 20"
+        );
     }
 }

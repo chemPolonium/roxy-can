@@ -213,6 +213,13 @@ pub fn parse_cluster(text: &str, cluster: &str) -> Result<CanArxmlDb, String> {
                 offset: compu.offset,
                 min: compu.min,
                 max: compu.max,
+                initial: if is_float {
+                    None
+                } else {
+                    // The XML value is the raw start value; the core works
+                    // in physical readings.
+                    initial_value(sig).map(|raw| raw * compu.factor + compu.offset)
+                },
                 unit: compu.unit,
                 values: compu.values,
             },
@@ -256,6 +263,7 @@ pub fn parse_cluster(text: &str, cluster: &str) -> Result<CanArxmlDb, String> {
                 offset: def.offset,
                 min: def.min,
                 max: def.max,
+                initial: def.initial,
                 unit: def.unit.clone(),
                 values: def.values.clone(),
             });
@@ -369,6 +377,7 @@ pub fn parse_cluster(text: &str, cluster: &str) -> Result<CanArxmlDb, String> {
                     offset: sig.offset,
                     min: sig.min.unwrap_or(0.0),
                     max: sig.max.unwrap_or(0.0),
+                    initial: sig.initial,
                     unit: sig.unit.clone(),
                     receivers: receivers.clone(),
                     is_float: sig.is_float,
@@ -440,6 +449,7 @@ struct SignalDef {
     offset: f64,
     min: Option<f64>,
     max: Option<f64>,
+    initial: Option<f64>,
     unit: String,
     values: Vec<(i64, String)>,
 }
@@ -455,6 +465,7 @@ struct PduSignal {
     offset: f64,
     min: Option<f64>,
     max: Option<f64>,
+    initial: Option<f64>,
     unit: String,
     values: Vec<(i64, String)>,
 }
@@ -647,6 +658,18 @@ fn number(node: Node, tag: &str) -> Option<f64> {
         return u64::from_str_radix(hex, 16).ok().map(|v| v as f64);
     }
     text.parse().ok()
+}
+
+/// `I-SIGNAL/INIT-VALUE` as a raw start value. Arrays and references have no
+/// single number and stay `None`.
+fn initial_value(node: Node) -> Option<f64> {
+    node.children()
+        .find(|n| n.is_element() && n.has_tag_name("INIT-VALUE"))
+        .and_then(|init| {
+            init.descendants()
+                .find(|n| n.has_tag_name("NUMERICAL-VALUE-SPECIFICATION"))
+        })
+        .and_then(|spec| number(spec, "VALUE"))
 }
 
 fn ref_tail(path: &str) -> &str {

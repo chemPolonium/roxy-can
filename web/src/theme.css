@@ -869,6 +869,14 @@
   color: #26313f;
 }
 
+[data-theme="light"] .page-write-remove:hover {
+  color: #26313f;
+}
+
+[data-theme="light"] .page-frame-error {
+  color: #b42318;
+}
+
 [data-theme="light"] .page-toast {
   border-color: #d4dbe4;
   background: #ffffff;

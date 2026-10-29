@@ -83,6 +83,8 @@ export interface CatalogSignal {
   unit: string;
   min: number;
   max: number;
+  /// Declared start value in physical units (CAN only).
+  initial?: number;
   /// `CM_ SG_` description, when the database carries one.
   comment?: string;
 }
@@ -96,6 +98,8 @@ export interface CatalogMessage {
   comment?: string;
   /// CAN FD, declared by `VFrameFormat` or implied by a DLC above 8 bytes.
   fd?: boolean;
+  /// Ethernet payload bytes after the project's L2-header convention.
+  length?: number;
   signals: CatalogSignal[];
 }
 
@@ -570,6 +574,35 @@ export type Command =
       value?: number;
     }
   | { type: "panel_write_signal"; source: string; value: number }
+  | {
+      type: "panel_write_signals";
+      writes: { source: string; value: number }[];
+    }
+  | {
+      type: "panel_send_frame";
+      channel: number;
+      id: number;
+      extended: boolean;
+      data: number[];
+      physical?: boolean;
+      signals?: Record<string, number>;
+    }
+  | {
+      type: "panel_send_fr_frame";
+      bus: number;
+      slot: number;
+      data: number[];
+      physical?: boolean;
+      signals?: Record<string, number>;
+    }
+  | {
+      type: "panel_send_eth_frame";
+      bus: number;
+      frame: string;
+      data: number[];
+      physical?: boolean;
+      signals?: Record<string, number>;
+    }
   | { type: "set_message_expanded"; key: string; on: boolean }
   | { type: "open_project"; path: string }
   | { type: "open_log"; path: string }

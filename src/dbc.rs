@@ -115,6 +115,17 @@ fn cycle_us_of(v: &AttributeValue) -> Option<u64> {
     Some(ms.saturating_mul(1_000))
 }
 
+/// A numeric attribute value, ignoring strings and enums that happen to
+/// share the name.
+fn attribute_number(v: &AttributeValue) -> Option<f64> {
+    match v {
+        AttributeValue::Uint(u) => Some(*u as f64),
+        AttributeValue::Int(i) => Some(*i as f64),
+        AttributeValue::Double(d) => Some(*d),
+        _ => None,
+    }
+}
+
 /// Every message's declared send cycle in microseconds. An explicit `BA_` wins
 /// over the `BA_DEF_DEF_` default, which by definition applies to each message
 /// that carries none. A database that says nothing produces no entry at all --
@@ -156,6 +167,10 @@ pub struct SignalInfo {
     pub offset: f64,
     pub min: f64,
     pub max: f64,
+    /// `GenSigStartValue` converted to physical units (`raw * factor +
+    /// offset`). `None` when the database declares none, or for IEEE-float
+    /// signals, whose numeric start value would not be a physical reading.
+    pub initial: Option<f64>,
     pub unit: String,
     pub receivers: Vec<String>,
     /// `SIG_VALTYPE_` reinterprets the raw bits as IEEE floats; `false` means
@@ -229,6 +244,16 @@ impl SymbolTable {
                 SignalExtendedValueType::SignedOrUnsignedInteger => continue,
             };
             floats.insert((msg_key_of(&v.message_id), v.signal_name.as_str()), width);
+        }
+        // `GenSigStartValue` states the raw start value; the rest of the core
+        // works in physical readings, so convert it here once.
+        let mut starts: HashMap<(MsgKey, &str), f64> = HashMap::new();
+        for v in &db.attribute_values_signal {
+            if v.name == "GenSigStartValue"
+                && let Some(raw) = attribute_number(&v.value)
+            {
+                starts.insert((msg_key_of(&v.message_id), v.signal_name.as_str()), raw);
+            }
         }
         // `CM_` comments are pure description: they never affect decoding,
         // but the catalog shows them next to the message/signal name.
@@ -359,6 +384,13 @@ impl SymbolTable {
                         offset: s.offset,
                         min: numeric(&s.min),
                         max: numeric(&s.max),
+                        initial: if float_width.is_some() {
+                            None
+                        } else {
+                            starts
+                                .get(&((id, extended), s.name.as_str()))
+                                .map(|raw| raw * s.factor + s.offset)
+                        },
                         unit: s.unit.clone(),
                         receivers: s
                             .receivers
@@ -548,14 +580,22 @@ impl SymbolTable {
     /// frame class like `send` does: up to 0x7FF standard (with the extended
     /// declaration as fallback), above it extended only.
     pub fn encode_signal(&self, id: u32, name: &str, phys: f64, data: &mut [u8]) -> bool {
-        let msg = if id <= 0x7FF {
-            self.messages
-                .get(&(id, false))
-                .or_else(|| self.messages.get(&(id, true)))
+        let key = if id <= 0x7FF {
+            if self.messages.contains_key(&(id, false)) {
+                (id, false)
+            } else {
+                (id, true)
+            }
         } else {
-            self.messages.get(&(id, true))
+            (id, true)
         };
-        let Some(msg) = msg else {
+        self.encode_signal_in(key, name, phys, data)
+    }
+
+    /// Encodes into one exact message key, so an extended frame whose numeric
+    /// id sits in the standard range never picks the wrong table.
+    pub fn encode_signal_in(&self, key: MsgKey, name: &str, phys: f64, data: &mut [u8]) -> bool {
+        let Some(msg) = self.messages.get(&key) else {
             return false;
         };
         let Some(s) = msg.signals.iter().find(|s| s.name == name) else {
@@ -811,6 +851,29 @@ BA_ "VFrameFormat" BO_ 256 3;
         let plain = &db.messages[&(257, false)];
         assert!(plain.comment.is_empty(), "no CM_ line, no claim");
         assert!(!plain.fd);
+    }
+
+    /// `GenSigStartValue` is a raw value; the table stores the physical
+    /// reading so the frame encoder can use it as a default directly.
+    #[test]
+    fn gen_sig_start_value_becomes_a_physical_initial() {
+        const TEXT: &str = r#"VERSION ""
+NS_ :
+
+BU_: ECU
+
+BO_ 512 Status: 8 ECU
+ SG_ RPM : 0|16@1+ (0.25,10) [0|255] "rpm" ECU
+ SG_ Temp : 16|8@1+ (1,-40) [-40|215] "degC" ECU
+
+BA_DEF_ SG_ "GenSigStartValue" FLOAT 0 100000;
+BA_ "GenSigStartValue" SG_ 512 RPM 4000;
+BA_ "GenSigStartValue" SG_ 512 Temp 80;
+"#;
+        let db = load_dbc_str(TEXT).expect("the start-value DBC parses");
+        let status = &db.messages[&(512, false)];
+        assert_eq!(status.signals[0].initial, Some(1010.0), "4000 × 0.25 + 10");
+        assert_eq!(status.signals[1].initial, Some(40.0), "80 + (-40)");
     }
 
     /// Four messages exercising every branch of the cycle lookup: both

@@ -121,6 +121,14 @@ describe("panel bindings", () => {
       paused: false,
       scriptActions: new Set(["Go"]),
     };
+    const view = {
+      signals: [],
+      sysvars: [],
+      frameBuses: [{ index: 0, name: "CAN1" }],
+      frBuses: [{ index: 0, name: "FR0" }],
+      ethBuses: [{ index: 0, name: "ETH0" }],
+      ethFrames: [{ bus: 0, name: "EthFrame", length: 2 }],
+    };
     const button = (action: string, scriptName = "") =>
       ({
         id: "b",
@@ -133,33 +141,101 @@ describe("panel bindings", () => {
         w: 20,
         h: 6,
       });
-    expect(panelButtonCapability(button("start"), ctx).enabled).toBe(true);
-    expect(panelButtonCapability(button("stop"), ctx)).toMatchObject({
-      enabled: false,
-      reason: "Start the measurement first",
-    });
-    expect(panelButtonCapability(button("script", "Go"), ctx)).toMatchObject({
+    expect(
+      panelButtonCapability(button("script", "Go"), view, ctx),
+    ).toMatchObject({
       enabled: false,
     });
     expect(
-      panelButtonCapability(button("script", "Go"), {
+      panelButtonCapability(button("script", "Go"), view, {
         ...ctx,
         measuring: true,
       }).enabled,
     ).toBe(true);
     expect(
-      panelButtonCapability(button("script", "Missing"), {
+      panelButtonCapability(button("script", "Missing"), view, {
         ...ctx,
         measuring: true,
       }).reason,
     ).toContain("No running script");
+    const preset = {
+      ...button("none"),
+      writes: [{ source: "0:256:EngineSpeed", value: 1 }],
+    };
     expect(
-      panelButtonCapability(button("pause"), { ...ctx, measuring: true, paused: true })
-        .reason,
-    ).toBe("Trace is already paused");
+      panelButtonCapability({ ...button("none"), writes: [] }, view, {
+        ...ctx,
+        measuring: true,
+      }).reason,
+    ).toBe("No signal writes");
+    expect(panelButtonCapability(preset, view, ctx).reason).toBe(
+      "Start the measurement first",
+    );
     expect(
-      panelButtonCapability(button("stop"), { ...ctx, online: false }).reason,
+      panelButtonCapability(preset, view, { ...ctx, measuring: true }).enabled,
+    ).toBe(true);
+    expect(
+      panelButtonCapability(preset, view, { ...ctx, online: false }).reason,
     ).toContain("No connection");
+
+    const send = {
+      ...button("send"),
+      frame: { protocol: "can" as const, channel: 0, id: 0x7df, extended: false, data: "02 10 03" },
+    };
+    expect(panelButtonCapability(button("send"), view, ctx).reason).toBe(
+      "No message configured",
+    );
+    expect(
+      panelButtonCapability(
+        { ...send, frame: { ...send.frame, channel: 9 } },
+        view,
+        ctx,
+      ).reason,
+    ).toBe("Unknown CAN bus");
+    expect(
+      panelButtonCapability(
+        { ...send, frame: { ...send.frame, data: "0" } },
+        view,
+        ctx,
+      ).reason,
+    ).toContain("hex");
+    expect(panelButtonCapability(send, view, ctx).reason).toBe(
+      "Start the measurement first",
+    );
+    expect(panelButtonCapability(send, view, { ...ctx, measuring: true }).enabled).toBe(
+      true,
+    );
+
+    const fr = {
+      ...button("send"),
+      frame: { protocol: "fr" as const, bus: 0, slot: 25, data: "01 02" },
+    };
+    expect(panelButtonCapability(fr, view, ctx).reason).toBe(
+      "Start the measurement first",
+    );
+    expect(
+      panelButtonCapability({ ...fr, frame: { ...fr.frame, slot: 0 } }, view, ctx)
+        .reason,
+    ).toContain("Slot");
+    const eth = {
+      ...button("send"),
+      frame: {
+        protocol: "eth" as const,
+        bus: 0,
+        frame: "EthFrame",
+        data: "01 02",
+      },
+    };
+    expect(
+      panelButtonCapability(eth, view, { ...ctx, measuring: true }).enabled,
+    ).toBe(true);
+    expect(
+      panelButtonCapability(
+        { ...eth, frame: { ...eth.frame, data: "01" } },
+        view,
+        ctx,
+      ).reason,
+    ).toContain("2 payload bytes");
   });
 
   it("reports unbound or unknown value/toggle sources", () => {

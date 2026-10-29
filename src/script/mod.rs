@@ -96,6 +96,23 @@ pub struct TestResult {
     pub time_s: f64,
 }
 
+/// One instance of a catalog frame: the template path plus the physical
+/// signal values written so far. Plain data, so copies are real copies.
+#[derive(Clone, Debug, PartialEq)]
+pub struct FrameInstance {
+    pub path: String,
+    pub values: std::collections::BTreeMap<String, f64>,
+}
+
+impl FrameInstance {
+    pub fn new(path: impl Into<String>) -> Self {
+        Self {
+            path: path.into(),
+            values: std::collections::BTreeMap::new(),
+        }
+    }
+}
+
 /// A runtime value of the script language.
 #[derive(Clone, Debug)]
 pub enum Value {
@@ -115,6 +132,9 @@ pub enum Value {
     /// bound: an out-of-range index is a runtime error, and the size
     /// being constant keeps index domains analyzable.
     Array(std::sync::Arc<std::sync::Mutex<Vec<Value>>>),
+    /// A frame instance (`frame(CAN1.EngineStatus)`), value semantics:
+    /// assigning it to another variable copies the fields.
+    Frame(FrameInstance),
 }
 
 impl PartialEq for Value {
@@ -132,6 +152,7 @@ impl PartialEq for Value {
             (Value::Array(a), Value::Array(b)) => {
                 *a.lock().expect("array poisoned") == *b.lock().expect("array poisoned")
             }
+            (Value::Frame(a), Value::Frame(b)) => a == b,
             _ => false,
         }
     }
@@ -161,6 +182,7 @@ impl std::fmt::Display for Value {
                 let items = a.iter().map(|v| v.to_string()).collect::<Vec<_>>();
                 write!(f, "[{}]", items.join(", "))
             }
+            Value::Frame(frame) => write!(f, "<frame {}>", frame.path),
         }
     }
 }
@@ -205,6 +227,13 @@ pub enum Op {
     CallExtern(u16, u8),
     GetIndex,
     SetIndex,
+    /// Pops a frame instance and pushes the field's physical value (0 when
+    /// the field was never written). Arg 0 is the field-name constant.
+    GetFrameField(u16),
+    /// Pops a numeric value and stores it into a frame field on the named
+    /// local/global. The variable must hold a frame instance.
+    SetFrameFieldLocal(u8, u16),
+    SetFrameFieldGlobal(u16, u16),
     Pop,
     Return,
 }
@@ -344,6 +373,17 @@ pub struct Script {
     /// `sys_set` calls (`"ns::name"`), deduped. The host checks the set
     /// against the defined registry at node start.
     pub sysvar_refs: Vec<String>,
+    /// Catalog frame paths a statically known `send_frame` may send. The host
+    /// resolves and checks them at node start; a frame passed through a
+    /// function parameter stays opaque instead.
+    pub frame_sends: Vec<String>,
+    /// Physical fields written on a statically known frame instance, as
+    /// `(path, signal)`. The host checks each signal against its description
+    /// at node start, so a typo is caught before the first send.
+    pub frame_fields: Vec<(String, String)>,
+    /// Constant field writes as `(path, signal, physical value)`, for the
+    /// host's start-time range warning; the send itself still clamps.
+    pub frame_consts: Vec<(String, String, f64)>,
 }
 
 impl Script {
@@ -414,6 +454,7 @@ pub const HOST_FNS: &[(&str, usize, usize)] = &[
     ("test", 2, 2),
     ("send", 1, 9),
     ("send_ext", 1, 9),
+    ("send_frame", 1, 1),
     ("emit_value", 2, 2),
     ("sys_get", 1, 1),
     ("sys_set", 2, 2),
@@ -482,6 +523,8 @@ pub const SCRIPT_HELP: &[(&str, &str)] = &[
     ("format", "format(\"text\", …)"),
     ("test", "test(\"name\", condition)"),
     ("send", "send(id, byte, …)"),
+    ("send_frame", "send_frame(frame_instance)"),
+    ("frame", "frame(Bus.Frame)"),
     ("send_ext", "send_ext(id, byte, …)"),
     ("emit_value", "emit_value(\"Name\", value)"),
     ("sys_get", "sys_get(\"ns::name\")"),
@@ -1156,7 +1199,7 @@ mod tests {
             assert!(!usage.trim().is_empty(), "{name} has no usage text");
             let host = HOST_FNS.iter().any(|(candidate, _, _)| candidate == name);
             assert!(
-                host || matches!(*name, "set_sig" | "get_sig"),
+                host || matches!(*name, "set_sig" | "get_sig" | "frame"),
                 "stale completion help for {name}"
             );
         }

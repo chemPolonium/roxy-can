@@ -133,13 +133,13 @@ switch (value) {
 
 ### `.`、`:` 与 `::` 的分工
 
-Rust 用 `::` 走类型/模块路径、用 `.` 访问值成员，这是两种不同性质的名字。本语言没有用户可定义的对象/结构体，所以只保留一种读取路径，但把边界写死：
+Rust 用 `::` 走类型/模块路径、用 `.` 访问值成员，这是两种不同性质的名字。本语言没有用户自定义类型；唯一的成员对象是内建的 frame 实例，见下文。
 
-- `.` 是**读取路径**：左边要么是保留上下文（`this`、`node`），要么是数据库/总线名（DBC 报文、`FR0`、`FR.PowerTrain`、`ETH0`、`ETH.Body`）；右边是信号、字段或方法式读取。`Message["Signal Name"]` 用下标处理非标识符名字。
+- `.` 是**读取路径**：左边要么是保留上下文（`this`、`node`），要么是数据库/总线名（DBC 报文、`FR0`、`FR.PowerTrain`、`ETH0`、`ETH.Body`），要么是一个 frame 变量。右边是信号、字段或方法式读取。`Message["Signal Name"]` 用下标处理非标识符名字。
 - `:` 只用于 `switch` 的 `case` / `default` 标签，不参与名字解析（Rust 的 `:` 是类型/字段标注，这里没有类型标注语法）。
 - `::` 只出现在系统变量键的字符串里（`"ns::name"`），**不是**语言运算符；写成 `Message::Signal` 会编译报错。
-- `this`、`node`、`FR`、`ETH`、`FR<n>`、`ETH<n>` 是保留名，不能声明为变量、函数或参数——否则 `FR0.Signal` 这类读取的归属就无法从源码判断。
-- `.` 左边永远按数据库名或上述上下文解析；脚本变量没有成员访问，同名变量不会参与点号读取。
+- `this`、`node`、`FR`、`ETH`、`FR<n>`、`ETH<n>`、`frame` 是保留名，不能声明为变量、函数或参数——否则点号读取的归属就无法从源码判断。
+- 变量上的 `.` 只对 frame 实例有意义；其余同名变量不会参与数据库点号读取。
 
 因此 `EngineStatus.RPM`（数据库名）、`this.signal("RPM")`（触发帧）和 `node.bus`（脚本自身）共用 `.`，但左手边永远只有一个确定解释；需要显式 id 时用 `sig(id, "Name")`。
 
@@ -154,6 +154,10 @@ on start {
     print("ready");
 }
 ```
+
+`on start` 里不要发帧：`send` / `fr_send` / `send_frame` 都不会上线，脚本编辑器的
+日志会提示 `sends are ignored in on start; use a timer or frame handler`。启动阶段
+总线还没进入运行状态，想让第一帧跟着测量走，用 `on timer 10 { … }` 或在帧事件里发。
 
 ### on stop
 
@@ -384,6 +388,29 @@ send(0x200, buf);
 
 **id 必须可静态推导**（编译期规则）：字面量（`0x123`）、字面量的常量算术（`0x100 + 0x20`）、或 `frame_id()`。写变量 id 会**编译报错**——工具需要静态知道"这个节点可能发哪些报文"，才能与 DBC 声明对账、进 CI 门禁。动态转发场景写成 `on message *` + `send(frame_id(), ...)`。
 
+### frame(Bus.Frame) / send_frame(instance)
+
+`frame(...)` 从目录创建一个**独立的帧实例**，字段是物理值；同一个模板可以创建多个实例，写入的字段互不影响，赋值也会复制整份实例：
+
+```c
+let openCmd  = frame(EngineStatus);      // 节点自己的 CAN 总线
+let closeCmd = frame(CAN1.EngineStatus); // 显式总线（必须是节点自己的路）
+
+openCmd.EngineSpeed = 1000;
+openCmd.EngineTemp = 80;
+send_frame(openCmd);
+
+closeCmd.EngineSpeed = 0;
+send_frame(closeCmd);
+```
+
+- 路径是 `Frame` 或 `Bus.Frame`。CAN 用 DBC 报文名；FlexRay 用 `FR0.Frame_25_0_2`；Ethernet 用 `ETH0.EthFrame`。名字不是合法标识符时写成 `frame(CAN1["Frame Name"])` 或 `frame("Frame Name")`。
+- 写字段是物理值，发送时由 DBC/集群描述编码并夹取到声明范围；没写过的 CAN 信号按描述声明的初始值编码（DBC `GenSigStartValue` / ARXML `I-SIGNAL/INIT-VALUE` 是 raw，启动时按 factor/offset 换算成物理值；浮点信号以及 FR/ETH 没有初始值时按物理 0，不是 raw 0）。
+- 常量字段写入（字面量或负字面量）在节点启动和 `--check-script` 时对照声明范围；越界记 `[check] frame "…" signal "…" value … is outside [min, max]`，运行时仍按范围夹取后发送。
+- `send_frame` 一次只发这一帧：CAN 走节点自己的路（仍受节点角色开关约束），FlexRay/Ethernet 只注入本会话，端口边界与既有脚本一致。
+- 字段名拼错、消息不存在或长度不合法时，整帧丢弃并在节点日志写明原因。
+- `frame(...)` 的路径与已写字段会在节点启动时按 DBC/集群描述校验，拼错会进 `[check]`。能在 CAN 目录里解析的 `send_frame` 会折算成数值 id 并进入静态发送集（`--check-script` 与编辑器收发 tab 都能看到，来源写作 `<frame Bus.Frame>`）；FlexRay/Ethernet 路径没有数值发送集，只做名字校验。编辑器在 `frame(` 后补全 `Bus.Frame` 路径，并对源码里已识别的 frame 变量补全其信号字段。
+
 ### sig(id, "Name")
 
 读取信号 `Name` 在报文 `id` 上的最新物理值。信号尚未出现时读到 `nil`，用 `defined(...)` 判断；直接把 `nil` 用于算术、比较或条件会产生明确的运行时错误，不会静默给 0。
@@ -605,7 +632,7 @@ let target = sys_get("Demo::Setpoint");       // 系统变量仍用函数
 sys_set("Demo::Setpoint", target * 0.9);      // 写入受定义的界限钳位
 ```
 
-信号**没有**赋值速记：写信号走 `set_sig(buffer, id, "Name", value)` 的缓冲语义（FlexRay 用 `set_fr_sig`），`Message.Signal`、`FRn.Signal`、`FR.Cluster.Signal`、`ETHn.Frame.Signal`、`ETH.Cluster.Frame.Signal` 及下标形式都只读。启动检查（编辑器收发 tab、节点日志、`--check-script`）会核对 CAN 报文名/信号名；FlexRay 与 Ethernet 的名字在节点启动时核对对应描述。
+数据库读到的点号路径（`Message.Signal`、`FRn.Signal`、`FR.Cluster.Signal`、`ETHn.Frame.Signal`、`ETH.Cluster.Frame.Signal` 及下标形式）**仍然只读**；要写物理值请先 `frame(...)` 创建实例，再写实例字段并 `send_frame`。`set_sig(buffer, id, "Name", value)` 保留用于显式的字节缓冲路径（FlexRay 对应 `set_fr_sig`）。启动检查（编辑器收发 tab、节点日志、`--check-script`）会核对 CAN 报文名/信号名；FlexRay 与 Ethernet 的名字在节点启动时核对对应描述。
 
 ## 波形内建
 

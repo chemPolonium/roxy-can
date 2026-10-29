@@ -83,7 +83,7 @@ FlexRay 的加入没有破坏这套东西，反而多了一条检查：`on fr sl
 
 ## 6. 当前焦点（2026-10）
 
-1. **Setpoint 闭环**：回读与 CAN/FlexRay/Ethernet 写入已落地（目标信号按 Read 订阅，显示总线实际值，控件删除时回收；FR/ETH 只在本次测量内注入）；下一步是一个控件写一组信号或整帧预设。
+1. **Setpoint 闭环**：回读、CAN/FlexRay/Ethernet 写入与 Button 组写（逐项写入、汇总失败）已落地；下一步是动作返回值与页面模板库。
 2. **FlexRay / 以太网命名事件与发送**：语言侧的事件仍用编号；FR 硬件发送对象布局需要实测（Panel 会话内写入已通）；Ethernet 已有会话内注入，真实端口发送与 MAC/VLAN 工程配置待立项。
 3. **测试单元进 CI**：把 `on stop` + `test()` 的结论输出成 JSON/退出码，与 `--check-script` 组成门禁。
 4. **Vector 物理插拔复核**：PnP 恢复路径已实现，台架上的人工拔插验收仍未做。

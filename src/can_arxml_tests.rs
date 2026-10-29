@@ -160,6 +160,19 @@ fn one_named_can_cluster_becomes_the_can_table() {
     );
 }
 
+#[test]
+fn signal_init_value_is_read_as_a_raw_start_value() {
+    let xml = SAMPLE.replace(
+        "<I-SIGNAL><SHORT-NAME>Speed</SHORT-NAME><LENGTH>16</LENGTH>",
+        "<I-SIGNAL><SHORT-NAME>Speed</SHORT-NAME><INIT-VALUE>\
+         <NUMERICAL-VALUE-SPECIFICATION><VALUE>500</VALUE></NUMERICAL-VALUE-SPECIFICATION>\
+         </INIT-VALUE><LENGTH>16</LENGTH>",
+    );
+    let a = parse_cluster(&xml, "CanA").expect("CanA");
+    let sig = &a.db.messages[&(0x123, false)].signals[0];
+    assert_eq!(sig.initial, Some(5.0), "raw 500 × 0.01");
+}
+
 /// One file, every kind: the unified importer adds the CAN clusters as CAN
 /// buses and the Ethernet cluster as an Ethernet bus. Saving the project
 /// stores each source/cluster pair and restores the same tables.

@@ -17,6 +17,7 @@ import type {
   SysVar,
 } from "../types";
 import { FilePick } from "./FilePick";
+import { frameOrigins } from "../scriptFrames";
 
 interface Props {
   buses: Bus[];
@@ -944,10 +945,68 @@ export function buildCandidates(
     }
   }
 
+  // A frame instance's fields, including instances assigned after `let` and
+  // function parameters that receive a frame at every call site. This runs
+  // before the DBC dotted context, which would otherwise read the variable as
+  // a message name.
+  if (!inString) {
+    const member = /([A-Za-z_]\w*)\.([A-Za-z_]\w*)?$/.exec(lineBefore);
+    if (member) {
+      const [, variable, partial = ""] = member;
+      const path = frameOrigins(value).get(variable);
+      if (path) {
+        const [first, second] = path.split(".");
+        let owner: Catalog["channels"][number] | undefined;
+        let messageName = first;
+        if (second) {
+          messageName = second;
+          owner =
+            first.startsWith("FR") || first.startsWith("ETH")
+              ? (catalogBus(
+                  catalog,
+                  first.startsWith("FR") ? "fr" : "eth",
+                  Number(first.replace(/^(FR|ETH)/, "")),
+                ) ?? undefined)
+              : (catalog?.channels ?? []).find(
+                  (entry) => entry.kind === "can" && entry.name === first,
+                );
+        } else {
+          owner = (catalog?.channels ?? []).find(
+            (entry) => entry.kind === "can" && entry.index === channel,
+          );
+        }
+        const frame = owner?.messages.find(
+          (message) =>
+            message.name === messageName || message.frame === messageName,
+        );
+        if (frame) {
+          const query = partial.toLowerCase();
+          const items = frame.signals
+            .filter(
+              (signal) =>
+                query === "" || signal.name.toLowerCase().includes(query),
+            )
+            .slice(0, 12)
+            .map((signal) => ({
+              label: signal.name,
+              detail: signal.unit
+                ? `${frame.name} · ${signal.unit}`
+                : frame.name,
+              insert: signal.name,
+              caret: signal.name.length,
+              rank: 0,
+            }));
+          if (items.length === 0) return null;
+          return { start: caret - partial.length, end: caret, items };
+        }
+      }
+    }
+  }
+
   // `Message.` is a DBC context: only that message's signals make sense.
   if (!inString) {
     const dotted = /([A-Za-z_]\w*)\.([A-Za-z_]\w*)?$/.exec(lineBefore);
-    if (dotted) {
+    if (dotted && !/\bframe\(\s*[A-Za-z0-9_.]*$/.test(lineBefore)) {
       const [, messageName, partial = ""] = dotted;
       const message = catalogMessage(catalog, channel, messageName);
       if (!message) return null;
@@ -967,6 +1026,105 @@ export function buildCandidates(
           caret: signal.name.length,
           rank: 0,
         }));
+      if (items.length === 0) return null;
+      return { start: caret - partial.length, end: caret, items };
+    }
+  }
+
+  if (!inString) {
+    const frameCall = /(?:^|[^\w])frame\(\s*([A-Za-z0-9_.]*)$/.exec(lineBefore);
+    if (frameCall) {
+      const partial = frameCall[1] ?? "";
+      const query = partial.toLowerCase();
+      const items: CompletionItem[] = [];
+      const add = (label: string, detail: string, rank: number) => {
+        if (query !== "" && !label.toLowerCase().includes(query)) return;
+        items.push({
+          label,
+          detail,
+          insert: label,
+          caret: label.length,
+          rank,
+        });
+      };
+      for (const entry of catalog?.channels ?? []) {
+        const prefix =
+          entry.kind === "fr"
+            ? `FR${entry.index}`
+            : entry.kind === "eth"
+              ? `ETH${entry.index}`
+              : entry.name;
+        for (const message of entry.messages) {
+          const name = message.frame ?? message.name;
+          const bare = /^[A-Za-z_]\w*$/.test(name);
+          const detail =
+            entry.kind === "fr"
+              ? `FR${entry.index} frame`
+              : entry.kind === "eth"
+                ? `ETH${entry.index} frame`
+                : messageDetail(message);
+          add(bare ? `${prefix}.${name}` : `${prefix}["${name}"]`, detail, 0);
+          if (entry.kind === "can" && entry.index === channel) {
+            add(bare ? name : `"${name}"`, messageDetail(message), 1);
+          }
+        }
+      }
+      if (items.length === 0) return null;
+      return {
+        start: caret - partial.length,
+        end: caret,
+        items: items.slice(0, 12),
+      };
+    }
+  }
+
+  // Inside a quoted frame name: `frame("…` lists this channel's frames,
+  // `frame(CAN1["…` / `frame(FR0["…` lists that bus's frames.
+  if (inString) {
+    const qualified = /(?:^|[^\w])frame\(\s*([A-Za-z_]\w*)\s*\[\s*"([^"]*)$/.exec(
+      lineBefore,
+    );
+    const plain = /(?:^|[^\w])frame\(\s*"([^"]*)$/.exec(lineBefore);
+    if (qualified || plain) {
+      const busToken = qualified?.[1];
+      const partial = qualified ? qualified[2] : plain![1];
+      let owner: Catalog["channels"][number] | undefined;
+      if (!busToken) {
+        owner = (catalog?.channels ?? []).find(
+          (entry) => entry.kind === "can" && entry.index === channel,
+        );
+      } else if (busToken.startsWith("FR") || busToken.startsWith("ETH")) {
+        owner =
+          catalogBus(
+            catalog,
+            busToken.startsWith("FR") ? "fr" : "eth",
+            Number(busToken.replace(/^(FR|ETH)/, "")),
+          ) ?? undefined;
+      } else {
+        owner = (catalog?.channels ?? []).find(
+          (entry) => entry.kind === "can" && entry.name === busToken,
+        );
+      }
+      if (!owner) return null;
+      const bus = owner;
+      const query = partial.toLowerCase();
+      const items = bus.messages
+        .filter((message) => {
+          const name = message.frame ?? message.name;
+          return query === "" || name.toLowerCase().includes(query);
+        })
+        .slice(0, 12)
+        .map((message) => {
+          const name = message.frame ?? message.name;
+          return {
+            label: name,
+            detail:
+              bus.kind === "can" ? messageDetail(message) : `${bus.name} frame`,
+            insert: name,
+            caret: name.length,
+            rank: 0,
+          };
+        });
       if (items.length === 0) return null;
       return { start: caret - partial.length, end: caret, items };
     }
@@ -1317,7 +1475,9 @@ const TEMPLATE = `on start {
 }
 
 on timer 1000 {
-    // set_sig("EngineSpeed", 1000);
+    // let cmd = frame(EngineStatus);
+    // cmd.EngineSpeed = 1000;
+    // send_frame(cmd);
 }
 `;
 

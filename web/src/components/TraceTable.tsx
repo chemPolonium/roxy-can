@@ -7,6 +7,7 @@ import {
   useState,
 } from "preact/hooks";
 import type { Frame } from "../types";
+import { copyText } from "../clipboard";
 import {
   columnWidth,
   TRACE_COLUMNS,
@@ -44,24 +45,6 @@ function rowText(frame: Frame): string {
     String(frame.len),
     frame.data,
   ].join("\t");
-}
-
-function copyText(text: string): void {
-  const fallback = () => {
-    const area = document.createElement("textarea");
-    area.value = text;
-    area.style.position = "fixed";
-    area.style.opacity = "0";
-    document.body.appendChild(area);
-    area.select();
-    document.execCommand("copy");
-    area.remove();
-  };
-  if (navigator.clipboard?.writeText) {
-    void navigator.clipboard.writeText(text).catch(fallback);
-  } else {
-    fallback();
-  }
 }
 
 type SortKey = "time" | "bus" | "id" | "name" | "dir" | "len";
@@ -178,6 +161,7 @@ export interface TraceJump {
 
 export function TraceTable({
   rows,
+  filterKey,
   columns,
   onColumnsChange,
   jump,
@@ -193,6 +177,9 @@ export function TraceTable({
   onShowTime,
 }: {
   rows: Frame[];
+  /// Changes only when the filter expression changes, so a filtered view can
+  /// keep its selected row and on-screen frame instead of jumping.
+  filterKey?: string;
   columns: TraceColumnPrefs;
   onColumnsChange: (next: TraceColumnPrefs) => void;
   jump?: TraceJump | null;
@@ -211,6 +198,8 @@ export function TraceTable({
   const scrollRef = useRef<HTMLDivElement>(null);
   const scrollTopRef = useRef(0);
   const previousFirst = useRef<string | null>(null);
+  const previousRows = useRef<Frame[] | null>(null);
+  const lastFilter = useRef<string | undefined>(undefined);
   const [scrollTop, setScrollTop] = useState(0);
   const [viewport, setViewport] = useState(480);
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
@@ -341,6 +330,66 @@ export function TraceTable({
       setScrollTop(max);
     }
   }, [total]);
+
+  // A filter edit replaces the row set under a fixed scroll offset. Keep the
+  // selected frame in view when it still matches, otherwise the frame that
+  // was at the top; when neither matches, show the filtered set from its
+  // head. Live arrivals leave `filterKey` unchanged and are handled by the
+  // prepend anchor above.
+  useLayoutEffect(() => {
+    const previous = previousRows.current;
+    previousRows.current = rows;
+    const element = scrollRef.current;
+    if (filterKey === undefined || lastFilter.current === filterKey) return;
+    const first = lastFilter.current === undefined;
+    lastFilter.current = filterKey;
+    if (first || !element || !previous || previous.length === 0) return;
+    if (sortedRows.length === 0) {
+      element.scrollTop = 0;
+      scrollTopRef.current = 0;
+      setScrollTop(0);
+      return;
+    }
+    const header = element.querySelector("thead")?.clientHeight ?? 0;
+    const top = scrollTopRef.current;
+    const firstVisible = Math.max(0, Math.floor((top - header) / ROW_H));
+    const selected =
+      selectedKey == null
+        ? -1
+        : previous.findIndex((frame) => frameKey(frame) === selectedKey);
+    const topIndex = Math.min(firstVisible, previous.length - 1);
+    // A selected row wins even when it sits just outside the viewport; if it
+    // no longer matches, fall back to whatever was at the top.
+    const candidates =
+      selected >= 0 && selected !== topIndex
+        ? [selected, topIndex]
+        : [topIndex];
+    let anchorIndex = -1;
+    let at = -1;
+    for (const index of candidates) {
+      const anchor = previous[index];
+      if (!anchor) continue;
+      const found = sortedRows.findIndex(
+        (frame) => frameKey(frame) === frameKey(anchor),
+      );
+      if (found >= 0) {
+        anchorIndex = index;
+        at = found;
+        break;
+      }
+    }
+    if (at < 0 || anchorIndex < 0) {
+      element.scrollTop = 0;
+      scrollTopRef.current = 0;
+      setScrollTop(0);
+      return;
+    }
+    const offset = top - (header + anchorIndex * ROW_H);
+    const next = Math.max(0, header + at * ROW_H + offset);
+    element.scrollTop = next;
+    scrollTopRef.current = next;
+    setScrollTop(next);
+  }, [rows, filterKey, sortedRows, selectedKey]);
 
   const selectedIndex =
     selectedKey == null
@@ -481,7 +530,7 @@ export function TraceTable({
             {selectedFrame
               ? `Row ${(selectedFrame.tUs / 1e6).toFixed(6)} · ↑/↓ · Ctrl+C`
               : selectedKey
-                ? "Selected row left the buffer"
+                ? "Selected row is not in the current view"
                 : "Click a row · ↑/↓ moves · Ctrl+C copies"}
           </span>
           {(cursorA || cursorB) && (

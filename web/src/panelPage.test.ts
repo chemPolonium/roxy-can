@@ -17,8 +17,8 @@ import {
   formatPanelValue,
   importPanelFile,
   movePanelWidget,
-  panelActionCommand,
   panelFileName,
+  panelFrameProblem,
   panelWidgetSpec,
   parsePanelBook,
   parsePanelPage,
@@ -34,15 +34,11 @@ import {
 } from "./panelPage";
 
 describe("panel page", () => {
-  it("starts from a fixed 8px canvas with operation buttons", () => {
+  it("starts from an empty fixed 8px canvas", () => {
     const page = defaultPanelPage();
     expect(page.width).toBe(PAGE_WIDTH);
     expect(page.height).toBe(PAGE_HEIGHT);
-    expect(
-      page.widgets.map((widget) =>
-        widget.kind === "button" ? widget.action : widget.kind,
-      ),
-    ).toEqual(["start", "stop", "clear_trace"]);
+    expect(page.widgets).toEqual([]);
   });
 
   it("keeps valid widgets and rejects malformed or overlapping entries", () => {
@@ -54,7 +50,7 @@ describe("panel page", () => {
           id: "ok",
           kind: "button",
           label: "Start",
-          action: "start",
+          action: "none",
           x: 10,
           y: 10,
           w: 20,
@@ -64,7 +60,7 @@ describe("panel page", () => {
           id: "overlap",
           kind: "button",
           label: "Overlap",
-          action: "stop",
+          action: "none",
           x: 12,
           y: 12,
           w: 20,
@@ -84,7 +80,7 @@ describe("panel page", () => {
           id: "too-small",
           kind: "button",
           label: "Tiny",
-          action: "stop",
+          action: "none",
           x: 60,
           y: 10,
           w: 2,
@@ -104,7 +100,7 @@ describe("panel page", () => {
           id: "edge",
           kind: "button",
           label: "Edge",
-          action: "start",
+          action: "none",
           x: 500,
           y: -20,
           w: 40,
@@ -116,7 +112,33 @@ describe("panel page", () => {
   });
 
   it("snaps moves to cells, clamps size and refuses overlap", () => {
-    const page = defaultPanelPage();
+    const page = parsePanelPage({
+      width: 160,
+      height: 90,
+      widgets: [
+        {
+          id: "start",
+          kind: "button",
+          label: "Start",
+          action: "none",
+          x: 8,
+          y: 8,
+          w: 20,
+          h: 6,
+        },
+        {
+          id: "stop",
+          kind: "button",
+          label: "Stop",
+          action: "none",
+          x: 8,
+          y: 16,
+          w: 20,
+          h: 6,
+        },
+      ],
+    });
+    if (!page) throw new Error("page");
     const moved = movePanelWidget(page, "start", 30, 12, 20, 6);
     expect(moved?.widgets.find((widget) => widget.id === "start")).toMatchObject(
       { x: 30, y: 12 },
@@ -147,7 +169,7 @@ describe("panel page", () => {
           id: "wall",
           kind: "button" as const,
           label: "Wall",
-          action: "start" as const,
+          action: "none" as const,
           x: 0,
           y: 0,
           w: PAGE_WIDTH,
@@ -159,14 +181,30 @@ describe("panel page", () => {
   });
 
   it("updates labels/actions and removes widgets", () => {
-    const page = defaultPanelPage();
+    const page = parsePanelPage({
+      width: 160,
+      height: 90,
+      widgets: [
+        {
+          id: "start",
+          kind: "button",
+          label: "Start",
+          action: "none",
+          x: 8,
+          y: 8,
+          w: 20,
+          h: 6,
+        },
+      ],
+    });
+    if (!page) throw new Error("page");
     const updated = updatePanelWidget(page, "start", {
       label: "Launch",
-      action: "rearm_triggers",
+      action: "script",
     });
     expect(updated.widgets[0]).toMatchObject({
       label: "Launch",
-      action: "rearm_triggers",
+      action: "script",
     });
     const removed = removePanelWidget(updated, "start");
     expect(removed.widgets).toHaveLength(page.widgets.length - 1);
@@ -201,7 +239,24 @@ describe("panel page", () => {
   });
 
   it("resizes the canvas in cells and refuses to orphan widgets", () => {
-    const page = defaultPanelPage();
+    const page = parsePanelPage({
+      width: 160,
+      height: 90,
+      widgets: [
+        {
+          id: "wall",
+          kind: "value",
+          label: "V",
+          source: "",
+          digits: 1,
+          x: 45,
+          y: 30,
+          w: 12,
+          h: 5,
+        },
+      ],
+    });
+    if (!page) throw new Error("page");
     expect(resizePanelPage(page, 200, 120)).toMatchObject({
       width: 200,
       height: 120,
@@ -344,7 +399,23 @@ describe("panel page", () => {
   });
 
   it("duplicates a widget next to its spot", () => {
-    const page = defaultPanelPage();
+    const page = parsePanelPage({
+      width: 160,
+      height: 90,
+      widgets: [
+        {
+          id: "start",
+          kind: "button",
+          label: "Start",
+          action: "none",
+          x: 8,
+          y: 8,
+          w: 20,
+          h: 6,
+        },
+      ],
+    });
+    if (!page) throw new Error("page");
     const copy = duplicatePanelWidget(page, "start");
     expect(copy?.page.widgets).toHaveLength(page.widgets.length + 1);
     const source = page.widgets.find((widget) => widget.id === "start");
@@ -464,14 +535,304 @@ describe("panel page", () => {
     expect(floor?.widgets[0]).toMatchObject({ w: 12, h: 5 });
   });
 
-  it("maps page actions to existing commands only", () => {
-    expect(panelActionCommand("start")).toEqual({ type: "start" });
-    expect(panelActionCommand("pause")).toEqual({ type: "pause", on: true });
-    expect(panelActionCommand("resume")).toEqual({ type: "pause", on: false });
-    expect(panelActionCommand("clear_trace")).toEqual({ type: "clear_trace" });
-    expect(panelActionCommand("rearm_triggers")).toEqual({
-      type: "rearm_triggers",
+  it("accepts FlexRay and Ethernet message targets", () => {
+    const page = parsePanelPage({
+      width: 160,
+      height: 90,
+      widgets: [
+        {
+          id: "fr",
+          kind: "button",
+          label: "FR",
+          action: "send",
+          frame: { protocol: "fr", bus: 0, slot: 25, data: "01 02" },
+          x: 0,
+          y: 0,
+          w: 20,
+          h: 6,
+        },
+        {
+          id: "eth",
+          kind: "button",
+          label: "ETH",
+          action: "send",
+          frame: {
+            protocol: "eth",
+            bus: 0,
+            frame: "EthFrame",
+            data: "01 02",
+          },
+          x: 0,
+          y: 6,
+          w: 20,
+          h: 6,
+        },
+      ],
     });
+    expect(page?.widgets.map((widget) => widget.kind === "button" && widget.frame?.protocol)).toEqual([
+      "fr",
+      "eth",
+    ]);
+    const bad = parsePanelPage({
+      width: 160,
+      height: 90,
+      widgets: [
+        {
+          id: "bad",
+          kind: "button",
+          label: "Bad",
+          action: "send",
+          frame: { protocol: "fr", bus: 0, slot: 0, data: "01" },
+          x: 0,
+          y: 0,
+          w: 20,
+          h: 6,
+        },
+      ],
+    });
+    expect(bad?.widgets).toEqual([]);
+  });
+
+  it("keeps physical frame values and validates them", () => {
+    const page = parsePanelPage({
+      width: 160,
+      height: 90,
+      widgets: [
+        {
+          id: "send",
+          kind: "button",
+          label: "Engine",
+          action: "send",
+          frame: {
+            protocol: "can",
+            channel: 0,
+            id: 0x100,
+            extended: false,
+            data: "",
+            mode: "physical",
+            values: [{ name: "EngineSpeed", value: 1000 }],
+          },
+          x: 0,
+          y: 0,
+          w: 20,
+          h: 6,
+        },
+      ],
+    });
+    expect(page?.widgets[0]).toMatchObject({
+      frame: {
+        mode: "physical",
+        values: [{ name: "EngineSpeed", value: 1000 }],
+      },
+    });
+    const round = importPanelFile(JSON.parse(exportPanelFile(page!)));
+    expect("page" in round && round.page.widgets[0]).toMatchObject({
+      frame: {
+        mode: "physical",
+        values: [{ name: "EngineSpeed", value: 1000 }],
+      },
+    });
+
+    const frame = (values: { name: string; value: number }[]) =>
+      ({
+        protocol: "can" as const,
+        channel: 0,
+        id: 0x100,
+        extended: false,
+        data: "",
+        mode: "physical" as const,
+        values,
+      });
+    expect(panelFrameProblem(frame([]))).toBeNull();
+    expect(panelFrameProblem(frame([{ name: "X", value: Number.NaN }]))).toBe(
+      "Value for X must be a number",
+    );
+    expect(
+      panelFrameProblem({ ...frame([]), data: "not hex" }),
+    ).toBeNull();
+    expect(
+      panelFrameProblem({ ...frame([]), mode: "raw" }),
+    ).toBeNull();
+    expect(
+      panelFrameProblem({ ...frame([]), mode: "raw", data: "not hex" }),
+    ).toBe("Data must be hex bytes");
+  });
+
+  it("round-trips a one-shot message button", () => {
+    const page = parsePanelPage({
+      width: 160,
+      height: 90,
+      widgets: [
+        {
+          id: "send",
+          kind: "button",
+          label: "Diagnostic",
+          action: "send",
+          frame: { channel: 1, id: 0x7df, extended: false, data: "02 10 03" },
+          x: 0,
+          y: 0,
+          w: 20,
+          h: 6,
+        },
+      ],
+    });
+    expect(page?.widgets[0]).toMatchObject({
+      action: "send",
+      frame: { channel: 1, id: 0x7df, extended: false, data: "02 10 03" },
+    });
+    const file = JSON.parse(exportPanelFile(page!));
+    const round = importPanelFile(file);
+    expect("page" in round && round.page.widgets[0]).toMatchObject({
+      action: "send",
+      frame: { channel: 1, id: 0x7df, extended: false, data: "02 10 03" },
+    });
+
+    // A send button without a valid message is not a usable control.
+    const bad = parsePanelPage({
+      width: 160,
+      height: 90,
+      widgets: [
+        {
+          id: "bad",
+          kind: "button",
+          label: "Bad",
+          action: "send",
+          frame: { channel: 0, id: 0x800, extended: false, data: "01" },
+          x: 0,
+          y: 0,
+          w: 20,
+          h: 6,
+        },
+      ],
+    });
+    expect(bad?.widgets).toEqual([]);
+    const fileBad = {
+      format: PANEL_FILE_FORMAT,
+      version: 1,
+      page: {
+        name: "Bad",
+        width: 160,
+        height: 90,
+        widgets: [
+          {
+            kind: "button",
+            label: "Bad",
+            action: "send",
+            frame: { channel: 0, id: 0x800, extended: false, data: "01" },
+            x: 0,
+            y: 0,
+            w: 20,
+            h: 6,
+          },
+        ],
+      },
+    };
+    expect(importPanelFile(fileBad)).toHaveProperty("error");
+  });
+
+  it("keeps a button's signal writes through copy and file round-trips", () => {
+    const page = parsePanelPage({
+      width: 160,
+      height: 90,
+      widgets: [
+        {
+          id: "b",
+          kind: "button",
+          label: "Preset",
+          action: "none",
+          writes: [
+            { source: "0:256:EngineSpeed", value: 1234 },
+            { source: "fr:0:1:Temp", value: 2.5 },
+          ],
+          x: 0,
+          y: 0,
+          w: 20,
+          h: 6,
+        },
+      ],
+    });
+    const button = page?.widgets[0];
+    if (!page || button?.kind !== "button") throw new Error("button");
+    const writes = button.writes;
+    expect(button).toMatchObject({
+      kind: "button",
+      writes: [
+        { source: "0:256:EngineSpeed", value: 1234 },
+        { source: "fr:0:1:Temp", value: 2.5 },
+      ],
+    });
+    const copy = pastePanelWidget(page, button);
+    expect(copy?.page.widgets[1]).toMatchObject({ kind: "button", writes });
+    const round = importPanelFile(JSON.parse(exportPanelFile(page)));
+    if (!("page" in round)) throw new Error("round-trip");
+    const imported = round.page.widgets[0];
+    expect(imported.kind === "button" ? imported.writes : undefined).toEqual(
+      writes,
+    );
+
+    // A write without a finite value is a malformed file, not a row to drop.
+    const malformed = {
+      format: PANEL_FILE_FORMAT,
+      version: 1,
+      page: {
+        name: "Bad",
+        width: 160,
+        height: 90,
+        widgets: [
+          {
+            kind: "button",
+            label: "Bad",
+            action: "none",
+            x: 0,
+            y: 0,
+            w: 20,
+            h: 6,
+            writes: [{ source: "0:1:S" }],
+          },
+        ],
+      },
+    };
+    expect(importPanelFile(malformed)).toHaveProperty("error");
+  });
+
+  it("accepts write and script actions only", () => {
+    // A write-only preset is a valid button, not an unknown action.
+    const none = parsePanelPage({
+      width: 160,
+      height: 90,
+      widgets: [
+        {
+          id: "w",
+          kind: "button",
+          label: "Preset",
+          action: "none",
+          writes: [{ source: "0:256:EngineSpeed", value: 50 }],
+          x: 0,
+          y: 0,
+          w: 20,
+          h: 6,
+        },
+      ],
+    });
+    expect(none?.widgets[0]).toMatchObject({ action: "none" });
+    // Simulation controls live in the top bar; old command buttons load away.
+    const legacy = parsePanelPage({
+      width: 160,
+      height: 90,
+      widgets: [
+        {
+          id: "old",
+          kind: "button",
+          label: "Start",
+          action: "start",
+          x: 0,
+          y: 0,
+          w: 20,
+          h: 6,
+        },
+      ],
+    });
+    expect(legacy?.widgets).toEqual([]);
   });
 
   it("round-trips lamp, bar and gauge widgets", () => {
@@ -671,13 +1032,29 @@ describe("panel page", () => {
   });
 
   it("exports and imports page files strictly", () => {
-    const page = defaultPanelPage();
+    const page = parsePanelPage({
+      width: 160,
+      height: 90,
+      widgets: [
+        {
+          id: "b",
+          kind: "button",
+          label: "Preset",
+          action: "none",
+          x: 8,
+          y: 8,
+          w: 20,
+          h: 6,
+        },
+      ],
+    });
+    if (!page) throw new Error("page");
     const file = JSON.parse(exportPanelFile(page));
     expect(file).toMatchObject({ format: PANEL_FILE_FORMAT, version: 1 });
     expect(file.page.widgets[0]).not.toHaveProperty("id");
     const result = importPanelFile(file);
     const imported = "page" in result ? result.page : null;
-    expect(imported?.widgets).toHaveLength(3);
+    expect(imported?.widgets).toHaveLength(1);
     expect(imported?.width).toBe(PAGE_WIDTH);
     const added = addPanelPageFromFile(defaultPanelBook(), imported!);
     expect(added.book.pages).toHaveLength(2);
@@ -712,7 +1089,7 @@ describe("panel page", () => {
     expect(
       errorOf(
         fileOf([
-          { kind: "button", action: "start", x: 0, y: 0, w: 20, h: 6 },
+          { kind: "button", action: "none", x: 0, y: 0, w: 20, h: 6 },
           { kind: "lamp", x: 0, y: 0, w: 14, h: 4 },
         ]),
       ),

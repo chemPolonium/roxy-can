@@ -41,6 +41,20 @@ const catalog: Catalog = {
           name: "BrakeInfo",
           signals: [],
         },
+        {
+          id: 0x321,
+          extended: false,
+          name: "Frame Name",
+          signals: [
+            {
+              key: "0:801:Value",
+              name: "Value",
+              unit: "",
+              min: 0,
+              max: 100,
+            },
+          ],
+        },
       ],
     },
   ],
@@ -75,6 +89,58 @@ function labels(marked: string, allowEmpty = false): string[] {
 }
 
 describe("completion contexts", () => {
+  it("offers catalog frame paths inside frame(...)", () => {
+    const paths = labels("on start { let f = frame(|", true);
+    expect(paths).toContain("CAN1.EngineStatus");
+    expect(paths).toContain("EngineStatus");
+    expect(paths.every((path) => path !== "0:256:EngineSpeed")).toBe(true);
+    const narrowed = labels("on start { let f = frame(CAN1.|", true);
+    expect(narrowed).toEqual(
+      expect.arrayContaining(["CAN1.EngineStatus", "CAN1.BrakeInfo"]),
+    );
+  });
+
+  it("offers a frame instance's signals after its dot", () => {
+    const fields = labels(
+      "on start {\n    let f = frame(CAN1.EngineStatus);\n    f.|",
+      true,
+    );
+    expect(fields).toContain("EngineSpeed");
+    expect(fields).not.toContain("EngineTemp");
+  });
+
+  it("completes quoted frame names and bracket paths", () => {
+    expect(labels('on start { let f = frame(CAN1["Fra|', true)).toEqual([
+      "Frame Name",
+    ]);
+    expect(labels('on start { let f = frame("Fra|', true)).toEqual([
+      "Frame Name",
+    ]);
+    const inserts =
+      complete("on start { let f = frame(|", true)?.items.map((i) => i.insert) ??
+      [];
+    expect(inserts).toContain('CAN1["Frame Name"]');
+    expect(inserts).toContain('"Frame Name"');
+    const fields = labels(
+      'on start {\n    let f = frame(CAN1["Frame Name"]);\n    f.|',
+      true,
+    );
+    expect(fields).toEqual(["Value"]);
+  });
+
+  it("follows a re-assigned or argument-held frame instance", () => {
+    const reassigned = labels(
+      "on start {\n    let f = frame(CAN1.BrakeInfo);\n    f = frame(CAN1.EngineStatus);\n    f.|",
+      true,
+    );
+    expect(reassigned).toContain("EngineSpeed");
+    const argument = labels(
+      "fn send(cmd) {\n    cmd.|\n}\non start { send(frame(CAN1.EngineStatus)); }",
+      true,
+    );
+    expect(argument).toEqual(["EngineSpeed"]);
+  });
+
   it("offers only handler events after on", () => {
     const items = labels("on |");
     expect(items).toEqual([

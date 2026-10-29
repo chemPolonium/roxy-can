@@ -1,8 +1,9 @@
 import type { ScriptInfo, SignalSeries, SysVar } from "./types";
 import {
+  panelFrameProblem,
   panelNumericTarget,
+  parsePanelHex,
   parseSysVarRef,
-  type PanelActionKind,
   type PanelBand,
   type PanelBandColor,
   type PanelButton,
@@ -17,6 +18,35 @@ export interface PanelView {
   sysvars: SysVar[];
   /// Writable CAN signals from the catalog, for setpoint controls.
   writeTargets?: PanelWriteTarget[];
+  /// CAN channels the message sender may address.
+  frameBuses?: { index: number; name: string }[];
+  frBuses?: { index: number; name: string }[];
+  ethBuses?: { index: number; name: string }[];
+  /// Ethernet frame names and their payload byte length.
+  ethFrames?: { bus: number; name: string; length: number | null }[];
+  /// Catalog frames a button's physical send mode can address.
+  frameDefs?: PanelFrameDef[];
+}
+
+/// One catalog frame and the signals its physical send mode can edit. CAN
+/// entries keep the declared start value; FR/ETH carry none.
+export interface PanelFrameDef {
+  protocol: "can" | "fr" | "eth";
+  /// CAN channel, FlexRay cluster or Ethernet cluster.
+  bus: number;
+  id?: number;
+  extended?: boolean;
+  slot?: number;
+  frame?: string;
+  signals: PanelFrameSignal[];
+}
+
+export interface PanelFrameSignal {
+  name: string;
+  unit: string;
+  min: number;
+  max: number;
+  initial?: number;
 }
 
 /// One signal a Panel setpoint may write: the catalog key plus its DBC range.
@@ -183,9 +213,54 @@ export interface PanelActionContext {
 /// Whether a button can act now, with the reason to show on hover.
 export function panelButtonCapability(
   widget: PanelButton,
+  view: PanelView,
   ctx: PanelActionContext,
 ): PanelCapability {
   if (!ctx.online) return { enabled: false, reason: "No connection to the bus core" };
+  if (widget.action === "none") {
+    const writes = widget.writes ?? [];
+    if (!writes.some((write) => write.source.trim())) {
+      return { enabled: false, reason: "No signal writes" };
+    }
+    if (!ctx.measuring) {
+      return { enabled: false, reason: "Start the measurement first" };
+    }
+    return { enabled: true, reason: "" };
+  }
+  if (widget.action === "send") {
+    const frame = widget.frame;
+    if (!frame) return { enabled: false, reason: "No message configured" };
+    const problem = panelFrameProblem(frame);
+    if (problem) return { enabled: false, reason: problem };
+    if (frame.protocol === "can") {
+      if (!(view.frameBuses ?? []).some((bus) => bus.index === frame.channel)) {
+        return { enabled: false, reason: "Unknown CAN bus" };
+      }
+    } else if (frame.protocol === "fr") {
+      if (!(view.frBuses ?? []).some((bus) => bus.index === frame.bus)) {
+        return { enabled: false, reason: "No FlexRay bus with that description" };
+      }
+    } else {
+      if (!(view.ethBuses ?? []).some((bus) => bus.index === frame.bus)) {
+        return { enabled: false, reason: "No Ethernet bus with that matrix" };
+      }
+      const def = (view.ethFrames ?? []).find(
+        (entry) => entry.bus === frame.bus && entry.name === frame.frame,
+      );
+      if (!def) return { enabled: false, reason: "Unknown Ethernet frame" };
+      const bytes = parsePanelHex(frame.data)?.length ?? -1;
+      if (def.length !== null && bytes !== def.length) {
+        return {
+          enabled: false,
+          reason: `Frame "${frame.frame}" carries ${def.length} payload bytes`,
+        };
+      }
+    }
+    if (!ctx.measuring) {
+      return { enabled: false, reason: "Start the measurement first" };
+    }
+    return { enabled: true, reason: "" };
+  }
   if (widget.action === "script") {
     const name = widget.script?.trim() ?? "";
     if (!name) return { enabled: false, reason: "No script action name" };
@@ -197,22 +272,7 @@ export function panelButtonCapability(
     }
     return { enabled: true, reason: "" };
   }
-  const action = widget.action as Exclude<PanelActionKind, "script">;
-  if (action === "start") {
-    return ctx.measuring
-      ? { enabled: false, reason: "Measurement is already running" }
-      : { enabled: true, reason: "" };
-  }
-  if (!ctx.measuring) {
-    return { enabled: false, reason: "Start the measurement first" };
-  }
-  if (action === "pause" && ctx.paused) {
-    return { enabled: false, reason: "Trace is already paused" };
-  }
-  if (action === "resume" && !ctx.paused) {
-    return { enabled: false, reason: "Trace is not paused" };
-  }
-  return { enabled: true, reason: "" };
+  return { enabled: false, reason: "No button action" };
 }
 
 export function panelValueCapability(
@@ -279,7 +339,7 @@ export function panelWidgetCapability(
   view: PanelView,
   ctx: PanelActionContext,
 ): PanelCapability {
-  if (widget.kind === "button") return panelButtonCapability(widget, ctx);
+  if (widget.kind === "button") return panelButtonCapability(widget, view, ctx);
   if (
     widget.kind === "value" ||
     widget.kind === "lamp" ||
