@@ -898,5 +898,5 @@ v1 工程在打开时一次性迁移到内存 v2，保存时写 v2；原文件�
 
 验证状态（2026-10-29）：`cargo fmt --check`、`cargo clippy --all-targets`、`cargo test --all-targets`（892 通过）、前端 71 测试与 `npm run build` 全绿；release 包在空目录启动 `--web` 返回 200，第二次占用同一端口按预期报错退出；远端 CI（windows-latest）在 `4be178a` 上 fmt/build/clippy -D warnings/test 全绿。Buses 已在 headless Chromium + CDP 下按 1024×768 与 1280×800、明暗两套主题复核（统一 Cluster 表、Add cluster、各 kind 详情无横向溢出）；硬件验收未重跑。
 
-剩余工作按计划顺序：硬件端口改以 cluster id 路由；E2E 校验、Transformation 数值执行与真实多协议/SecOC/E2E 语料；最后删除旧运行时路径与兼容层。当前 ARXML 文档模型已直接进核心，`SigKey` 与 Messages/Statistics 聚合都以 cluster 为身份、bus 只按映射解析；回放映射已以 cluster 为目标、硬件端口仍按路号，前端 `signalRef` 也仍可能来自旧文本。
+剩余工作按计划顺序：硬件端口按物理路号寻址（附件跟随通道/簇）并重跑 VN1610 复验；E2E 校验、Transformation 数值执行与真实多协议/SecOC/E2E 语料；最后删除旧运行时路径与兼容层。当前 ARXML 文档模型已直接进核心，`SigKey` 与 Messages/Statistics 聚合都以 cluster 为身份、bus 只按映射解析；回放映射已以 cluster 为目标、硬件端口仍按路号，前端 `signalRef` 也仍可能来自旧文本。
 
