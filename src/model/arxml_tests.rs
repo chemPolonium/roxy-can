@@ -617,3 +617,24 @@ fn a_frame_comment_comes_from_the_document() {
     let frame = comm.frames.values().next().expect("frame imported");
     assert_eq!(frame.comment, "Engine frame");
 }
+
+/// The update-indication position travels from the mapping into the
+/// decode/encode plan, offset by the PDU's start inside the frame.
+#[test]
+fn update_indication_bit_reaches_the_plan() {
+    let text = CAN_TEXT.replace(
+        "<PACKING-BYTE-ORDER>MOST-SIGNIFICANT-BYTE-LAST</PACKING-BYTE-ORDER>",
+        "<PACKING-BYTE-ORDER>MOST-SIGNIFICANT-BYTE-LAST</PACKING-BYTE-ORDER>\
+         <UPDATE-INDICATION-BIT-POSITION>0</UPDATE-INDICATION-BIT-POSITION>",
+    );
+    let comm = import(&text, "CanCluster", 1);
+    let (plans, _) = PlanCache::build(&comm, 1);
+    let frame = comm.frames.values().next().unwrap();
+    let plan = plans.get(frame.id).expect("plan");
+    assert_eq!(
+        plan.reads[0].update_bit,
+        Some(0),
+        "declared PDU-relative bit"
+    );
+    assert_eq!(plan.writes[0].update_bit, Some(0));
+}
