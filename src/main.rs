@@ -20,6 +20,10 @@ mod generator;
 mod hw;
 mod load;
 mod log;
+// The unified model is frozen in Phase 1; the Phase 2 importer and the Phase
+// 4 runtime switch are its first consumers.
+#[allow(dead_code)]
+mod model;
 mod node;
 mod observe;
 mod profile;

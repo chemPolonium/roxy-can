@@ -193,6 +193,62 @@ pub(crate) fn tx_payload(
     (data, len, flags)
 }
 
+/// Model-backed variant of [`tx_payload`]. Returns `None` when the frame or
+/// plan is unknown, so the caller keeps the legacy path.
+pub(crate) fn tx_payload_with_model(
+    cluster: crate::model::ClusterId,
+    comm: &crate::model::Comm,
+    plans: &crate::model::PlanCache,
+    tx: &TxMsg,
+    at_us: u64,
+) -> Option<([u8; MAX_CAN_FD_LEN], u8, FrameFlags)> {
+    if tx.srcs.is_empty() {
+        return None;
+    }
+    let frame = comm.frames_in_cluster(cluster).find(|frame| {
+        frame.address.can_id() == Some(tx.id)
+            && matches!(
+                frame.address,
+                crate::model::FrameAddress::Can {
+                    extended,
+                    ..
+                } if extended == tx.extended
+            )
+    })?;
+    let plan = plans.get(frame.id)?;
+    let mut data = tx.data;
+    let mut values = Vec::with_capacity(tx.srcs.len());
+    for src in &tx.srcs {
+        let Some(signal) = comm
+            .signals_in_frame(frame)
+            .into_iter()
+            .find(|signal| signal.name == src.name)
+        else {
+            continue;
+        };
+        values.push((signal.id, eval_phys(src, at_us)));
+    }
+    if values.is_empty() {
+        return None;
+    }
+    crate::model::encode_payload(comm, plan, &values, &mut data);
+    let mut len = tx.len;
+    for (signal, _) in &values {
+        if let Some(read) = plan.reads.iter().find(|read| read.signal == *signal) {
+            let needed = ((read.bit_offset + read.bit_len) as usize)
+                .div_ceil(8)
+                .min(MAX_CAN_FD_LEN);
+            len = len.max(needed as u8);
+        }
+    }
+    let mut flags = tx.flags;
+    if len > 8 {
+        len = dlc2len(len2dlc(len));
+        flags = flags.union(FrameFlags::FD);
+    }
+    Some((data, len, flags))
+}
+
 /// Encodes `value` into `data` for signal `name` of message `id` and widens
 /// `len` to fit, snapping past-8 lengths to an FD length exactly like
 /// [`tx_payload`] does. Returns false -- leaving payload and length alone --
@@ -633,6 +689,44 @@ pub(crate) fn fr_tx_payload(
         let _ = db.encode_signal(frame_ix, &src.name, eval_phys(src, at_us), &mut data);
     }
     data
+}
+
+/// Model-backed variant of [`fr_tx_payload`]; `None` means the caller keeps
+/// the legacy path.
+pub(crate) fn fr_tx_payload_with_model(
+    cluster: crate::model::ClusterId,
+    comm: &crate::model::Comm,
+    plans: &crate::model::PlanCache,
+    tx: &FrTxMsg,
+    at_us: u64,
+) -> Option<Vec<u8>> {
+    if tx.srcs.is_empty() {
+        return None;
+    }
+    let frame = if tx.name.is_empty() {
+        comm.frames_in_cluster(cluster)
+            .find(|frame| frame.address.slot() == Some(tx.slot))?
+    } else {
+        comm.frame_by_name(cluster, &tx.name)?
+    };
+    let plan = plans.get(frame.id)?;
+    let mut values = Vec::with_capacity(tx.srcs.len());
+    for src in &tx.srcs {
+        let Some(signal) = comm
+            .signals_in_frame(frame)
+            .into_iter()
+            .find(|signal| signal.name == src.name)
+        else {
+            continue;
+        };
+        values.push((signal.id, eval_phys(src, at_us)));
+    }
+    if values.is_empty() {
+        return None;
+    }
+    let mut data = tx.data.clone();
+    crate::model::encode_payload(comm, plan, &values, &mut data);
+    Some(data)
 }
 
 /// Installs a FlexRay entry's base payload at the length its slot carries: short

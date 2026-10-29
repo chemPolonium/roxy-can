@@ -89,6 +89,29 @@ impl EthFlowKey {
             payload_len: self.len,
         }
     }
+
+    /// Stable Messages row key: bus, EtherType, VLAN, both MACs and length.
+    pub fn message_key(&self) -> String {
+        let vlan = self
+            .vlan
+            .map(|vlan| vlan.to_string())
+            .unwrap_or_else(|| "-".to_string());
+        let mac = |address: &[u8; 6]| {
+            address
+                .iter()
+                .map(|byte| format!("{byte:02X}"))
+                .collect::<String>()
+        };
+        format!(
+            "eth:{}:{}:{}:{}:{}:{}",
+            self.bus,
+            self.ethertype,
+            vlan,
+            mac(&self.dst),
+            mac(&self.src),
+            self.len
+        )
+    }
 }
 
 /// One Ethernet flow's running tally behind Messages/Statistics. Cycle and

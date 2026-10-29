@@ -251,6 +251,16 @@ pub enum BusCommand {
     /// capture's payload never does, so this decides how a definition's
     /// stated length compares with an arriving flow.
     SetEthLengthIncludesHeader(bool),
+    /// Restores the persisted global cluster ids from a project file.
+    SetClusterIds {
+        next: u32,
+        can: Vec<u32>,
+        fr: std::collections::BTreeMap<u8, u32>,
+        eth: std::collections::BTreeMap<u8, u32>,
+    },
+    /// Message rows the frontend has expanded, so the snapshot can carry
+    /// their decoded signal children without the frontend decoding again.
+    SetExpandedMessages(Vec<String>),
     /// Generator-entry edits, keyed by `(channel, id)` -- `add_tx`
     /// dedupes on that pair, so the key is stable where an index would
     /// shift under the sender's feet.
@@ -787,6 +797,12 @@ pub struct Snapshot {
     pub replay_census_eth: Vec<(u8, u64)>,
     /// How many buses exist (frontends key window state off this).
     pub channel_count: usize,
+    /// Global cluster ids, written into schema v2 project files.
+    pub cluster_ids: WebClusterIds,
+    /// Decoded children for the Messages rows the frontend has expanded,
+    /// keyed by the row's stable message key. CAN only for now; FR/ETH rows
+    /// still decode in the frontend.
+    pub expanded_signals: std::collections::BTreeMap<String, Vec<ExpandedSignal>>,
     /// Commands the core has processed; a threaded frontend watches it to
     /// tell whether its sent commands have been applied yet.
     pub laps: u64,
@@ -910,6 +926,29 @@ const _: () = {
     assert_send::<BusCommand>();
     assert_send_sync::<Snapshot>();
 };
+
+/// Persisted identity of every cluster, exposed so a project save can write
+/// the same ids back.
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WebClusterIds {
+    pub next: u32,
+    pub can: Vec<u32>,
+    pub fr: std::collections::BTreeMap<u8, u32>,
+    pub eth: std::collections::BTreeMap<u8, u32>,
+}
+
+/// One decoded child row of an expanded Messages entry.
+#[derive(Clone, Debug, Default, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExpandedSignal {
+    pub name: String,
+    pub value: String,
+    pub raw: i64,
+    pub unit: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+}
 
 /// The frontend's view of one bus. The database travels as an `Arc` the
 /// bus and frontend share; loads are rare, reads are per-frame.
@@ -1079,6 +1118,12 @@ fn hw_fd_note(fd_data_kbps: Option<u32>, fd_active: bool, fd_error: Option<&str>
 /// The simulation half of the application: mode, generators, trace, the
 /// recorder and the observers. The frontend talks to it through commands
 /// and snapshots only.
+type ModelHandle = (
+    crate::model::ClusterId,
+    Arc<crate::model::Comm>,
+    Arc<crate::model::PlanCache>,
+);
+
 pub struct BusCore {
     /// Which timeline the bus runs on: Virtual generates against the sim
     /// clock, Replay follows a loaded log's own stamps.
@@ -1115,6 +1160,30 @@ pub struct BusCore {
     /// 适用于发送被线路拒绝的总线（一秒几千条会把状态行埋掉）。
     pub(crate) drop_news_done: std::collections::HashSet<u8>,
     pub(crate) channels: Vec<Channel>,
+    /// Unified-model view of each CAN channel, aligned with `channels`.
+    /// `None` until a database is loaded.
+    pub(crate) model_comms: Vec<Option<Arc<crate::model::Comm>>>,
+    /// Flattened decode plans for `model_comms`, same alignment.
+    pub(crate) model_plans: Vec<Option<Arc<crate::model::PlanCache>>>,
+    /// The exact database Arc each model was built from. A direct replacement
+    /// of `Channel::dbc` (tests, or a future path that bypasses the load
+    /// helpers) must fall back to the legacy decoder rather than decode with
+    /// a stale model.
+    pub(crate) model_dbs: Vec<Option<Arc<crate::dbc::SymbolTable>>>,
+    /// Global cluster ids for the CAN channels, aligned with `channels`; and
+    /// per-bus ids for the FR/ETH maps. Allocated once and never reused.
+    pub(crate) cluster_ids: crate::model::ClusterIds,
+    pub(crate) can_cluster_ids: Vec<crate::model::ClusterId>,
+    pub(crate) fr_cluster_ids: std::collections::BTreeMap<u8, crate::model::ClusterId>,
+    pub(crate) eth_cluster_ids: std::collections::BTreeMap<u8, crate::model::ClusterId>,
+    /// Unified-model view of each FlexRay bus, keyed by bus index.
+    pub(crate) fr_models: std::collections::BTreeMap<u8, Arc<crate::model::Comm>>,
+    pub(crate) fr_model_plans: std::collections::BTreeMap<u8, Arc<crate::model::PlanCache>>,
+    pub(crate) fr_model_dbs: std::collections::BTreeMap<u8, Arc<crate::fr_db::FrDb>>,
+    /// Unified-model view of each Ethernet bus, keyed by bus index.
+    pub(crate) eth_models: std::collections::BTreeMap<u8, Arc<crate::model::Comm>>,
+    pub(crate) eth_model_plans: std::collections::BTreeMap<u8, Arc<crate::model::PlanCache>>,
+    pub(crate) eth_model_dbs: std::collections::BTreeMap<u8, Arc<crate::eth::db::EthDb>>,
     /// Counter for naming new buses (CAN3, CAN4, ...).
     pub(crate) bus_counter: usize,
     /// The interactive generator's entries: what this tool transmits as.
@@ -1181,6 +1250,8 @@ pub struct BusCore {
     pub(crate) frame_counter: u64,
     /// Per-(bus, id) aggregates behind the Messages / Statistics views.
     pub(crate) aggs: HashMap<(u8, u32, bool), MessageAgg>,
+    /// Messages rows whose signal children the frontend has open.
+    pub(crate) expanded_messages: std::collections::HashSet<String>,
     /// Per-bus load / frame-rate / error rolling state, one entry per channel.
     pub(crate) bus_loads: Vec<crate::load::BusLoad>,
     /// The same for each FlexRay cluster being watched, by cluster index.
@@ -1433,6 +1504,19 @@ impl BusCore {
             log_census: crate::replay_map::LogCensus::default(),
             drop_news_done: std::collections::HashSet::new(),
             channels: Vec::new(),
+            model_comms: Vec::new(),
+            model_plans: Vec::new(),
+            model_dbs: Vec::new(),
+            cluster_ids: Default::default(),
+            can_cluster_ids: Vec::new(),
+            fr_cluster_ids: Default::default(),
+            eth_cluster_ids: Default::default(),
+            fr_models: Default::default(),
+            fr_model_plans: Default::default(),
+            fr_model_dbs: Default::default(),
+            eth_models: Default::default(),
+            eth_model_plans: Default::default(),
+            eth_model_dbs: Default::default(),
             bus_counter: 2,
             tx_list: Vec::new(),
             fr_tx_list: Vec::new(),
@@ -1457,6 +1541,7 @@ impl BusCore {
             last_grace: 0,
             frame_counter: 0,
             aggs: HashMap::new(),
+            expanded_messages: Default::default(),
             bus_loads,
             fr_loads: Default::default(),
             injected: Vec::new(),
@@ -1679,7 +1764,7 @@ impl BusCore {
                         return;
                     };
                     let payload = if physical {
-                        match self.panel_eth_signal_payload(&db, &frame, &signals) {
+                        match self.panel_eth_signal_payload(bus, &db, &frame, &signals) {
                             Ok(payload) => payload,
                             Err(error) => {
                                 *status = format!("[panel] {error}");
@@ -1966,6 +2051,7 @@ impl BusCore {
             BusCommand::SetReplaySpeed(speed) => self.source.set_speed(speed),
             BusCommand::SetFrDbs(dbs) => {
                 self.fr_dbs = dbs;
+                self.rebuild_fr_models();
                 // Which frame an arrival was cannot be worked out later from
                 // the slot alone, so a description that appears or disappears
                 // mid-run re-tallies the rows that are on screen.
@@ -1981,6 +2067,7 @@ impl BusCore {
             }
             BusCommand::SetEthDbs(dbs) => {
                 self.eth_dbs = dbs;
+                self.rebuild_eth_models();
                 // Named-cluster reads store the bus they resolved to; a
                 // replaced matrix can move or lose that name.
                 if self.measuring {
@@ -1990,6 +2077,33 @@ impl BusCore {
                 }
             }
             BusCommand::SetEthLengthIncludesHeader(on) => self.eth_length_includes_header = on,
+            BusCommand::SetClusterIds { next, can, fr, eth } => {
+                self.cluster_ids = crate::model::ClusterIds::new(next);
+                self.can_cluster_ids = can.into_iter().map(crate::model::ClusterId).collect();
+                self.fr_cluster_ids = fr
+                    .into_iter()
+                    .map(|(bus, id)| (bus, crate::model::ClusterId(id)))
+                    .collect();
+                self.eth_cluster_ids = eth
+                    .into_iter()
+                    .map(|(bus, id)| (bus, crate::model::ClusterId(id)))
+                    .collect();
+                while self.can_cluster_ids.len() < self.channels.len() {
+                    let id = self.cluster_ids.allocate();
+                    self.can_cluster_ids.push(id);
+                }
+                for index in 0..self.channels.len() {
+                    self.model_comms.resize(index + 1, None);
+                    self.model_plans.resize(index + 1, None);
+                    self.model_dbs.resize(index + 1, None);
+                    self.rebuild_can_model(index);
+                }
+                self.rebuild_fr_models();
+                self.rebuild_eth_models();
+            }
+            BusCommand::SetExpandedMessages(keys) => {
+                self.expanded_messages = keys.into_iter().collect();
+            }
             BusCommand::SetEntryActive { ch, id, on } => {
                 // Activating anchors the schedule at the current clock:
                 // `next_t_us` still sits at the last slot before the entry
@@ -2326,6 +2440,9 @@ impl BusCore {
                     c.dbc_paths.clear();
                     c.dbc = None;
                 }
+                self.model_comms.clear();
+                self.model_plans.clear();
+                self.model_dbs.clear();
                 self.tx_list.clear();
                 self.subs.clear();
                 for runtime in &mut self.derived {
@@ -2461,7 +2578,10 @@ impl BusCore {
             if let Some((db, frame_ix, slot)) = decoded {
                 let stride = self.applied_stride_us;
                 let t_us = row.t_us;
-                for d in db.decode_signals(frame_ix, &row.payload) {
+                let values = self
+                    .model_fr_values(&row, frame_ix)
+                    .unwrap_or_else(|| db.decode_signals(frame_ix, &row.payload));
+                for d in values {
                     let key = crate::app::fr_signal_key(row.bus, slot, &d.name);
                     let Some(entry) = self.subs.get_mut(&key) else {
                         continue;
@@ -3165,7 +3285,10 @@ impl BusCore {
                 dir: agg.dir,
                 flags: agg.flags,
             };
-            for d in db.decode_signals(&f) {
+            let decoded = self
+                .model_can_decoded(&f, false)
+                .unwrap_or_else(|| db.decode_signals(&f));
+            for d in decoded {
                 input.signals.insert((id, d.name), d.phys);
             }
         }
@@ -3185,7 +3308,21 @@ impl BusCore {
                 let Some(frame_ix) = occupant.frame_ix() else {
                     continue;
                 };
-                for d in db.decode_signals(frame_ix, &agg.payload) {
+                let row = crate::trace::FrRow {
+                    bus: *bus,
+                    t_us: agg.last_t_us,
+                    ab: 0,
+                    slot: *slot,
+                    cycle: 0,
+                    payload: agg.payload.to_vec(),
+                    header_crc: 0,
+                    flags: 0,
+                    name: None,
+                };
+                let decoded = self
+                    .model_fr_decoded(&row, frame_ix, false)
+                    .unwrap_or_else(|| db.decode_signals(frame_ix, &agg.payload));
+                for d in decoded {
                     let key = (*bus, *slot, d.name);
                     for input in inputs.values_mut() {
                         input.fr_signals.insert(key.clone(), d.phys);
@@ -3331,20 +3468,36 @@ impl BusCore {
                 if let Some(decoded) =
                     db.decode(&flow, &frame.payload, self.eth_length_includes_header)
                 {
+                    let values = self
+                        .model_eth_values(frame.bus, &frame_name, &frame.payload)
+                        .unwrap_or_else(|| {
+                            decoded
+                                .signals
+                                .into_iter()
+                                .map(|d| crate::dbc::DecodedSignal {
+                                    name: d.name,
+                                    phys: d.physical,
+                                    raw: d.raw,
+                                    unit: d.unit,
+                                    type_tag: d.type_tag,
+                                    label: d.label,
+                                })
+                                .collect()
+                        });
                     let stride = self.applied_stride_us;
                     let t_us = frame.t_us;
-                    for d in decoded.signals {
+                    for d in values {
                         let key =
                             crate::observe::SigKey::eth(frame.bus, frame_name.clone(), d.name);
                         if let Some(entry) = self.subs.get_mut(&key) {
-                            entry.latest = d.physical;
+                            entry.latest = d.phys;
                             entry.last_raw = d.raw;
                             entry.unit = d.unit;
                             entry.type_tag = d.type_tag;
                             entry.label = d.label;
                             entry.last_update_us = t_us;
                             if t_us >= entry.last_sample_us + stride || entry.history.is_empty() {
-                                entry.push_sample(t_us, d.physical, stride);
+                                entry.push_sample(t_us, d.phys, stride);
                             }
                         }
                     }
@@ -3356,6 +3509,163 @@ impl BusCore {
     }
 
     /// One frame-shaped read of the bus for the frontend.
+    fn cluster_ids_view(&self) -> WebClusterIds {
+        WebClusterIds {
+            next: self.cluster_ids.next(),
+            can: self.can_cluster_ids.iter().map(|id| id.0).collect(),
+            fr: self
+                .fr_cluster_ids
+                .iter()
+                .map(|(bus, id)| (*bus, id.0))
+                .collect(),
+            eth: self
+                .eth_cluster_ids
+                .iter()
+                .map(|(bus, id)| (*bus, id.0))
+                .collect(),
+        }
+    }
+
+    fn expanded_signals_view(&self) -> std::collections::BTreeMap<String, Vec<ExpandedSignal>> {
+        let mut out = std::collections::BTreeMap::new();
+        if self.expanded_messages.is_empty() {
+            return out;
+        }
+        for (&(ch, id, extended), agg) in &self.aggs {
+            let key = format!("can:{ch}:{id}:{extended}");
+            if !self.expanded_messages.contains(&key) {
+                continue;
+            }
+            if agg.flags.contains(crate::can::frame::FrameFlags::ERROR)
+                || agg.flags.contains(crate::can::frame::FrameFlags::RTR)
+            {
+                continue;
+            }
+            let frame = CanFrame {
+                t_us: agg.last_t_us,
+                channel: ch,
+                id,
+                extended,
+                len: agg.len,
+                data: agg.data,
+                dir: agg.dir,
+                flags: agg.flags,
+            };
+            let decoded = self
+                .model_can_decoded(&frame, false)
+                .or_else(|| self.channel_dbc(ch).map(|db| db.decode_signals(&frame)))
+                .unwrap_or_default();
+            out.insert(
+                key,
+                decoded
+                    .into_iter()
+                    .map(|signal| ExpandedSignal {
+                        value: crate::dbc::fmt_decoded(&signal.type_tag, signal.phys),
+                        name: signal.name,
+                        raw: signal.raw,
+                        unit: signal.unit,
+                        label: signal.label,
+                    })
+                    .collect(),
+            );
+        }
+        for ((bus, slot, _), agg) in &self.fr_aggs {
+            let occupant = match &agg.occupant {
+                crate::aggregate::FrOccupant::Frame(index) => format!("f{index}"),
+                crate::aggregate::FrOccupant::Logged(name) => format!("l:{name}"),
+                crate::aggregate::FrOccupant::Unknown => "u".to_string(),
+            };
+            let key = format!("fr:{bus}:{slot}:{occupant}");
+            if !self.expanded_messages.contains(&key) {
+                continue;
+            }
+            let row = crate::trace::FrRow {
+                bus: *bus,
+                t_us: agg.last_t_us,
+                ab: agg.ab,
+                slot: *slot,
+                cycle: 0,
+                payload: agg.payload.clone(),
+                header_crc: 0,
+                flags: 0,
+                name: agg.name.clone(),
+            };
+            let decoded = agg
+                .occupant
+                .frame_ix()
+                .and_then(|ix| {
+                    self.model_fr_decoded(&row, ix, false).or_else(|| {
+                        self.fr_dbs
+                            .get(bus)
+                            .map(|db| db.decode_signals(ix, &agg.payload))
+                    })
+                })
+                .unwrap_or_default();
+            out.insert(
+                key,
+                decoded
+                    .into_iter()
+                    .map(|signal| ExpandedSignal {
+                        value: crate::dbc::fmt_decoded(&signal.type_tag, signal.phys),
+                        name: signal.name,
+                        raw: signal.raw,
+                        unit: signal.unit,
+                        label: signal.label,
+                    })
+                    .collect(),
+            );
+        }
+        for (flow_key, agg) in &self.eth_aggs {
+            let key = flow_key.message_key();
+            if !self.expanded_messages.contains(&key) {
+                continue;
+            }
+            let Some(db) = self.eth_dbs.get(&flow_key.bus) else {
+                continue;
+            };
+            let flow = flow_key.flow();
+            let decoded = match db.match_flow(&flow, self.eth_length_includes_header) {
+                crate::eth::db::EthMatch::Unique(index) => {
+                    let name = &db.frames[index].name;
+                    self.model_eth_decoded(flow_key.bus, name, &agg.payload, false)
+                        .or_else(|| {
+                            db.decode(&flow, &agg.payload, self.eth_length_includes_header)
+                                .map(|decoded| {
+                                    decoded
+                                        .signals
+                                        .into_iter()
+                                        .map(|signal| crate::dbc::DecodedSignal {
+                                            name: signal.name,
+                                            phys: signal.physical,
+                                            raw: signal.raw,
+                                            unit: signal.unit,
+                                            type_tag: signal.type_tag,
+                                            label: signal.label,
+                                        })
+                                        .collect()
+                                })
+                        })
+                        .unwrap_or_default()
+                }
+                _ => Vec::new(),
+            };
+            out.insert(
+                key,
+                decoded
+                    .into_iter()
+                    .map(|signal| ExpandedSignal {
+                        value: crate::dbc::fmt_decoded(&signal.type_tag, signal.phys),
+                        name: signal.name,
+                        raw: signal.raw,
+                        unit: signal.unit,
+                        label: signal.label,
+                    })
+                    .collect(),
+            );
+        }
+        out
+    }
+
     pub(crate) fn snapshot(&self) -> Snapshot {
         let replay = match (self.source.position(), self.source.duration()) {
             (Some(p), Some(d)) => Some((p, d)),
@@ -3392,6 +3702,8 @@ impl BusCore {
             replay_census_fr: self.log_census.rows(crate::replay_map::LogBusKind::Fr),
             replay_census_eth: self.log_census.rows(crate::replay_map::LogBusKind::Eth),
             channel_count: self.channels.len(),
+            cluster_ids: self.cluster_ids_view(),
+            expanded_signals: self.expanded_signals_view(),
             laps: self.laps,
             hw_refresh: self.hw.refresh_seq,
             bus_counter: self.bus_counter,
@@ -3901,6 +4213,10 @@ impl BusCore {
             bitrate_kbps: Channel::DEFAULT_BITRATE_KBPS,
             fd_data_kbps: Channel::DEFAULT_FD_DATA_KBPS,
         });
+        self.model_comms.push(None);
+        self.can_cluster_ids.push(self.cluster_ids.allocate());
+        self.model_plans.push(None);
+        self.model_dbs.push(None);
         self.bus_loads.push(crate::load::BusLoad::new());
         self.loads_dirty = true;
         let ch = self.channels.len() - 1;
@@ -3935,10 +4251,15 @@ impl BusCore {
             bitrate_kbps,
             fd_data_kbps: Channel::DEFAULT_FD_DATA_KBPS,
         });
+        self.model_comms.push(None);
+        self.can_cluster_ids.push(self.cluster_ids.allocate());
+        self.model_plans.push(None);
+        self.model_dbs.push(None);
         self.bus_loads.push(crate::load::BusLoad::new());
         self.loads_dirty = true;
         self.nodes_dirty = true;
         let ch = self.channels.len() - 1;
+        self.rebuild_can_model(ch);
         self.seed_entries_for_simulated(ch);
         let ids: Vec<u32> = dbc.order.iter().map(|&(id, _)| id).collect();
         for id in ids {
@@ -3965,6 +4286,7 @@ impl BusCore {
             }
         }
         self.seed_entries_for_simulated(ch as usize);
+        self.rebuild_can_model(ch as usize);
         *status = format!("{name} ARXML loaded: {} message(s)", dbc.order.len());
     }
 
@@ -4046,11 +4368,292 @@ impl BusCore {
         // fresh table has to meet them: Simulated nodes get entries for
         // messages the database newly declares.
         self.seed_entries_for_simulated(ch);
+        self.rebuild_can_model(ch);
         *status = match first_error {
             Some(e) => format!("{name} DBC partial: {loaded} file(s), {total} messages ({e})"),
             None => format!("{name} DBC loaded: {total} messages"),
         };
         true
+    }
+
+    /// Rebuilds the unified model and its decode plans for one CAN channel.
+    /// The model is already the source of signal values for ordinary
+    /// (non-multiplexed) frames; a multiplexed DBC message still falls back
+    /// to the legacy decoder until Phase 6 models its selector.
+    fn rebuild_can_model(&mut self, ch: usize) {
+        if self.model_comms.len() <= ch {
+            self.model_comms.resize(ch + 1, None);
+            self.model_plans.resize(ch + 1, None);
+            self.model_dbs.resize(ch + 1, None);
+        }
+        let Some(channel) = self.channels.get(ch) else {
+            return;
+        };
+        let Some(db) = channel.dbc.as_ref() else {
+            self.model_comms[ch] = None;
+            self.model_plans[ch] = None;
+            self.model_dbs[ch] = None;
+            return;
+        };
+        let db = Arc::clone(db);
+        let name = channel.name.clone();
+        let bitrate = channel.bitrate_kbps;
+        let fd = channel.fd_data_kbps;
+        let source = crate::model::ClusterSource::Dbc {
+            path: channel.dbc_paths.first().cloned().unwrap_or_default(),
+        };
+        let mut ids = crate::model::ElementIds::new();
+        let cluster_id = self
+            .can_cluster_ids
+            .get(ch)
+            .copied()
+            .unwrap_or(crate::model::ClusterId(ch as u32 + 1));
+        let outcome = crate::model::import_symbol_table(
+            &db, &name, cluster_id, &source, &mut ids, bitrate, fd,
+        );
+        let (plans, _) = crate::model::PlanCache::build(&outcome.comm, 1);
+        self.model_comms[ch] = Some(Arc::new(outcome.comm));
+        self.model_plans[ch] = Some(Arc::new(plans));
+        self.model_dbs[ch] = Some(db);
+    }
+
+    fn rebuild_fr_models(&mut self) {
+        self.fr_models.clear();
+        self.fr_model_plans.clear();
+        self.fr_model_dbs.clear();
+        let buses: Vec<u8> = self.fr_dbs.keys().copied().collect();
+        self.fr_cluster_ids.retain(|bus, _| buses.contains(bus));
+        for bus in &buses {
+            if !self.fr_cluster_ids.contains_key(bus) {
+                let id = self.cluster_ids.allocate();
+                self.fr_cluster_ids.insert(*bus, id);
+            }
+        }
+        let dbs: Vec<(u8, Arc<crate::fr_db::FrDb>)> = self
+            .fr_dbs
+            .iter()
+            .map(|(bus, db)| (*bus, Arc::clone(db)))
+            .collect();
+        for (bus, db) in dbs {
+            let mut ids = crate::model::ElementIds::new();
+            let cluster_id = self
+                .fr_cluster_ids
+                .get(&bus)
+                .copied()
+                .unwrap_or(crate::model::ClusterId(1000 + u32::from(bus)));
+            let outcome = crate::model::import_fr_db(
+                &db,
+                &format!("FR{bus}"),
+                cluster_id,
+                &crate::model::ClusterSource::Manual,
+                &mut ids,
+            );
+            let (plans, _) = crate::model::PlanCache::build(&outcome.comm, 1);
+            self.fr_models.insert(bus, Arc::new(outcome.comm));
+            self.fr_model_plans.insert(bus, Arc::new(plans));
+            self.fr_model_dbs.insert(bus, db);
+        }
+    }
+
+    fn rebuild_eth_models(&mut self) {
+        self.eth_models.clear();
+        self.eth_model_plans.clear();
+        self.eth_model_dbs.clear();
+        let buses: Vec<u8> = self.eth_dbs.keys().copied().collect();
+        self.eth_cluster_ids.retain(|bus, _| buses.contains(bus));
+        for bus in &buses {
+            if !self.eth_cluster_ids.contains_key(bus) {
+                let id = self.cluster_ids.allocate();
+                self.eth_cluster_ids.insert(*bus, id);
+            }
+        }
+        let dbs: Vec<(u8, Arc<crate::eth::db::EthDb>)> = self
+            .eth_dbs
+            .iter()
+            .map(|(bus, db)| (*bus, Arc::clone(db)))
+            .collect();
+        for (bus, db) in dbs {
+            let mut ids = crate::model::ElementIds::new();
+            let cluster_id = self
+                .eth_cluster_ids
+                .get(&bus)
+                .copied()
+                .unwrap_or(crate::model::ClusterId(2000 + u32::from(bus)));
+            let outcome = crate::model::import_eth_db_obj(
+                &db,
+                &format!("ETH{bus}"),
+                cluster_id,
+                &crate::model::ClusterSource::Manual,
+                &mut ids,
+            );
+            let (plans, _) = crate::model::PlanCache::build(&outcome.comm, 1);
+            self.eth_models.insert(bus, Arc::new(outcome.comm));
+            self.eth_model_plans.insert(bus, Arc::new(plans));
+            self.eth_model_dbs.insert(bus, db);
+        }
+    }
+
+    /// Model-side signal values for a CAN frame, in the same shape the
+    /// legacy decoder returns. `None` means "use the legacy path": the
+    /// channel has no model, the frame is multiplexed, or the plan does not
+    /// know the frame.
+    fn model_can_values(&self, f: &CanFrame) -> Option<Vec<crate::dbc::DecodedSignal>> {
+        self.model_can_decoded(f, true)
+    }
+
+    fn model_can_decoded(
+        &self,
+        f: &CanFrame,
+        only_subscribed: bool,
+    ) -> Option<Vec<crate::dbc::DecodedSignal>> {
+        let comm = self
+            .model_comms
+            .get(f.channel as usize)
+            .and_then(|entry| entry.as_ref())?;
+        let plans = self
+            .model_plans
+            .get(f.channel as usize)
+            .and_then(|entry| entry.as_ref())?;
+        let db = self
+            .channels
+            .get(f.channel as usize)
+            .and_then(|channel| channel.dbc.as_ref())?;
+        let model_db = self
+            .model_dbs
+            .get(f.channel as usize)
+            .and_then(|entry| entry.as_ref())?;
+        if !Arc::ptr_eq(model_db, db) {
+            return None;
+        }
+        let cluster = crate::model::ClusterId(f.channel as u32 + 1);
+        let frame = comm
+            .frames_in_cluster(cluster)
+            .find(|frame| frame.address.can_id() == Some(f.id))?;
+        if !matches!(
+            frame.address,
+            crate::model::FrameAddress::Can {
+                extended,
+                ..
+            } if extended == f.extended
+        ) {
+            return None;
+        }
+        let plan = plans.get(frame.id)?;
+        let payload = &f.data[..f.len as usize];
+        let decoded = crate::model::decode_payload(comm, plan, payload);
+        let mut out = Vec::with_capacity(decoded.len());
+        for value in decoded {
+            let signal = comm.signals.get(&value.signal)?;
+            let key = SigKey::can(f.channel, f.id, f.extended, signal.name.clone());
+            if only_subscribed && !self.subs.contains_key(&key) {
+                continue;
+            }
+            out.push(Self::model_signal_decoded(comm, value)?);
+        }
+        Some(out)
+    }
+
+    fn model_signal_decoded(
+        comm: &crate::model::Comm,
+        value: crate::model::DecodedSignal,
+    ) -> Option<crate::dbc::DecodedSignal> {
+        let signal = comm.signals.get(&value.signal)?;
+        let physical = value.physical?;
+        let type_tag = if signal.float {
+            if signal.length == 32 { "f32" } else { "f64" }.to_string()
+        } else {
+            format!("{}{}", if signal.signed { "i" } else { "u" }, signal.length)
+        };
+        let label = signal
+            .values
+            .iter()
+            .find(|(code, _)| *code == value.raw as i64)
+            .map(|(_, text)| text.clone());
+        Some(crate::dbc::DecodedSignal {
+            name: signal.name.clone(),
+            phys: physical,
+            raw: value.raw as i64,
+            unit: signal.unit.clone(),
+            type_tag,
+            label,
+        })
+    }
+
+    fn model_fr_values(
+        &self,
+        row: &crate::trace::FrRow,
+        frame_ix: usize,
+    ) -> Option<Vec<crate::dbc::DecodedSignal>> {
+        self.model_fr_decoded(row, frame_ix, true)
+    }
+
+    fn model_fr_decoded(
+        &self,
+        row: &crate::trace::FrRow,
+        frame_ix: usize,
+        only_subscribed: bool,
+    ) -> Option<Vec<crate::dbc::DecodedSignal>> {
+        let comm = self.fr_models.get(&row.bus)?;
+        let plans = self.fr_model_plans.get(&row.bus)?;
+        let legacy = self.fr_dbs.get(&row.bus)?;
+        let model_db = self.fr_model_dbs.get(&row.bus)?;
+        if !Arc::ptr_eq(model_db, legacy) {
+            return None;
+        }
+        let frame_name = &legacy.frame_index(frame_ix)?.name;
+        let cluster = self.fr_cluster_ids.get(&row.bus).copied()?;
+        let frame = comm.frame_by_name(cluster, frame_name)?;
+        let plan = plans.get(frame.id)?;
+        let decoded = crate::model::decode_payload(comm, plan, &row.payload);
+        let mut out = Vec::with_capacity(decoded.len());
+        for value in decoded {
+            let signal = comm.signals.get(&value.signal)?;
+            let key = SigKey::fr(row.bus, row.slot, signal.name.clone());
+            if only_subscribed && !self.subs.contains_key(&key) {
+                continue;
+            }
+            out.push(Self::model_signal_decoded(comm, value)?);
+        }
+        Some(out)
+    }
+
+    fn model_eth_values(
+        &self,
+        bus: u8,
+        frame_name: &str,
+        payload: &[u8],
+    ) -> Option<Vec<crate::dbc::DecodedSignal>> {
+        self.model_eth_decoded(bus, frame_name, payload, true)
+    }
+
+    fn model_eth_decoded(
+        &self,
+        bus: u8,
+        frame_name: &str,
+        payload: &[u8],
+        only_subscribed: bool,
+    ) -> Option<Vec<crate::dbc::DecodedSignal>> {
+        let comm = self.eth_models.get(&bus)?;
+        let plans = self.eth_model_plans.get(&bus)?;
+        let legacy = self.eth_dbs.get(&bus)?;
+        let model_db = self.eth_model_dbs.get(&bus)?;
+        if !Arc::ptr_eq(model_db, legacy) {
+            return None;
+        }
+        let cluster = self.eth_cluster_ids.get(&bus).copied()?;
+        let frame = comm.frame_by_name(cluster, frame_name)?;
+        let plan = plans.get(frame.id)?;
+        let decoded = crate::model::decode_payload(comm, plan, payload);
+        let mut out = Vec::with_capacity(decoded.len());
+        for value in decoded {
+            let signal = comm.signals.get(&value.signal)?;
+            let key = SigKey::eth(bus, frame_name, signal.name.clone());
+            if only_subscribed && !self.subs.contains_key(&key) {
+                continue;
+            }
+            out.push(Self::model_signal_decoded(comm, value)?);
+        }
+        Some(out)
     }
 
     /// Gives every `Simulated` node on the bus the generator entries it is
@@ -4251,6 +4854,14 @@ impl BusCore {
         }
         let name = self.channels[ch].name.clone();
         self.channels.remove(ch);
+        if ch < self.model_comms.len() {
+            self.model_comms.remove(ch);
+            self.model_plans.remove(ch);
+            self.model_dbs.remove(ch);
+        }
+        if ch < self.can_cluster_ids.len() {
+            self.can_cluster_ids.remove(ch);
+        }
         self.bus_loads.remove(ch);
         self.loads_dirty = true;
         let remap = |c: u8| -> Option<u8> {
@@ -4396,6 +5007,7 @@ impl BusCore {
         // The port closes with the bus it watched.
         self.hw.detach_fr(bus);
         self.fr_dbs.remove(&bus);
+        self.rebuild_fr_models();
         self.fr_loads.remove(&bus);
         self.loads_dirty = true;
         // What this 路 was asked to send, and what the loaded log was already
@@ -4588,6 +5200,7 @@ impl BusCore {
         if self.tx_list.iter().any(|t| t.channel == ch && t.id == id) {
             return;
         }
+        let model_cycle = self.model_can_cycle_us(ch, id);
         let (name, node, len, cycle_us) = self
             .channel_dbc(ch)
             .and_then(|db| db.message_of(id))
@@ -4599,7 +5212,9 @@ impl BusCore {
                     // A declared 0 is event-triggered, so `unwrap_or` rather
                     // than `unwrap_or_default` on the Option: only "the DBC
                     // said nothing" gets our invented period.
-                    m.cycle_us.unwrap_or(crate::app::DEFAULT_TX_CYCLE_US),
+                    m.cycle_us
+                        .or(model_cycle)
+                        .unwrap_or(crate::app::DEFAULT_TX_CYCLE_US),
                 )
             })
             .unwrap_or_else(|| {
@@ -4641,6 +5256,72 @@ impl BusCore {
     /// Encodes a Button's physical CAN frame from catalog signal values:
     /// declared start values first, then each named signal clamped to its
     /// range, at the message's declared DLC.
+    /// Model-side physical encoding for a Panel CAN send. `None` means the
+    /// legacy encoder should run: no model, a multiplexed message, or a frame
+    /// the plan does not know.
+    fn model_can_signal_payload(
+        &self,
+        channel: u8,
+        id: u32,
+        extended: bool,
+        signals: &std::collections::BTreeMap<String, f64>,
+    ) -> Option<Result<Vec<u8>, String>> {
+        let comm = self
+            .model_comms
+            .get(channel as usize)
+            .and_then(|entry| entry.as_ref())?;
+        let plans = self
+            .model_plans
+            .get(channel as usize)
+            .and_then(|entry| entry.as_ref())?;
+        let db = self
+            .channels
+            .get(channel as usize)
+            .and_then(|channel| channel.dbc.as_ref())?;
+        let model_db = self
+            .model_dbs
+            .get(channel as usize)
+            .and_then(|entry| entry.as_ref())?;
+        if !Arc::ptr_eq(model_db, db) {
+            return None;
+        }
+        let cluster = self.can_cluster_ids.get(channel as usize).copied()?;
+        let frame = comm.frames_in_cluster(cluster).find(|frame| {
+            frame.address.can_id() == Some(id)
+                && matches!(
+                    frame.address,
+                    crate::model::FrameAddress::Can {
+                        extended: frame_extended,
+                        ..
+                    } if frame_extended == extended
+                )
+        })?;
+        let plan = plans.get(frame.id)?;
+        let signals_in_frame = comm.signals_in_frame(frame);
+        for name in signals.keys() {
+            if !signals_in_frame.iter().any(|signal| &signal.name == name) {
+                return Some(Err(format!(
+                    "message \"{}\" has no signal \"{name}\"",
+                    frame.name
+                )));
+            }
+        }
+        let mut values = Vec::with_capacity(signals_in_frame.len());
+        for signal in &signals_in_frame {
+            let mut value = signal.initial_physical().unwrap_or(0.0);
+            if let Some(&requested) = signals.get(&signal.name) {
+                value = match (signal.min, signal.max) {
+                    (Some(min), Some(max)) if max > min => requested.clamp(min, max),
+                    _ => requested,
+                };
+            }
+            values.push((signal.id, value));
+        }
+        let mut payload = vec![0u8; frame.length as usize];
+        crate::model::encode_payload(comm, plan, &values, &mut payload);
+        Some(Ok(payload))
+    }
+
     fn panel_can_signal_payload(
         &self,
         channel: u8,
@@ -4648,6 +5329,9 @@ impl BusCore {
         extended: bool,
         signals: &std::collections::BTreeMap<String, f64>,
     ) -> Result<Vec<u8>, String> {
+        if let Some(result) = self.model_can_signal_payload(channel, id, extended, signals) {
+            return result;
+        }
         let Some(table) = self.channel_dbc(channel) else {
             return Err(format!("CAN{} has no database", channel + 1));
         };
@@ -4688,6 +5372,46 @@ impl BusCore {
 
     /// Encodes a Button's physical FlexRay frame from catalog signal values,
     /// using the occupant the slot actually carries at this cycle.
+    fn model_fr_signal_payload(
+        &self,
+        bus: u8,
+        frame_name: &str,
+        signals: &std::collections::BTreeMap<String, f64>,
+    ) -> Option<Result<Vec<u8>, String>> {
+        let comm = self.fr_models.get(&bus)?;
+        let plans = self.fr_model_plans.get(&bus)?;
+        let legacy = self.fr_dbs.get(&bus)?;
+        let model_db = self.fr_model_dbs.get(&bus)?;
+        if !Arc::ptr_eq(model_db, legacy) {
+            return None;
+        }
+        let cluster = self.fr_cluster_ids.get(&bus).copied()?;
+        let frame = comm.frame_by_name(cluster, frame_name)?;
+        let plan = plans.get(frame.id)?;
+        let signals_in_frame = comm.signals_in_frame(frame);
+        for name in signals.keys() {
+            if !signals_in_frame.iter().any(|signal| &signal.name == name) {
+                return Some(Err(format!(
+                    "FR{bus} frame \"{frame_name}\" has no signal \"{name}\""
+                )));
+            }
+        }
+        let mut values = Vec::with_capacity(signals_in_frame.len());
+        for signal in &signals_in_frame {
+            let mut value = signal.initial_physical().unwrap_or(0.0);
+            if let Some(&requested) = signals.get(&signal.name) {
+                value = match (signal.min, signal.max) {
+                    (Some(min), Some(max)) if max > min => requested.clamp(min, max),
+                    _ => requested,
+                };
+            }
+            values.push((signal.id, value));
+        }
+        let mut payload = vec![0u8; frame.length as usize];
+        crate::model::encode_payload(comm, plan, &values, &mut payload);
+        Some(Ok(payload))
+    }
+
     fn panel_fr_signal_payload(
         &self,
         bus: u8,
@@ -4707,20 +5431,26 @@ impl BusCore {
         let Some(frame) = db.frame_index(ix) else {
             return Err(format!("FR{bus} has no frame in slot {slot}"));
         };
-        let mut payload = vec![0u8; frame.length as usize];
-        for (name, value) in signals {
-            let Some(signal) = db.slot_signal(slot, name) else {
-                return Err(format!("slot {slot} has no signal \"{name}\""));
-            };
-            let value = if signal.max > signal.min {
-                value.clamp(signal.min, signal.max)
-            } else {
-                *value
-            };
-            if !db.encode_signal(ix, name, value, &mut payload) {
-                return Err(format!("signal \"{name}\" does not fit slot {slot}"));
+        let payload = if let Some(result) = self.model_fr_signal_payload(bus, &frame.name, signals)
+        {
+            result?
+        } else {
+            let mut payload = vec![0u8; frame.length as usize];
+            for (name, value) in signals {
+                let Some(signal) = db.slot_signal(slot, name) else {
+                    return Err(format!("slot {slot} has no signal \"{name}\""));
+                };
+                let value = if signal.max > signal.min {
+                    value.clamp(signal.min, signal.max)
+                } else {
+                    *value
+                };
+                if !db.encode_signal(ix, name, value, &mut payload) {
+                    return Err(format!("signal \"{name}\" does not fit slot {slot}"));
+                }
             }
-        }
+            payload
+        };
         let cycle = if db.frame_ix_at(slot, now_cycle, 2).is_some() {
             now_cycle
         } else {
@@ -4729,14 +5459,56 @@ impl BusCore {
         Ok((payload, cycle))
     }
 
+    fn model_eth_signal_payload(
+        &self,
+        bus: u8,
+        frame_name: &str,
+        signals: &std::collections::BTreeMap<String, f64>,
+    ) -> Option<Result<Vec<u8>, String>> {
+        let comm = self.eth_models.get(&bus)?;
+        let plans = self.eth_model_plans.get(&bus)?;
+        let legacy = self.eth_dbs.get(&bus)?;
+        let model_db = self.eth_model_dbs.get(&bus)?;
+        if !Arc::ptr_eq(model_db, legacy) {
+            return None;
+        }
+        let cluster = self.eth_cluster_ids.get(&bus).copied()?;
+        let frame = comm.frame_by_name(cluster, frame_name)?;
+        let plan = plans.get(frame.id)?;
+        let signals_in_frame = comm.signals_in_frame(frame);
+        for name in signals.keys() {
+            if !signals_in_frame.iter().any(|signal| &signal.name == name) {
+                return Some(Err(format!(
+                    "frame \"{frame_name}\" has no signal \"{name}\""
+                )));
+            }
+        }
+        let mut values = Vec::with_capacity(signals_in_frame.len());
+        for signal in &signals_in_frame {
+            values.push((signal.id, signals.get(&signal.name).copied().unwrap_or(0.0)));
+        }
+        let width = if self.eth_length_includes_header {
+            frame.length.saturating_sub(14)
+        } else {
+            frame.length
+        };
+        let mut payload = vec![0u8; width as usize];
+        crate::model::encode_payload(comm, plan, &values, &mut payload);
+        Some(Ok(payload))
+    }
+
     /// Encodes a Button's physical Ethernet frame at the declared payload
     /// width. Ethernet signals carry no declared range here.
     fn panel_eth_signal_payload(
         &self,
+        bus: u8,
         db: &crate::eth::db::EthDb,
         frame: &str,
         signals: &std::collections::BTreeMap<String, f64>,
     ) -> Result<Vec<u8>, String> {
+        if let Some(result) = self.model_eth_signal_payload(bus, frame, signals) {
+            return result;
+        }
         let Some(ix) = db.frames.iter().position(|entry| entry.name == frame) else {
             return Err(format!("unknown Ethernet frame \"{frame}\""));
         };
@@ -4869,20 +5641,31 @@ impl BusCore {
                 frame.path
             ));
         }
+        let key = {
+            let Some(table) = self.channel_dbc(channel) else {
+                return Err(format!("CAN{} has no database", channel + 1));
+            };
+            table
+                .order
+                .iter()
+                .copied()
+                .find(|key| {
+                    table
+                        .messages
+                        .get(key)
+                        .is_some_and(|message| message.name == name)
+                })
+                .ok_or_else(|| format!("unknown CAN message \"{name}\""))?
+        };
+        if let Some(result) = self.model_can_signal_payload(channel, key.0, key.1, &frame.values) {
+            let payload = result?;
+            let mut data = [0u8; crate::can::frame::MAX_CAN_FD_LEN];
+            data[..payload.len()].copy_from_slice(&payload);
+            return self.emit_script_can(channel, allowed, key.0, key.1, data, payload.len() as u8);
+        }
         let Some(table) = self.channel_dbc(channel) else {
             return Err(format!("CAN{} has no database", channel + 1));
         };
-        let key = table
-            .order
-            .iter()
-            .copied()
-            .find(|key| {
-                table
-                    .messages
-                    .get(key)
-                    .is_some_and(|message| message.name == name)
-            })
-            .ok_or_else(|| format!("unknown CAN message \"{name}\""))?;
         let message = table.messages.get(&key).expect("key from order");
         let len = message.dlc.min(crate::can::frame::MAX_CAN_FD_LEN as u64) as usize;
         let mut data = [0u8; crate::can::frame::MAX_CAN_FD_LEN];
@@ -4911,12 +5694,24 @@ impl BusCore {
                 return Err(format!("signal \"{signal_name}\" does not fit \"{name}\""));
             }
         }
+        self.emit_script_can(channel, allowed, key.0, key.1, data, len as u8)
+    }
+
+    fn emit_script_can(
+        &mut self,
+        channel: u8,
+        allowed: bool,
+        id: u32,
+        extended: bool,
+        data: [u8; crate::can::frame::MAX_CAN_FD_LEN],
+        len: u8,
+    ) -> Result<(), String> {
         let out = CanFrame {
             t_us: self.sim_t_us,
             channel,
-            id: key.0,
-            extended: key.1,
-            len: len as u8,
+            id,
+            extended,
+            len,
             data,
             dir: crate::can::frame::Direction::Tx,
             flags: if len > 8 {
@@ -4951,27 +5746,32 @@ impl BusCore {
             .expect("index from frames")
             .triggering
             .slot_id as u16;
-        let mut data = vec![0u8; db.frame_index(ix).expect("index").length as usize];
-        for (at, _, names) in db.slot_signals() {
-            if at == slot {
-                for signal_name in names {
-                    db.encode_signal(ix, &signal_name, 0.0, &mut data);
+        let data = if let Some(result) = self.model_fr_signal_payload(bus, name, &frame.values) {
+            result?
+        } else {
+            let mut data = vec![0u8; db.frame_index(ix).expect("index").length as usize];
+            for (at, _, names) in db.slot_signals() {
+                if at == slot {
+                    for signal_name in names {
+                        db.encode_signal(ix, &signal_name, 0.0, &mut data);
+                    }
                 }
             }
-        }
-        for (signal_name, value) in &frame.values {
-            let Some(signal) = db.slot_signal(slot, signal_name) else {
-                return Err(format!("frame \"{name}\" has no signal \"{signal_name}\""));
-            };
-            let value = if signal.max > signal.min {
-                value.clamp(signal.min, signal.max)
-            } else {
-                *value
-            };
-            if !db.encode_signal(ix, signal_name, value, &mut data) {
-                return Err(format!("signal \"{signal_name}\" does not fit \"{name}\""));
+            for (signal_name, value) in &frame.values {
+                let Some(signal) = db.slot_signal(slot, signal_name) else {
+                    return Err(format!("frame \"{name}\" has no signal \"{signal_name}\""));
+                };
+                let value = if signal.max > signal.min {
+                    value.clamp(signal.min, signal.max)
+                } else {
+                    *value
+                };
+                if !db.encode_signal(ix, signal_name, value, &mut data) {
+                    return Err(format!("signal \"{signal_name}\" does not fit \"{name}\""));
+                }
             }
-        }
+            data
+        };
         let now_cycle = crate::generator::fr_cycle_at(&db, self.sim_t_us);
         let cycle = if db.frame_ix_at(slot, now_cycle, 2).is_some() {
             now_cycle
@@ -5002,19 +5802,24 @@ impl BusCore {
         } else {
             def.length
         };
-        let mut data = vec![0u8; len];
-        for pdu in &def.pdus {
-            for signal in &pdu.signals {
-                db.encode_signal(ix, &signal.name, 0.0, &mut data);
+        let data = if let Some(result) = self.model_eth_signal_payload(bus, name, &frame.values) {
+            result?
+        } else {
+            let mut data = vec![0u8; len];
+            for pdu in &def.pdus {
+                for signal in &pdu.signals {
+                    db.encode_signal(ix, &signal.name, 0.0, &mut data);
+                }
             }
-        }
-        for (signal_name, value) in &frame.values {
-            if !db.encode_signal(ix, signal_name, *value, &mut data) {
-                return Err(format!(
-                    "frame \"{name}\" has no signal \"{signal_name}\" or it does not fit"
-                ));
+            for (signal_name, value) in &frame.values {
+                if !db.encode_signal(ix, signal_name, *value, &mut data) {
+                    return Err(format!(
+                        "frame \"{name}\" has no signal \"{signal_name}\" or it does not fit"
+                    ));
+                }
             }
-        }
+            data
+        };
         let vlan = def.vlan;
         let ethertype = def
             .ethertype_hint
@@ -5775,6 +6580,19 @@ impl BusCore {
         // signal and every consumer sees their mixed values. Only consulted
         // in Replay mode, so nothing to restore when the run ends.
         let channels = &self.channels;
+        let models: Vec<Option<ModelHandle>> = channels
+            .iter()
+            .enumerate()
+            .map(|(index, channel)| {
+                let cluster = *self.can_cluster_ids.get(index)?;
+                let comm = self.model_comms.get(index)?.as_ref()?;
+                let plans = self.model_plans.get(index)?.as_ref()?;
+                let model_db = self.model_dbs.get(index)?.as_ref()?;
+                let current = channel.dbc.as_ref()?;
+                Arc::ptr_eq(model_db, current)
+                    .then(|| (cluster, Arc::clone(comm), Arc::clone(plans)))
+            })
+            .collect();
         let mut emitted: Vec<CanFrame> = Vec::new();
         for tx in &mut self.tx_list {
             if matches!(self.mode, Mode::Replay) && tx.next_t_us == 0 {
@@ -5811,7 +6629,13 @@ impl BusCore {
                 // payload would lead its own timestamp by up to a full cycle.
                 let slot = tx.next_t_us;
                 tx.next_t_us += tx.cycle_us;
-                let (data, len, flags) = crate::generator::tx_payload(channels, tx, slot);
+                let (data, len, flags) = models
+                    .get(tx.channel as usize)
+                    .and_then(|model| model.as_ref())
+                    .and_then(|(cluster, comm, plans)| {
+                        crate::generator::tx_payload_with_model(*cluster, comm, plans, tx, slot)
+                    })
+                    .unwrap_or_else(|| crate::generator::tx_payload(channels, tx, slot));
                 // 发送时计算并存储：快照直接读存储值，UI 显示随消息周期
                 // 跳变，不再逐帧重算。
                 tx.last_sent = data;
@@ -5885,6 +6709,18 @@ impl BusCore {
         // scripts and the recording -- not the wire.
         let mut fr_gen: Vec<crate::trace::FrRow> = Vec::new();
         let dbs = &self.fr_dbs;
+        let fr_models: std::collections::BTreeMap<u8, ModelHandle> = self
+            .fr_models
+            .iter()
+            .filter_map(|(bus, comm)| {
+                let cluster = *self.fr_cluster_ids.get(bus)?;
+                let plans = self.fr_model_plans.get(bus)?;
+                let model_db = self.fr_model_dbs.get(bus)?;
+                let current = self.fr_dbs.get(bus)?;
+                Arc::ptr_eq(model_db, current)
+                    .then(|| (*bus, (cluster, Arc::clone(comm), Arc::clone(plans))))
+            })
+            .collect();
         let replaying = matches!(self.mode, Mode::Replay);
         for tx in &mut self.fr_tx_list {
             if replaying && tx.next_t_us == 0 {
@@ -5900,7 +6736,12 @@ impl BusCore {
                 // side: a frame dated `at` must carry the waveform at `at`.
                 let at = tx.next_t_us;
                 tx.next_t_us += tx.cycle_us;
-                let payload = crate::generator::fr_tx_payload(dbs, tx, at);
+                let payload = fr_models
+                    .get(&tx.bus)
+                    .and_then(|(cluster, comm, plans)| {
+                        crate::generator::fr_tx_payload_with_model(*cluster, comm, plans, tx, at)
+                    })
+                    .unwrap_or_else(|| crate::generator::fr_tx_payload(dbs, tx, at));
                 tx.last_sent = payload.clone();
                 let cycle = dbs
                     .get(&tx.bus)
@@ -6321,6 +7162,20 @@ impl BusCore {
         self.channel_dbc(ch)
             .and_then(|db| db.message_of(id))
             .and_then(|m| m.cycle_us)
+            .or_else(|| self.model_can_cycle_us(ch, id))
+    }
+
+    fn model_can_cycle_us(&self, ch: u8, id: u32) -> Option<u64> {
+        let comm = self.model_comms.get(ch as usize)?.as_ref()?;
+        let model_db = self.model_dbs.get(ch as usize)?.as_ref()?;
+        let current = self.channels.get(ch as usize)?.dbc.as_ref()?;
+        if !Arc::ptr_eq(model_db, current) {
+            return None;
+        }
+        let cluster = *self.can_cluster_ids.get(ch as usize)?;
+        comm.frames_in_cluster(cluster)
+            .find(|frame| frame.address.can_id() == Some(id))
+            .and_then(|frame| frame.timing.cycle_us)
     }
 
     /// Folds one accepted frame into every bus-side consumer: the trace
@@ -6427,6 +7282,15 @@ impl BusCore {
     /// The frames a frame carries for signals this run subscribes to, looked
     /// up in the sending bus's database.
     pub(crate) fn subscribed_values(&self, f: &CanFrame) -> Vec<(SigKey, DecodedSignal)> {
+        if let Some(decoded) = self.model_can_values(f) {
+            return decoded
+                .into_iter()
+                .map(|d| {
+                    let key = SigKey::can(f.channel, f.id, f.extended, d.name.clone());
+                    (key, d)
+                })
+                .collect();
+        }
         let Some(db) = self
             .channels
             .get(f.channel as usize)
@@ -6480,7 +7344,8 @@ impl BusCore {
                         match db
                             .frame_ix_at(row.slot, row.cycle, row.ab)
                             .and_then(|frame_ix| {
-                                db.decode_signals(frame_ix, &row.payload)
+                                self.model_fr_decoded(row, frame_ix, false)
+                                    .unwrap_or_else(|| db.decode_signals(frame_ix, &row.payload))
                                     .into_iter()
                                     .find(|d| d.name == *signal)
                             }) {
@@ -6550,7 +7415,10 @@ impl BusCore {
                         let Some(db) = self.channel_dbc(*ch) else {
                             continue; // no database on the bus, no opinion
                         };
-                        match db.decode_signals(f).into_iter().find(|d| d.name == *signal) {
+                        let decoded = self
+                            .model_can_decoded(f, false)
+                            .unwrap_or_else(|| db.decode_signals(f));
+                        match decoded.into_iter().find(|d| d.name == *signal) {
                             Some(d) => {
                                 if *rising {
                                     d.phys >= *threshold
@@ -7059,6 +7927,99 @@ mod tests {
         fr_db_one_signal_on(slot, sig_name, unit, crate::fr_db::FrChannel::Both)
     }
 
+    /// FlexRay subscriptions decode through the unified model as well; the
+    /// legacy decoder remains the fallback when no model was built.
+    #[test]
+    fn fr_signal_subscriptions_use_the_unified_decode_plan() {
+        let mut core = BusCore::new(Vec::new());
+        let mut dbs = std::collections::BTreeMap::new();
+        dbs.insert(0u8, fr_db_one_signal(12, "Speed", "km/h"));
+        core.handle(BusCommand::SetFrDbs(dbs), &mut String::new());
+        assert!(
+            core.fr_models.contains_key(&0),
+            "pushing a cluster description builds the FR model"
+        );
+        assert!(core.fr_model_plans.contains_key(&0));
+        assert!(core.fr_model_dbs.contains_key(&0));
+
+        let key = crate::app::fr_signal_key(0, 12, "Speed");
+        core.subscribe_signal(key.clone());
+        let mut row = fr_row(1_000, 12);
+        row.cycle = 0;
+        row.payload = vec![80, 0, 0, 0, 0, 0, 0, 0];
+        core.ingest_fr_row(row);
+        assert_eq!(
+            core.subs.get(&key).expect("sub").latest,
+            80.0,
+            "the model plan decodes the same slot"
+        );
+    }
+
+    /// Ethernet subscriptions decode through the unified model once a matrix
+    /// is loaded; the legacy flow decoder remains the fallback.
+    #[test]
+    fn eth_signal_subscriptions_use_the_unified_decode_plan() {
+        let text = std::fs::read_to_string(crate::test_assets::eth_arxml()).unwrap();
+        let db = std::sync::Arc::new(crate::eth::db::EthDb::parse(&text).unwrap());
+        let mut core = BusCore::new(Vec::new());
+        let mut dbs = std::collections::BTreeMap::new();
+        dbs.insert(0u8, db);
+        core.handle(BusCommand::SetEthDbs(dbs), &mut String::new());
+        assert!(
+            core.eth_models.contains_key(&0),
+            "pushing a matrix builds the ETH model"
+        );
+        assert!(core.eth_model_plans.contains_key(&0));
+        assert!(core.eth_model_dbs.contains_key(&0));
+
+        let key = SigKey::eth(0, "EthFrame", "Sig");
+        core.subscribe_signal(key.clone());
+        let mut payload = vec![0u8; 22];
+        payload[1] = 50;
+        let values = core
+            .model_eth_values(0, "EthFrame", &payload)
+            .expect("the model knows the frame");
+        assert_eq!(values.len(), 1);
+        assert!((values[0].phys - 5.0).abs() < 1e-9, "{}", values[0].phys);
+    }
+
+    /// The FR generator uses the model for driven signals too.
+    #[test]
+    fn fr_generator_payload_uses_the_unified_encoder() {
+        let mut core = BusCore::new(Vec::new());
+        let mut dbs = std::collections::BTreeMap::new();
+        dbs.insert(0u8, fr_db_one_signal(12, "Speed", "km/h"));
+        core.handle(BusCommand::SetFrDbs(dbs), &mut String::new());
+        let tx = crate::generator::FrTxMsg {
+            bus: 0,
+            slot: 12,
+            name: "F12".to_string(),
+            node: String::new(),
+            len: 8,
+            data: vec![0u8; 8],
+            data_text: String::new(),
+            cycle_us: 10_000,
+            active: false,
+            next_t_us: 0,
+            srcs: vec![crate::sim::ValueSrc::new(
+                "Speed",
+                crate::sim::SrcKind::Ramp,
+                80.0,
+                80.0,
+            )],
+            last_sent: Vec::new(),
+        };
+        let payload = crate::generator::fr_tx_payload_with_model(
+            *core.fr_cluster_ids.get(&0).unwrap(),
+            core.fr_models.get(&0).unwrap(),
+            core.fr_model_plans.get(&0).unwrap(),
+            &tx,
+            0,
+        )
+        .expect("model knows the FR frame");
+        assert_eq!(payload[0], 80);
+    }
+
     /// A description that schedules the slot on channel A still decodes a row
     /// the log says arrived on B. `(slot, cycle)` is what the cluster schedule
     /// fixes, and the same frame off a live port -- whose channel is not known
@@ -7545,6 +8506,134 @@ mod tests {
     }
 
     // ---- 回放通道映射 ----
+
+    /// CAN signal subscriptions now decode through the unified model plan.
+    /// The legacy DBC decoder remains the fallback for multiplexed messages.
+    #[test]
+    fn can_signal_subscriptions_use_the_unified_decode_plan() {
+        let mut core = BusCore::new(Vec::new());
+        let mut status = String::new();
+        core.add_channel(&mut status);
+        assert!(
+            core.model_comms[0].is_some(),
+            "loading a DBC builds the unified model"
+        );
+        assert!(core.model_plans[0].is_some());
+        assert!(
+            core.model_dbs[0].is_some(),
+            "the model records the database it was built from"
+        );
+
+        let key = SigKey::can(0, 0x100, false, "EngineSpeed");
+        core.subscribe_signal(key.clone());
+        let mut frame = frame_on(0, 0x100);
+        frame.data[0] = 0x80;
+        frame.data[1] = 0x3E;
+        assert!(
+            core.model_can_values(&frame).is_some(),
+            "ordinary DBC frames take the model path"
+        );
+        core.ingest(frame, 1_000);
+        let latest = core.subs.get(&key).expect("subscribed").latest;
+        assert!((latest - 4000.0).abs() < 1e-9, "{latest}");
+    }
+
+    /// FR and Ethernet Panel physical sends use the same unified encoder.
+    #[test]
+    fn fr_and_eth_panel_payloads_use_the_unified_encoder() {
+        let mut core = BusCore::new(Vec::new());
+        let mut dbs = std::collections::BTreeMap::new();
+        dbs.insert(0u8, fr_db_one_signal(12, "Speed", "km/h"));
+        core.handle(BusCommand::SetFrDbs(dbs), &mut String::new());
+        let mut values = std::collections::BTreeMap::new();
+        values.insert("Speed".to_string(), 80.0);
+        let payload = core
+            .model_fr_signal_payload(0, "F12", &values)
+            .expect("model knows the FR frame")
+            .expect("FR encoding succeeds");
+        assert_eq!(payload[0], 80);
+
+        let text = std::fs::read_to_string(crate::test_assets::eth_arxml()).unwrap();
+        let db = std::sync::Arc::new(crate::eth::db::EthDb::parse(&text).unwrap());
+        let mut dbs = std::collections::BTreeMap::new();
+        dbs.insert(0u8, db);
+        core.handle(BusCommand::SetEthDbs(dbs), &mut String::new());
+        let mut values = std::collections::BTreeMap::new();
+        values.insert("Sig".to_string(), 5.0);
+        let payload = core
+            .model_eth_signal_payload(0, "EthFrame", &values)
+            .expect("model knows the ETH frame")
+            .expect("ETH encoding succeeds");
+        assert_eq!(payload.len(), 22);
+        assert_eq!(payload[1], 50);
+    }
+
+    /// Panel physical sends use the same model plan as subscriptions.
+    #[test]
+    fn panel_physical_can_payload_uses_the_unified_encoder() {
+        let mut core = BusCore::new(Vec::new());
+        let mut status = String::new();
+        core.add_channel(&mut status);
+        let mut values = std::collections::BTreeMap::new();
+        values.insert("EngineSpeed".to_string(), 4000.0);
+        let payload = core
+            .model_can_signal_payload(0, 0x100, false, &values)
+            .expect("the model knows the message")
+            .expect("encoding succeeds");
+        assert_eq!(&payload[..2], &[0x80, 0x3E]);
+        let mut unknown = std::collections::BTreeMap::new();
+        unknown.insert("NoSuchSignal".to_string(), 1.0);
+        assert!(
+            core.model_can_signal_payload(0, 0x100, false, &unknown)
+                .expect("model knows the message")
+                .is_err()
+        );
+    }
+
+    /// Cluster ids follow the channel row through removal and are never
+    /// reused for a new bus.
+    #[test]
+    fn channel_cluster_ids_survive_removal_without_reuse() {
+        let mut core = BusCore::new(Vec::new());
+        let mut status = String::new();
+        core.add_channel(&mut status);
+        core.add_channel(&mut status);
+        let ids = core.can_cluster_ids.clone();
+        assert_eq!(ids.len(), 2);
+        assert!(ids[0] < ids[1]);
+        core.remove_channel(0, &mut status);
+        assert_eq!(core.can_cluster_ids, vec![ids[1]]);
+        core.add_channel(&mut status);
+        assert_eq!(core.can_cluster_ids.len(), 2);
+        assert!(core.can_cluster_ids[1] > ids[1]);
+    }
+
+    /// Expanded Messages rows carry model-decoded children in the snapshot.
+    #[test]
+    fn expanded_messages_are_decoded_in_the_core_snapshot() {
+        let mut core = BusCore::new(Vec::new());
+        let mut status = String::new();
+        core.add_channel(&mut status);
+        let mut frame = frame_on(0, 0x100);
+        frame.data[0] = 0x80;
+        frame.data[1] = 0x3E;
+        core.ingest(frame, 1_000);
+        let key = "can:0:256:false".to_string();
+        core.handle(
+            BusCommand::SetExpandedMessages(vec![key.clone()]),
+            &mut status,
+        );
+        let snap = core.snapshot();
+        let rows = snap
+            .expanded_signals
+            .get(&key)
+            .expect("expanded row decoded");
+        assert!(
+            rows.iter()
+                .any(|row| row.name == "EngineSpeed" && row.value == "4000"),
+            "{rows:?}"
+        );
+    }
 
     /// 帧只带通道编号；`t_us = 0` 让第一次 step 就把它们发完。
     fn frame_on(channel: u8, id: u32) -> crate::can::frame::CanFrame {

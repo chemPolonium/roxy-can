@@ -10,6 +10,8 @@ interface Props {
   onText?: (text: string, name: string) => void;
   onError?: (message: string) => void;
   class?: string;
+  /// Render as a menu item inside a custom drop-down.
+  menuItem?: boolean;
 }
 
 /// Opens the browser's file picker, uploads the chosen file to the host's
@@ -22,6 +24,7 @@ export function FilePick({
   onText,
   onError,
   class: cls,
+  menuItem,
 }: Props) {
   const input = useRef<HTMLInputElement>(null);
   const [busy, setBusy] = useState(false);
@@ -29,6 +32,7 @@ export function FilePick({
     <>
       <button
         type="button"
+        role={menuItem ? "menuitem" : undefined}
         class={cls ?? "mini"}
         disabled={busy}
         onClick={() => input.current?.click()}

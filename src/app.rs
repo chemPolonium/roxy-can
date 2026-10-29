@@ -401,6 +401,9 @@ impl App {
                 fd_data_kbps: Channel::DEFAULT_FD_DATA_KBPS,
             },
         ];
+        core.can_cluster_ids = (0..core.channels.len())
+            .map(|_| core.cluster_ids.allocate())
+            .collect();
         core.bootstrap_dbcs();
         core.populate_generator();
         core
@@ -785,6 +788,16 @@ impl App {
             self.expanded_messages.insert(key.to_string());
         } else {
             self.expanded_messages.remove(key);
+        }
+        self.send(crate::bus::BusCommand::SetExpandedMessages(
+            self.expanded_messages.iter().cloned().collect(),
+        ));
+    }
+
+    pub fn clear_message_expanded(&mut self) {
+        if !self.expanded_messages.is_empty() {
+            self.expanded_messages.clear();
+            self.send(crate::bus::BusCommand::SetExpandedMessages(Vec::new()));
         }
     }
 

@@ -2389,7 +2389,7 @@ fn app_loop(
                     }
                     app.send(BusCommand::ClearTrace);
                     app.send(BusCommand::ClearAggregates);
-                    app.expanded_messages.clear();
+                    app.clear_message_expanded();
                     app.open_project_path(std::path::Path::new(&path));
                     // Same as the bootstrap load: applying the live layout
                     // is part of opening the project, not an unsaved edit.
@@ -2408,7 +2408,7 @@ fn app_loop(
                     }
                     app.load_log(&path);
                     if app.log_path == path && !app.status.contains("failed") {
-                        app.expanded_messages.clear();
+                        app.clear_message_expanded();
                         let keys = signals.lock().map(|store| store.keys()).unwrap_or_default();
                         for key in &keys {
                             app.subscribe(key.clone());
@@ -4453,6 +4453,9 @@ struct WebState {
     derived: Vec<WebDerivedDef>,
     replay_map: WebReplayMap,
     buses: Vec<WebBus>,
+    /// Unified cluster list: one row per CAN/FR/ETH cluster, with its global
+    /// id and kind.
+    clusters: Vec<WebCluster>,
     fr_buses: Vec<WebFrBus>,
     eth_buses: Vec<WebEthBus>,
     real_bus: bool,
@@ -4509,6 +4512,17 @@ struct WebEthBus {
     name: String,
     path: String,
     clusters: usize,
+    frames: usize,
+}
+
+#[derive(Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WebCluster {
+    id: u32,
+    kind: String,
+    name: String,
+    bus: u8,
+    source: String,
     frames: usize,
 }
 
@@ -4992,6 +5006,18 @@ fn message_signal_dto(signal: crate::dbc::DecodedSignal) -> WebMessageSignal {
     }
 }
 
+fn expanded_signal_dto(rows: &[crate::bus::ExpandedSignal]) -> Vec<WebMessageSignal> {
+    rows.iter()
+        .map(|row| WebMessageSignal {
+            value: row.value.clone(),
+            name: row.name.clone(),
+            raw: row.raw,
+            unit: row.unit.clone(),
+            label: row.label.clone(),
+        })
+        .collect()
+}
+
 fn can_message_signals(
     db: Option<&std::sync::Arc<crate::dbc::SymbolTable>>,
     m: &crate::aggregate::MessageAgg,
@@ -5020,25 +5046,7 @@ fn can_message_signals(
 }
 
 fn eth_message_key(key: &crate::aggregate::EthFlowKey) -> String {
-    let vlan = key
-        .vlan
-        .map(|vlan| vlan.to_string())
-        .unwrap_or_else(|| "-".to_string());
-    let mac = |address: &[u8; 6]| {
-        address
-            .iter()
-            .map(|byte| format!("{byte:02X}"))
-            .collect::<String>()
-    };
-    format!(
-        "eth:{}:{}:{}:{}:{}:{}",
-        key.bus,
-        key.ethertype,
-        vlan,
-        mac(&key.dst),
-        mac(&key.src),
-        key.len
-    )
+    key.message_key()
 }
 
 fn build_state(app: &App, series: &VecDeque<WebSeriesPoint>, fps: f64) -> WebState {
@@ -5383,6 +5391,42 @@ fn build_state(app: &App, series: &VecDeque<WebSeriesPoint>, fps: f64) -> WebSta
             frames: cfg.db.frames.len(),
         })
         .collect();
+    let mut clusters: Vec<WebCluster> = Vec::new();
+    for (index, bus) in buses.iter().enumerate() {
+        clusters.push(WebCluster {
+            id: snap.cluster_ids.can.get(index).copied().unwrap_or(0),
+            kind: "can".to_string(),
+            name: bus.name.clone(),
+            bus: bus.index,
+            source: bus.dbc_paths.first().cloned().unwrap_or_default(),
+            frames: snap
+                .channels
+                .get(index)
+                .and_then(|channel| channel.dbc.as_ref())
+                .map_or(0, |db| db.order.len()),
+        });
+    }
+    for bus in &fr_buses {
+        clusters.push(WebCluster {
+            id: snap.cluster_ids.fr.get(&bus.bus).copied().unwrap_or(0),
+            kind: "flexray".to_string(),
+            name: bus.name.clone(),
+            bus: bus.bus,
+            source: bus.path.clone(),
+            frames: bus.frames,
+        });
+    }
+    for bus in &eth_buses {
+        clusters.push(WebCluster {
+            id: snap.cluster_ids.eth.get(&bus.bus).copied().unwrap_or(0),
+            kind: "ethernet".to_string(),
+            name: bus.name.clone(),
+            bus: bus.bus,
+            source: bus.path.clone(),
+            frames: bus.frames,
+        });
+    }
+    clusters.sort_by_key(|cluster| cluster.id);
     let replay_map = {
         use crate::replay_map::LogBusKind;
         let map = &snap.replay_map;
@@ -5706,7 +5750,10 @@ fn build_state(app: &App, series: &VecDeque<WebSeriesPoint>, fps: f64) -> WebSta
                     .unwrap_or(0)
             };
             let signals = if app.expanded_messages.contains(&key) {
-                can_message_signals(channel_db, m)
+                snap.expanded_signals
+                    .get(&key)
+                    .map(|rows| expanded_signal_dto(rows))
+                    .unwrap_or_else(|| can_message_signals(channel_db, m))
             } else {
                 Vec::new()
             };
@@ -5745,12 +5792,17 @@ fn build_state(app: &App, series: &VecDeque<WebSeriesPoint>, fps: f64) -> WebSta
             .and_then(|ix| frame_db.map(|db| db.signal_names(ix).len()))
             .unwrap_or(0);
         let signals = if app.expanded_messages.contains(&key) {
-            frame_ix
-                .and_then(|ix| frame_db.map(|db| db.decode_signals(ix, &m.payload)))
-                .unwrap_or_default()
-                .into_iter()
-                .map(message_signal_dto)
-                .collect()
+            snap.expanded_signals
+                .get(&key)
+                .map(|rows| expanded_signal_dto(rows))
+                .unwrap_or_else(|| {
+                    frame_ix
+                        .and_then(|ix| frame_db.map(|db| db.decode_signals(ix, &m.payload)))
+                        .unwrap_or_default()
+                        .into_iter()
+                        .map(message_signal_dto)
+                        .collect()
+                })
         } else {
             Vec::new()
         };
@@ -5797,26 +5849,31 @@ fn build_state(app: &App, series: &VecDeque<WebSeriesPoint>, fps: f64) -> WebSta
                     _ => 0,
                 };
                 let signals = if app.expanded_messages.contains(&key) {
-                    config
-                        .db
-                        .decode(&flow, &a.payload, app.eth_length_includes_header)
-                        .map(|decoded| {
-                            decoded
-                                .signals
-                                .into_iter()
-                                .map(|signal| {
-                                    message_signal_dto(crate::dbc::DecodedSignal {
-                                        name: signal.name,
-                                        phys: signal.physical,
-                                        raw: signal.raw,
-                                        unit: signal.unit,
-                                        type_tag: signal.type_tag,
-                                        label: signal.label,
-                                    })
+                    snap.expanded_signals
+                        .get(&key)
+                        .map(|rows| expanded_signal_dto(rows))
+                        .unwrap_or_else(|| {
+                            config
+                                .db
+                                .decode(&flow, &a.payload, app.eth_length_includes_header)
+                                .map(|decoded| {
+                                    decoded
+                                        .signals
+                                        .into_iter()
+                                        .map(|signal| {
+                                            message_signal_dto(crate::dbc::DecodedSignal {
+                                                name: signal.name,
+                                                phys: signal.physical,
+                                                raw: signal.raw,
+                                                unit: signal.unit,
+                                                type_tag: signal.type_tag,
+                                                label: signal.label,
+                                            })
+                                        })
+                                        .collect()
                                 })
-                                .collect()
+                                .unwrap_or_default()
                         })
-                        .unwrap_or_default()
                 } else {
                     Vec::new()
                 };
@@ -5945,6 +6002,7 @@ fn build_state(app: &App, series: &VecDeque<WebSeriesPoint>, fps: f64) -> WebSta
             .collect(),
         replay_map,
         buses,
+        clusters,
         fr_buses,
         eth_buses,
         real_bus: snap.real_bus,
@@ -6727,6 +6785,26 @@ mod tests {
             .expect("Ethernet bus listed");
         assert!(!eth_bus.name.is_empty());
         assert!(eth_bus.path.contains("PowerTrain"));
+        assert!(
+            state
+                .clusters
+                .iter()
+                .any(|cluster| cluster.kind == "flexray" && cluster.bus == fr && cluster.id > 0)
+        );
+        assert!(
+            state
+                .clusters
+                .iter()
+                .any(|cluster| cluster.kind == "ethernet" && cluster.bus == eth && cluster.id > 0)
+        );
+        assert!(
+            state
+                .clusters
+                .iter()
+                .filter(|cluster| cluster.kind == "can")
+                .count()
+                > 0
+        );
     }
 
     /// Replay rows from the FlexRay ring join the web trace alongside CAN,

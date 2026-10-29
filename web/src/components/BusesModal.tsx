@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "preact/hooks";
 import type {
   Bus,
+  Cluster,
   EthBus,
   FrBus,
   Hardware,
@@ -11,6 +12,7 @@ import { FilePick } from "./FilePick";
 
 interface Props {
   buses: Bus[];
+  clusters: Cluster[];
   frBuses: FrBus[];
   ethBuses: EthBus[];
   replayMap: ReplayMap;
@@ -375,6 +377,7 @@ function BusCard({
 
 export function BusesModal({
   buses,
+  clusters,
   frBuses,
   ethBuses,
   replayMap,
@@ -404,8 +407,16 @@ export function BusesModal({
   onOpenScripts,
   onClose,
 }: Props) {
-  const [frPath, setFrPath] = useState("");
-  const [ethPath, setEthPath] = useState("");
+  const [addOpen, setAddOpen] = useState(false);
+  const addRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!addOpen) return;
+    const close = (event: MouseEvent) => {
+      if (!addRef.current?.contains(event.target as Node)) setAddOpen(false);
+    };
+    document.addEventListener("mousedown", close);
+    return () => document.removeEventListener("mousedown", close);
+  }, [addOpen]);
   useEffect(() => {
     const close = (event: KeyboardEvent) => {
       if (event.key === "Escape") onClose();
@@ -435,9 +446,63 @@ export function BusesModal({
             <span>
               {buses.length} buses · {attachedCount} attached
             </span>
-            <button type="button" onClick={onAddBus}>
-              Add bus
-            </button>
+            <div class="add-cluster" ref={addRef}>
+              <button
+                type="button"
+                aria-haspopup="menu"
+                aria-expanded={addOpen}
+                onClick={() => setAddOpen((open) => !open)}
+              >
+                Add cluster
+              </button>
+              {addOpen && (
+                <div class="add-cluster-menu" role="menu" aria-label="Add cluster">
+                  <button
+                    type="button"
+                    role="menuitem"
+                    onClick={() => {
+                      setAddOpen(false);
+                      onAddBus();
+                    }}
+                  >
+                    CAN bus
+                  </button>
+                  <FilePick
+                    menuItem
+                    class="add-cluster-item"
+                    label="ARXML matrix…"
+                    accept=".arxml"
+                    onError={onError}
+                    onPick={(path) => {
+                      setAddOpen(false);
+                      onImportArxml(path);
+                    }}
+                  />
+                  <FilePick
+                    menuItem
+                    class="add-cluster-item"
+                    label="FlexRay FIBEX…"
+                    accept=".xml,.arxml,.fibex"
+                    onError={onError}
+                    onPick={(path) => {
+                      setAddOpen(false);
+                      onLoadFr(path);
+                    }}
+                  />
+                  <FilePick
+                    menuItem
+                    class="add-cluster-item"
+                    label="Ethernet ARXML…"
+                    accept=".arxml"
+                    onError={onError}
+                    onPick={(path) => {
+                      setAddOpen(false);
+                      onLoadEth(path);
+                    }}
+                  />
+                </div>
+              )}
+            </div>
             <button type="button" onClick={onOpenScripts}>
               Scripts…
             </button>
@@ -449,6 +514,41 @@ export function BusesModal({
             </button>
           </div>
         </header>
+
+        {clusters.length > 0 && (
+          <section class="buses-clusters" aria-label="Clusters">
+            <table>
+              <thead>
+                <tr>
+                  <th>ID</th>
+                  <th>Kind</th>
+                  <th>Cluster</th>
+                  <th>Bus</th>
+                  <th>Frames</th>
+                  <th>Source</th>
+                </tr>
+              </thead>
+              <tbody>
+                {clusters.map((cluster) => (
+                  <tr key={`${cluster.kind}:${cluster.bus}`}>
+                    <td>#{cluster.id}</td>
+                    <td>{cluster.kind === "flexray" ? "FlexRay" : cluster.kind === "ethernet" ? "Ethernet" : "CAN"}</td>
+                    <td>{cluster.name}</td>
+                    <td>
+                      {cluster.kind === "flexray"
+                        ? `FR${cluster.bus}`
+                        : cluster.kind === "ethernet"
+                          ? `ETH${cluster.bus}`
+                          : `CAN${cluster.bus + 1}`}
+                    </td>
+                    <td>{cluster.frames}</td>
+                    <td title={cluster.source}>{fileName(cluster.source)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </section>
+        )}
 
         <div class="buses-tools">
           <label class="real-toggle">
@@ -476,18 +576,6 @@ export function BusesModal({
         </div>
 
         <div class="buses-body">
-          <div class="bus-import">
-            <FilePick
-              label="Import ARXML…"
-              accept=".arxml"
-              onError={onError}
-              onPick={onImportArxml}
-            />
-            <span class="hint">
-              Adds every CAN, FlexRay and Ethernet cluster in one file as its
-              own bus.
-            </span>
-          </div>
           {buses.length === 0 && (
             <div class="empty">
               <strong>No buses in this session</strong>
@@ -575,36 +663,6 @@ export function BusesModal({
                 </button>
               </div>
             ))}
-            <form
-              class="proto-add"
-              onSubmit={(event) => {
-                event.preventDefault();
-                if (frPath.trim()) {
-                  onLoadFr(frPath.trim());
-                  setFrPath("");
-                }
-              }}
-            >
-              <input
-                value={frPath}
-                placeholder="Host path to a FlexRay database (FIBEX / ARXML)"
-                onInput={(event) =>
-                  setFrPath((event.target as HTMLInputElement).value)
-                }
-              />
-              <button type="submit" disabled={!frPath.trim()}>
-                Load database
-              </button>
-              <FilePick
-                label="Choose…"
-                accept=".xml,.arxml,.fibex"
-                onError={onError}
-                onPick={(path) => {
-                  setFrPath(path);
-                  onLoadFr(path);
-                }}
-              />
-            </form>
           </section>
 
           <section class="bus-proto">
@@ -627,36 +685,6 @@ export function BusesModal({
                 </button>
               </div>
             ))}
-            <form
-              class="proto-add"
-              onSubmit={(event) => {
-                event.preventDefault();
-                if (ethPath.trim()) {
-                  onLoadEth(ethPath.trim());
-                  setEthPath("");
-                }
-              }}
-            >
-              <input
-                value={ethPath}
-                placeholder="Host path to an Ethernet database (ARXML)"
-                onInput={(event) =>
-                  setEthPath((event.target as HTMLInputElement).value)
-                }
-              />
-              <button type="submit" disabled={!ethPath.trim()}>
-                Load database
-              </button>
-              <FilePick
-                label="Choose…"
-                accept=".arxml,.xml"
-                onError={onError}
-                onPick={(path) => {
-                  setEthPath(path);
-                  onLoadEth(path);
-                }}
-              />
-            </form>
           </section>
 
           <section class="bus-proto replay-map">

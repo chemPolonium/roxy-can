@@ -4067,6 +4067,7 @@ export function App() {
       {busesOpen && (
         <BusesModal
           buses={state?.buses ?? []}
+          clusters={state?.clusters ?? []}
           frBuses={state?.frBuses ?? []}
           ethBuses={state?.ethBuses ?? []}
           replayMap={

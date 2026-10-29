@@ -281,6 +281,90 @@ fn the_format_combo_picks_the_record_extension() {
 /// project's Record/ folder. A draft the user typed themselves is left
 /// alone, and an absolute path is honored exactly as typed.
 #[test]
+fn a_project_saves_schema_v2_and_reopens_the_same_cluster_ids() {
+    let dir = std::env::temp_dir().join("roxy_can_v2_project");
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("v2.rxproj");
+    let mut app = App::headless();
+    app.send(crate::bus::BusCommand::AddChannel);
+    app.settle();
+    let ids = app.snap.cluster_ids.clone();
+    assert!(
+        !ids.can.is_empty(),
+        "the default workspace has a CAN cluster"
+    );
+    let mut map = crate::replay_map::ReplayMap::default();
+    map.set(crate::replay_map::LogBusKind::Can, 3, Some(1));
+    app.send(crate::bus::BusCommand::SetReplayMap(map));
+    app.add_tx(1, 0x321);
+    app.settle();
+    let row = app
+        .snap
+        .tx
+        .iter()
+        .position(|t| t.channel == 1 && t.id == 0x321)
+        .expect("the new generator row");
+    assert!(app.set_tx_hex(row, "11 22 33"), "hex accepted");
+    app.set_tx_active(row, true);
+    app.settle();
+    assert!(app.save_project(Some(path.clone())), "save writes the file");
+
+    let text = std::fs::read_to_string(&path).unwrap();
+    let value: serde_json::Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(value["version"], 2);
+    assert!(value["clusters"].as_array().unwrap().len() >= ids.can.len());
+    assert!(value["legacyBusMap"]["can"].is_array());
+    assert!(value["config"]["channels"].is_array());
+    assert!(
+        value["replay"]
+            .as_array()
+            .is_some_and(|rows| rows.iter().any(|row| {
+                row["kind"] == "can" && row["fileChannel"] == 3 && row["cluster"] == ids.can[1]
+            })),
+        "replay mapping is written with cluster ids: {}",
+        value["replay"]
+    );
+    let saved = value["generators"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["kind"] == "can" && row["id"] == 0x321)
+        .unwrap_or_else(|| panic!("generator row saved: {}", value["generators"]));
+    assert_eq!(
+        saved["cluster"], ids.can[1],
+        "generator rows use the bus's cluster id"
+    );
+    assert_eq!(saved["dataText"], "11 22 33");
+    assert_eq!(saved["active"], true);
+
+    let mut restored = App::headless();
+    restored.open_project_path(&path);
+    assert_eq!(restored.snap.cluster_ids, ids);
+    assert_eq!(
+        restored.snap.tx.len(),
+        app.snap.tx.len(),
+        "the v2 generator rows reopen one for one"
+    );
+    let reopened = restored
+        .snap
+        .tx
+        .iter()
+        .find(|t| t.channel == 1 && t.id == 0x321)
+        .expect("the v2 generator row reopens");
+    assert_eq!(reopened.data_text, "11 22 33");
+    assert!(reopened.active);
+    assert_eq!(restored.snap.channel_count, app.snap.channel_count);
+    assert_eq!(
+        restored
+            .snap
+            .replay_map
+            .target(crate::replay_map::LogBusKind::Can, 3),
+        Some(1),
+        "the v2 replay mapping survives a reopen"
+    );
+}
+
+#[test]
 fn loading_a_project_points_the_record_draft_at_its_record_folder() {
     let dir = std::env::temp_dir().join("roxy_can_record_home");
     std::fs::create_dir_all(&dir).unwrap();

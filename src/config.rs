@@ -404,7 +404,7 @@ fn twenty_default() -> f64 {
 
 /// One driven signal's parameters. `kind` is [`crate::sim::SrcKind::to_u8`];
 /// an unknown code drops the whole entry on load rather than guessing a shape.
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct SrcCfg {
     pub name: String,
     #[serde(default)]

@@ -38,6 +38,7 @@ export interface State {
   derived: DerivedDef[];
   replayMap: ReplayMap;
   buses: Bus[];
+  clusters: Cluster[];
   frBuses: FrBus[];
   ethBuses: EthBus[];
   realBus: boolean;
@@ -169,6 +170,15 @@ export interface Bus {
   fdDataKbps: number;
   nodes: BusNode[];
   attached: HwAttachment | null;
+}
+
+export interface Cluster {
+  id: number;
+  kind: "can" | "flexray" | "ethernet";
+  name: string;
+  bus: number;
+  source: string;
+  frames: number;
 }
 
 export interface HwChannel {
