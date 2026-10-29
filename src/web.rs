@@ -1759,6 +1759,16 @@ enum WebCommand {
         frame: String,
         name: String,
     },
+    SelectDerivedSignal {
+        id: String,
+        name: String,
+        #[serde(default)]
+        read: bool,
+    },
+    UnselectDerivedSignal {
+        id: String,
+        name: String,
+    },
     MoveSignal {
         key: String,
         to: usize,
@@ -2483,6 +2493,24 @@ fn app_loop(
                         chart_unselect(&mut app, &key);
                     }
                 }
+                WebCommand::SelectDerivedSignal { id, name, read } => {
+                    let key = SigKey::derived(id, name);
+                    if let Ok(mut store) = signals.lock() {
+                        set_signal_mode(&mut app, &mut store, key, read);
+                    }
+                }
+                WebCommand::UnselectDerivedSignal { id, name } => {
+                    let key = SigKey::derived(id, name);
+                    let selected = signals
+                        .lock()
+                        .map(|store| store.is_selected(&key))
+                        .unwrap_or(false);
+                    if selected && let Ok(mut store) = signals.lock() {
+                        store.unselect(&key);
+                        app.set_session_chart_keep(store.keys());
+                        chart_unselect(&mut app, &key);
+                    }
+                }
                 WebCommand::MoveSignal { key, to } => {
                     let target = signals.lock().ok().and_then(|store| {
                         store
@@ -2669,10 +2697,7 @@ fn app_loop(
                     };
                     let target = download_file_path(&path);
                     if kind == "signals" {
-                        let keys = signals
-                            .lock()
-                            .map(|store| store.keys_with_derived(&app))
-                            .unwrap_or_default();
+                        let keys = signals.lock().map(|store| store.keys()).unwrap_or_default();
                         app.export_signals_keys_csv(&keys, &target, range);
                     } else {
                         export_file(&mut app, &kind, &target, range);
@@ -3687,19 +3712,6 @@ impl SignalStore {
             .collect()
     }
 
-    /// Selected signals plus every derived channel, which is implicitly on
-    /// the chart (the derived editor is its on/off switch, not a lane menu).
-    fn keys_with_derived(&self, app: &App) -> Vec<SigKey> {
-        let mut keys = self.keys();
-        for def in &app.derived_defs {
-            let key = SigKey::derived(&def.id, &def.name);
-            if !keys.contains(&key) {
-                keys.push(key);
-            }
-        }
-        keys
-    }
-
     /// Adds a selection without subscribing; the command handler owns the
     /// bus subscription so this stays a pure cache operation.
     fn select(&mut self, app: &App, ch: u8, id: u32, ext: bool, name: &str) {
@@ -3878,29 +3890,35 @@ impl SignalStore {
     }
 
     fn sync(&mut self, app: &App) {
+        // A derived rename replaces its series key; keep the lane/read choice
+        // on the same definition id.
+        let defs: std::collections::HashMap<&str, &crate::derived::DerivedDef> = app
+            .derived_defs
+            .iter()
+            .map(|def| (def.id.as_str(), def))
+            .collect();
+        self.selected.retain(|signal| match &signal.key {
+            SigKey::Derived { id, .. } => defs.contains_key(id.as_str()),
+            _ => true,
+        });
+        for signal in &mut self.selected {
+            if let SigKey::Derived { id, name } = &mut signal.key
+                && let Some(def) = defs.get(id.as_str())
+            {
+                *name = def.name.clone();
+                signal.name = def.name.clone();
+                signal.unit = def.unit.clone();
+            }
+        }
         for signal in &mut self.selected {
             signal.bus = signal_bus(app, &signal.key);
             if let Some(sub) = signal_sub(app, &signal.key) {
                 signal.unit = sub.unit.clone();
             }
         }
-        // Derived channels are part of the chart by definition: the editor
-        // adds and removes them, so they follow the selected lanes here.
-        let mut signals = self.selected.clone();
-        for (index, def) in app.derived_defs.iter().enumerate() {
-            let key = SigKey::derived(&def.id, &def.name);
-            if signals.iter().any(|signal| signal.key == key) {
-                continue;
-            }
-            signals.push(SelectedSignal {
-                key,
-                name: def.name.clone(),
-                bus: "Derived".to_string(),
-                unit: def.unit.clone(),
-                color: 100 + index,
-                read: false,
-            });
-        }
+        // Computed channels are ordinary selectable series: definitions only
+        // make them available, Plot/Read decides whether they appear.
+        let signals = self.selected.clone();
         let derived_meta = app
             .derived_defs
             .iter()
@@ -7192,9 +7210,9 @@ mod tests {
         );
     }
 
-    /// A derived definition is enough: the core samples it, the chart store
-    /// appends it after the selected lanes, and the observer rows name it
-    /// like any other signal, with the State bands from its definition.
+    /// A derived definition becomes an ordinary selectable series: the core
+    /// samples it, selecting it puts it on the chart, and the observer rows
+    /// name it like any other signal, with the State bands from its definition.
     #[test]
     fn a_derived_channel_reaches_the_chart_and_the_state_observer() {
         let mut app = App::headless();
@@ -7224,6 +7242,15 @@ mod tests {
         for spec in &SIGNALS {
             signals.select(&app, spec.ch, spec.id, false, spec.name);
         }
+        signals.sync(&app);
+        assert!(
+            !signals
+                .seed()
+                .iter()
+                .any(|series| series.key == "derived:d1"),
+            "a definition alone does not put a lane on the chart"
+        );
+        signals.select_key(&app, key.clone());
         signals.sync(&app);
         let seeded = signals.seed();
         let derived = seeded

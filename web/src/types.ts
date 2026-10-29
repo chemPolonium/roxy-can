@@ -748,6 +748,13 @@ export type Command =
       read?: boolean;
     }
   | { type: "unselect_eth_signal"; bus: number; frame: string; name: string }
+  | {
+      type: "select_derived_signal";
+      id: string;
+      name: string;
+      read?: boolean;
+    }
+  | { type: "unselect_derived_signal"; id: string; name: string }
   | { type: "move_signal"; key: string; to: number }
   | {
       type: "chart_signal";

@@ -32,6 +32,8 @@ interface Props {
   onCopyTo?: (target: "monitor" | "data" | "state") => void;
   derived?: DerivedDef[];
   onManageDerived?: () => void;
+  onDerivedToggle?: (definition: DerivedDef, on: boolean) => void;
+  onDerivedReadToggle?: (definition: DerivedDef, on: boolean) => void;
   onClose: () => void;
 }
 
@@ -56,6 +58,8 @@ export function SignalPicker({
   onCopyTo,
   derived = [],
   onManageDerived,
+  onDerivedToggle,
+  onDerivedReadToggle,
   onClose,
 }: Props) {
   const [query, setQuery] = useState("");
@@ -291,13 +295,58 @@ export function SignalPicker({
                   </button>
                 )}
               </h4>
-              {computed.map((definition) => (
-                <div class="picker-derived-row" key={definition.id}>
-                  <span>{definition.name}</span>
-                  <code>{definition.expression}</code>
-                  <small>plotted</small>
-                </div>
-              ))}
+              {computed.map((definition) => {
+                const key = `derived:${definition.id}`;
+                const on = selected.has(key);
+                const reading = !!read?.has(key);
+                return (
+                  <div
+                    class={`picker-derived-row ${on ? "on" : ""} ${
+                      reading ? "read" : ""
+                    }`}
+                    key={definition.id}
+                  >
+                    <span>{definition.name}</span>
+                    <code>{definition.expression}</code>
+                    {onDerivedToggle && onDerivedReadToggle ? (
+                      <div
+                        class="picker-modes"
+                        role="group"
+                        aria-label="Computed channel mode"
+                      >
+                        <button
+                          type="button"
+                          class={`picker-mode ${on ? "on" : ""}`}
+                          aria-pressed={on}
+                          title={on ? "Stop plotting" : "Plot this channel"}
+                          onClick={() => onDerivedToggle(definition, !on)}
+                        >
+                          Plot
+                        </button>
+                        <button
+                          type="button"
+                          class={`picker-mode ${reading ? "on" : ""}`}
+                          aria-pressed={reading}
+                          title={
+                            reading
+                              ? "Remove from the cursor readout"
+                              : on
+                                ? "Switch to Read-only (stop plotting)"
+                                : "Read at cursors without plotting"
+                          }
+                          onClick={() =>
+                            onDerivedReadToggle(definition, !reading)
+                          }
+                        >
+                          Read
+                        </button>
+                      </div>
+                    ) : (
+                      <small>computed</small>
+                    )}
+                  </div>
+                );
+              })}
             </section>
           )}
         </div>

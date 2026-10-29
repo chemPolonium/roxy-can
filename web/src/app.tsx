@@ -155,6 +155,7 @@ interface SavedView {
   overlay: boolean;
   signalView: SignalView;
   yModes?: Record<string, ChartYMode>;
+  derivedReads?: { id: string; name: string }[];
   cursors: ChartCursor[];
   panelPage?: PanelPage;
   panelBook?: PanelBook;
@@ -201,6 +202,20 @@ function normalizeView(saved: Partial<SavedView>): Partial<SavedView> {
       }
     }
   }
+  const derivedReads: { id: string; name: string }[] = [];
+  if (Array.isArray(saved.derivedReads)) {
+    for (const entry of saved.derivedReads.slice(0, 64)) {
+      if (
+        entry &&
+        typeof entry.id === "string" &&
+        entry.id &&
+        typeof entry.name === "string" &&
+        entry.name
+      ) {
+        derivedReads.push({ id: entry.id, name: entry.name });
+      }
+    }
+  }
   return {
     tab: saved.tab && tabs.includes(saved.tab) ? saved.tab : undefined,
     mainView:
@@ -221,6 +236,7 @@ function normalizeView(saved: Partial<SavedView>): Partial<SavedView> {
     splitRatio: clamp(Number(saved.splitRatio) || 0.6, 0.25, 0.75),
     overlay: typeof saved.overlay === "boolean" ? saved.overlay : false,
     yModes,
+    derivedReads,
     signalView: { windowS, endS },
     cursors,
     panelBook:
@@ -436,6 +452,9 @@ export function App() {
   const [chartYModes, setChartYModes] = useState<Record<string, ChartYMode>>(
     savedView.yModes ?? {},
   );
+  const [derivedReads, setDerivedReads] = useState<{ id: string; name: string }[]>(
+    savedView.derivedReads ?? [],
+  );
   const [chartFullscreen, setChartFullscreen] = useState(false);
   const [toast, setToast] = useState("");
   const [paletteOpen, setPaletteOpen] = useState(false);
@@ -493,6 +512,7 @@ export function App() {
       setSignalView({ windowS: 30, endS: null });
       setChartCursors([]);
       setReadSignals([]);
+      setDerivedReads([]);
       setTraceColumns(DEFAULT_TRACE_COLUMNS);
       setLayout(DEFAULT_LAYOUT);
       setPanelBook(defaultPanelBook());
@@ -520,8 +540,17 @@ export function App() {
     if (nextLayout) setLayout(nextLayout);
     const savedReads = parseReadSignals(saved.readSignals);
     setReadSignals(savedReads);
+    setDerivedReads(view.derivedReads ?? []);
     setPanelBook(view.panelBook ?? defaultPanelBook());
     for (const spec of savedReads) void run(readSpecCommand(spec));
+    for (const spec of view.derivedReads ?? []) {
+      void run({
+        type: "select_derived_signal",
+        id: spec.id,
+        name: spec.name,
+        read: true,
+      });
+    }
   };
 
   // A project load bumps the revision once; adopt its workspace then, but
@@ -547,6 +576,17 @@ export function App() {
     if (!state) return;
     setDerivedDefs(state.derived ?? []);
   }, [derivedSignature, state?.workspaceRev]);
+
+  useEffect(() => {
+    setDerivedReads((old) =>
+      old
+        .map((entry) => {
+          const def = derivedDefs.find((candidate) => candidate.id === entry.id);
+          return def ? { id: def.id, name: def.name } : null;
+        })
+        .filter((entry): entry is { id: string; name: string } => !!entry),
+    );
+  }, [derivedDefs]);
 
   // Everything a computed expression may reference: the whole catalog plus
   // the computed channels already defined. This is independent of what the
@@ -775,6 +815,7 @@ export function App() {
           overlay: signalOverlay,
           signalView,
           yModes: chartYModes,
+          derivedReads,
           cursors: chartCursors,
           panelBook,
         }),
@@ -792,6 +833,7 @@ export function App() {
     signalOverlay,
     signalView,
     chartYModes,
+    derivedReads,
     chartCursors,
     panelBook,
   ]);
@@ -1685,8 +1727,52 @@ export function App() {
     void run(catalogSignalCommand(channel, message, signal, null));
   };
 
-  const moveSignal = (key: string, to: number) => {
-    const from = chartSeries.findIndex((signal) => signal.key === key);
+  const toggleDerivedSignal = (definition: DerivedDef, on: boolean) => {
+    setDerivedReads((old) =>
+      old.filter((entry) => entry.id !== definition.id),
+    );
+    void run(
+      on
+        ? {
+            type: "select_derived_signal",
+            id: definition.id,
+            name: definition.name,
+            read: false,
+          }
+        : {
+            type: "unselect_derived_signal",
+            id: definition.id,
+            name: definition.name,
+          },
+    );
+  };
+
+  const toggleDerivedRead = (definition: DerivedDef, on: boolean) => {
+    setDerivedReads((old) =>
+      on
+        ? [
+            ...old.filter((entry) => entry.id !== definition.id),
+            { id: definition.id, name: definition.name },
+          ]
+        : old.filter((entry) => entry.id !== definition.id),
+    );
+    void run(
+      on
+        ? {
+            type: "select_derived_signal",
+            id: definition.id,
+            name: definition.name,
+            read: true,
+          }
+        : {
+            type: "unselect_derived_signal",
+            id: definition.id,
+            name: definition.name,
+          },
+    );
+  };
+
+  const moveSignal = (key: string, to: number) => {    const from = chartSeries.findIndex((signal) => signal.key === key);
     const target = clamp(to, 0, chartSeries.length - 1);
     if (from < 0 || from === target) return;
     const nextChart = [...chartSeries];
@@ -4056,6 +4142,8 @@ export function App() {
           onReadToggle={toggleReadSignal}
           onCopyTo={copyChartSelection}
           derived={derivedDefs}
+          onDerivedToggle={toggleDerivedSignal}
+          onDerivedReadToggle={toggleDerivedRead}
           onManageDerived={() => {
             setPickerOpen(false);
             openVariables("computed");
