@@ -4379,15 +4379,26 @@ BO_ 2147483904 Twin: 2 ECU
  SG_ ExtSig : 0|16@1+ (0.1,0) [0|0] ""  ECU
 "#;
     let mut app = App::headless();
-    app.channels[0].dbc = Some(std::sync::Arc::new(
-        crate::dbc::load_dbc_str(TWIN_DBC).unwrap(),
-    ));
+    app.send(crate::bus::BusCommand::SetChannelDbc {
+        ch: 0,
+        dbc: std::sync::Arc::new(crate::dbc::load_dbc_str(TWIN_DBC).unwrap()),
+    });
     app.tx_list.retain(|t| t.channel != 0);
     app.start_virtual();
     let std_key = SigKey::can(0, 0x100, false, "StdSig");
     let ext_key = SigKey::can(0, 0x100, true, "ExtSig");
     app.subscribe(std_key.clone());
     app.subscribe(ext_key.clone());
+    assert!(
+        app.model_decoded_for_test(&frame_at(0, 0x100, 2, Direction::Rx))
+            .is_some()
+    );
+    let mut ext_probe = frame_at(0, 0x100, 2, Direction::Rx);
+    ext_probe.extended = true;
+    assert!(
+        app.model_decoded_for_test(&ext_probe).is_some(),
+        "the extended class finds its own frame in the model"
+    );
 
     // A standard frame: only the standard subscription sees it...
     receive(

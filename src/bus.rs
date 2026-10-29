@@ -4758,18 +4758,18 @@ impl BusCore {
             return None;
         }
         let cluster = *self.can_cluster_ids.get(f.channel as usize)?;
-        let frame = comm
-            .frames_in_cluster(cluster)
-            .find(|frame| frame.address.can_id() == Some(f.id))?;
-        if !matches!(
-            frame.address,
-            crate::model::FrameAddress::Can {
-                extended,
-                ..
-            } if extended == f.extended
-        ) {
-            return None;
-        }
+        // A standard and an extended message can share one id; the class is
+        // part of the frame's identity, not a check after the fact.
+        let frame = comm.frames_in_cluster(cluster).find(|frame| {
+            matches!(
+                frame.address,
+                crate::model::FrameAddress::Can {
+                    id,
+                    extended,
+                    ..
+                } if id == f.id && extended == f.extended
+            )
+        })?;
         let plan = plans.get(frame.id)?;
         let payload = &f.data[..f.len as usize];
         let decoded = crate::model::decode_payload(comm, plan, payload);
