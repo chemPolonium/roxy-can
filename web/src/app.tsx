@@ -66,6 +66,7 @@ import {
 } from "./components/SignalChart";
 import { SignalPicker } from "./components/SignalPicker";
 import { SpecPanel } from "./components/SpecPanel";
+import type { ChartYMode } from "./chartScale";
 import { ScriptsModal } from "./components/ScriptsModal";
 import { StatePanel } from "./components/StatePanel";
 import { StateRuleModal } from "./components/StateRuleModal";
@@ -153,6 +154,7 @@ interface SavedView {
   splitRatio: number;
   overlay: boolean;
   signalView: SignalView;
+  yMode?: ChartYMode;
   cursors: ChartCursor[];
   panelPage?: PanelPage;
   panelBook?: PanelBook;
@@ -210,6 +212,10 @@ function normalizeView(saved: Partial<SavedView>): Partial<SavedView> {
     chartSplit: typeof saved.chartSplit === "boolean" ? saved.chartSplit : false,
     splitRatio: clamp(Number(saved.splitRatio) || 0.6, 0.25, 0.75),
     overlay: typeof saved.overlay === "boolean" ? saved.overlay : false,
+    yMode:
+      saved.yMode === "memory" || saved.yMode === "dbc"
+        ? saved.yMode
+        : "auto",
     signalView: { windowS, endS },
     cursors,
     panelBook:
@@ -421,6 +427,9 @@ export function App() {
   );
   const [chartCursors, setChartCursors] = useState<ChartCursor[]>(
     savedView.cursors ?? [],
+  );
+  const [chartYMode, setChartYMode] = useState<ChartYMode>(
+    savedView.yMode ?? "auto",
   );
   const [chartFullscreen, setChartFullscreen] = useState(false);
   const [toast, setToast] = useState("");
@@ -719,6 +728,7 @@ export function App() {
           splitRatio,
           overlay: signalOverlay,
           signalView,
+          yMode: chartYMode,
           cursors: chartCursors,
           panelBook,
         }),
@@ -735,6 +745,7 @@ export function App() {
     splitRatio,
     signalOverlay,
     signalView,
+    chartYMode,
     chartCursors,
     panelBook,
   ]);
@@ -1801,6 +1812,19 @@ export function App() {
     () => signals.filter((signal) => !signal.read),
     [signals],
   );
+  const signalRanges = useMemo(() => {
+    const ranges: Record<string, { min: number; max: number }> = {};
+    for (const channel of catalog?.channels ?? []) {
+      for (const message of channel.messages) {
+        for (const signal of message.signals) {
+          if (signal.max > signal.min) {
+            ranges[signal.key] = { min: signal.min, max: signal.max };
+          }
+        }
+      }
+    }
+    return ranges;
+  }, [catalog]);
   const readSeries = useMemo(
     () => signals.filter((signal) => signal.read),
     [signals],
@@ -2264,6 +2288,9 @@ export function App() {
           onOpenDerived={() => setDerivedOpen(true)}
           overlay={signalOverlay}
           onToggleOverlay={() => setSignalOverlay((value) => !value)}
+          yMode={chartYMode}
+          onYMode={setChartYMode}
+          ranges={signalRanges}
         />
       );
     }
@@ -3448,6 +3475,9 @@ export function App() {
                   onOpenDerived={() => setDerivedOpen(true)}
                   overlay={signalOverlay}
                   onToggleOverlay={() => setSignalOverlay((value) => !value)}
+                  yMode={chartYMode}
+                  onYMode={setChartYMode}
+                  ranges={signalRanges}
                   hasReadout={readSeries.length > 0}
                   readRange={readRange}
                   readCount={readSeries.length}

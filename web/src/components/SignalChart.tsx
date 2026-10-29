@@ -1,5 +1,11 @@
 import { useEffect, useRef, useState } from "preact/hooks";
 import type { SignalSeries } from "../types";
+import {
+  chartYRange,
+  extendYMemory,
+  type ChartYMode,
+  type YMemory,
+} from "../chartScale";
 import { palette, type Theme } from "../theme";
 
 const GUTTER = 108;
@@ -257,6 +263,9 @@ export function SignalChart({
   hasReadout = false,
   readRange = null,
   readCount = 0,
+  yMode = "auto",
+  onYMode,
+  ranges,
 }: {
   series: SignalSeries[];
   markers?: number[];
@@ -282,6 +291,11 @@ export function SignalChart({
   hasReadout?: boolean;
   readRange?: { first: number; last: number } | null;
   readCount?: number;
+  /// Value-axis policy for the stacked lanes. Overlay stays normalized.
+  yMode?: ChartYMode;
+  onYMode?: (mode: ChartYMode) => void;
+  /// Declared communication ranges by series key, for the DBC mode.
+  ranges?: Record<string, { min: number; max: number }>;
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const dragRef = useRef<{ x: number; endS: number } | null>(null);
@@ -300,6 +314,7 @@ export function SignalChart({
   } | null>(null);
   const cursorDragRef = useRef<number | null>(null);
   const binCacheRef = useRef(new Map<string, BinCache>());
+  const yMemoryRef = useRef(new Map<string, YMemory>());
   const timeBounds =
     series.length > 0 ? bounds(series) : (readRange ?? bounds(series));
   const liveEnd = view.endS ?? timeBounds.last;
@@ -406,6 +421,10 @@ export function SignalChart({
   }, [laneMenu]);
 
   useEffect(() => {
+    yMemoryRef.current.clear();
+  }, [measuring]);
+
+  useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const colors = palette(theme);
@@ -501,12 +520,25 @@ export function SignalChart({
             if (value > max) max = value;
           }
           if (!Number.isFinite(min)) continue;
-          if (min === max) {
-            min -= 0.5;
-            max += 0.5;
+          const memory = extendYMemory(
+            yMemoryRef.current.get(signal.key),
+            signal.points,
+          );
+          if (memory) yMemoryRef.current.set(signal.key, memory);
+          const scale = chartYRange(
+            yMode,
+            { min, max },
+            ranges?.[signal.key],
+            memory,
+          );
+          let low = scale.min;
+          let high = scale.max;
+          if (low === high) {
+            low -= 0.5;
+            high += 0.5;
           }
           const toY = (value: number) =>
-            plotBottom - ((value - min) / (max - min)) * plotH;
+            plotBottom - ((value - low) / (high - low)) * plotH;
           const stroke = (
             points: [number, number][],
             offset: number,
@@ -679,17 +711,34 @@ export function SignalChart({
           }
         }
 
-        if (min === max) {
-          min -= 1;
-          max += 1;
+        const memory = extendYMemory(
+          yMemoryRef.current.get(signal.key),
+          signal.points,
+        );
+        if (memory) yMemoryRef.current.set(signal.key, memory);
+        const scale = chartYRange(
+          yMode,
+          { min, max },
+          ranges?.[signal.key],
+          memory,
+        );
+        let low = scale.min;
+        let high = scale.max;
+        if (!Number.isFinite(low) || !Number.isFinite(high)) {
+          low = 0;
+          high = 1;
         }
-        const span = max - min;
-        min -= span * 0.1;
-        max += span * 0.1;
+        if (low === high) {
+          low -= 1;
+          high += 1;
+        }
+        const span = high - low;
+        low -= span * 0.1;
+        high += span * 0.1;
         const plotTop = top + 4;
         const plotH = laneH - 8;
         const y = (value: number) =>
-          plotTop + plotH - ((value - min) / (max - min)) * plotH;
+          plotTop + plotH - ((value - low) / (high - low)) * plotH;
 
         ctx.strokeStyle = colors.signalMidLine;
         ctx.beginPath();
@@ -968,6 +1017,8 @@ export function SignalChart({
     hasReadout,
     readRange,
     readCount,
+    yMode,
+    ranges,
   ]);
 
   const plotWidth = () => {
@@ -1188,6 +1239,30 @@ export function SignalChart({
           >
             Overlay
           </button>
+        )}
+        {onYMode && !overlay && (
+          <label
+            class="chart-y-mode"
+            title={
+              yMode === "memory"
+                ? "Remember every value seen in this run; the range only grows"
+                : yMode === "dbc"
+                  ? "Use each signal's declared communication min/max"
+                  : "Fit the values visible in the time window"
+            }
+          >
+            Y
+            <select
+              value={yMode}
+              onChange={(event) =>
+                onYMode((event.target as HTMLSelectElement).value as ChartYMode)
+              }
+            >
+              <option value="auto">Auto</option>
+              <option value="memory">Memory</option>
+              <option value="dbc">DBC</option>
+            </select>
+          </label>
         )}
         {cursorA && cursorB && (
           <span
