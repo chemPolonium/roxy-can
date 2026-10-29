@@ -4839,7 +4839,7 @@ impl BusCore {
         self.model_can_decoded(frame, false)
     }
 
-    fn model_signal_decoded(
+    pub(crate) fn model_signal_decoded(
         comm: &crate::model::Comm,
         value: crate::model::DecodedSignal,
     ) -> Option<crate::dbc::DecodedSignal> {

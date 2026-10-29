@@ -611,6 +611,7 @@ pub fn export_signals_csv(opts: &ExportOpts) -> Result<String, String> {
     // say so rather than let the frame count speak for itself.
     let mut fr_skipped = 0u64;
     let mut batch: Vec<crate::trace::FrRow> = Vec::new();
+    let mut cache = ModelCache::default();
 
     loop {
         let can_head = stream.peek_t();
@@ -626,12 +627,13 @@ pub fn export_signals_csv(opts: &ExportOpts) -> Result<String, String> {
             (Some(_), None) => {
                 let Some(f) = stream.next_frame() else { break };
                 can_frames += 1;
-                emit_can(&dbc, &f, &mut w, &write_line, &mut rows)?;
+                emit_can(&dbc, &mut cache, &f, &mut w, &write_line, &mut rows)?;
             }
             (None, Some(ft)) => {
                 stream.poll_fr_rows(ft, &mut batch);
                 emit_fr_batch(
                     &fr_dbs,
+                    &mut cache,
                     &mut batch,
                     &mut w,
                     &write_line,
@@ -644,11 +646,12 @@ pub fn export_signals_csv(opts: &ExportOpts) -> Result<String, String> {
                 if ct <= ft {
                     let Some(f) = stream.next_frame() else { break };
                     can_frames += 1;
-                    emit_can(&dbc, &f, &mut w, &write_line, &mut rows)?;
+                    emit_can(&dbc, &mut cache, &f, &mut w, &write_line, &mut rows)?;
                 } else {
                     stream.poll_fr_rows(ft, &mut batch);
                     emit_fr_batch(
                         &fr_dbs,
+                        &mut cache,
                         &mut batch,
                         &mut w,
                         &write_line,
@@ -672,11 +675,119 @@ pub fn export_signals_csv(opts: &ExportOpts) -> Result<String, String> {
     ))
 }
 
+type Model = (
+    std::sync::Arc<crate::model::Comm>,
+    std::sync::Arc<crate::model::PlanCache>,
+);
+
+/// Per-bus model plans for the export walk: the DBC/FIBEX tables are only
+/// readers' input, and the CSV's values come from the same plans the GUI
+/// decodes with.
+#[derive(Default)]
+struct ModelCache {
+    can: std::collections::HashMap<u8, Model>,
+    fr: std::collections::HashMap<u8, Model>,
+}
+
+fn can_model(cache: &mut ModelCache, db: &crate::dbc::SymbolTable, ch: u8) -> Model {
+    cache
+        .can
+        .entry(ch)
+        .or_insert_with(|| {
+            let mut ids = crate::model::ElementIds::new();
+            let outcome = crate::model::import_symbol_table(
+                db,
+                &format!("CAN{ch}"),
+                crate::model::ClusterId(u32::from(ch) + 1),
+                &crate::model::ClusterSource::Dbc {
+                    path: String::new(),
+                },
+                &mut ids,
+                500,
+                2000,
+            );
+            let (plans, _) = crate::model::PlanCache::build(&outcome.comm, 1);
+            (
+                std::sync::Arc::new(outcome.comm),
+                std::sync::Arc::new(plans),
+            )
+        })
+        .clone()
+}
+
+fn can_signals(
+    cache: &mut ModelCache,
+    db: &crate::dbc::SymbolTable,
+    f: &crate::can::frame::CanFrame,
+) -> Vec<crate::dbc::DecodedSignal> {
+    let (comm, plans) = can_model(cache, db, f.channel);
+    let cluster = crate::model::ClusterId(u32::from(f.channel) + 1);
+    let frame = comm.frames_in_cluster(cluster).find(|frame| {
+        matches!(
+            frame.address,
+            crate::model::FrameAddress::Can {
+                id,
+                extended,
+                ..
+            } if id == f.id && extended == f.extended
+        )
+    });
+    let Some(frame) = frame else {
+        return Vec::new();
+    };
+    let Some(plan) = plans.get(frame.id) else {
+        return Vec::new();
+    };
+    crate::model::decode_payload(&comm, plan, &f.data[..f.len as usize])
+        .into_iter()
+        .filter_map(|value| crate::bus::BusCore::model_signal_decoded(&comm, value))
+        .collect()
+}
+
+fn fr_signals(
+    cache: &mut ModelCache,
+    db: &crate::fr_db::FrDb,
+    bus: u8,
+    frame_ix: usize,
+    payload: &[u8],
+) -> Vec<crate::dbc::DecodedSignal> {
+    let model = cache.fr.entry(bus).or_insert_with(|| {
+        let mut ids = crate::model::ElementIds::new();
+        let outcome = crate::model::import_fr_db(
+            db,
+            &format!("FR{bus}"),
+            crate::model::ClusterId(1000 + u32::from(bus)),
+            &crate::model::ClusterSource::Manual,
+            &mut ids,
+        );
+        let (plans, _) = crate::model::PlanCache::build(&outcome.comm, 1);
+        (
+            std::sync::Arc::new(outcome.comm),
+            std::sync::Arc::new(plans),
+        )
+    });
+    let Some(name) = db.frame_index(frame_ix).map(|frame| frame.name.clone()) else {
+        return Vec::new();
+    };
+    let cluster = crate::model::ClusterId(1000 + u32::from(bus));
+    let Some(frame) = model.0.frame_by_name(cluster, &name) else {
+        return Vec::new();
+    };
+    let Some(plan) = model.1.get(frame.id) else {
+        return Vec::new();
+    };
+    crate::model::decode_payload(&model.0, plan, payload)
+        .into_iter()
+        .filter_map(|value| crate::bus::BusCore::model_signal_decoded(&model.0, value))
+        .collect()
+}
+
 /// Writes one CAN frame's decoded signals to CSV through the merged DBC and
 /// counts the rows. A frame whose message the DBC does not name is consumed
 /// silently -- there is nothing to decode it against.
 fn emit_can(
     dbc: &Option<crate::dbc::SymbolTable>,
+    cache: &mut ModelCache,
     f: &crate::can::frame::CanFrame,
     w: &mut std::io::BufWriter<std::fs::File>,
     write_line: &impl Fn(&mut std::io::BufWriter<std::fs::File>, String) -> Result<(), String>,
@@ -689,7 +800,7 @@ fn emit_can(
         .message_name_of((f.id, f.extended))
         .map(str::to_string)
         .unwrap_or_else(|| format!("{:X}", f.id));
-    for d in db.decode_signals(f) {
+    for d in can_signals(cache, db, f) {
         *rows += 1;
         write_line(
             w,
@@ -715,8 +826,10 @@ fn emit_can(
 /// description resolves no frame for its slot: there is nothing to decode it
 /// against, and a silent half export of a two-cluster log reads as a complete
 /// one.
+#[allow(clippy::too_many_arguments)]
 fn emit_fr_batch(
     fr_dbs: &std::collections::BTreeMap<u8, crate::fr_db::FrDb>,
+    cache: &mut ModelCache,
     batch: &mut Vec<crate::trace::FrRow>,
     w: &mut std::io::BufWriter<std::fs::File>,
     write_line: &impl Fn(&mut std::io::BufWriter<std::fs::File>, String) -> Result<(), String>,
@@ -755,7 +868,7 @@ fn emit_fr_batch(
                 _ => "",
             }
         );
-        for d in db.decode_signals(frame_ix, &row.payload) {
+        for d in fr_signals(cache, db, row.bus, frame_ix, &row.payload) {
             *rows += 1;
             write_line(
                 w,
