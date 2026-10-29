@@ -31,7 +31,7 @@ Rate/Signals/Monitor/Data/State 标签页、下栏 Statistics/Bus/Spec/Write，
 - **回放块**：依附于 DBC 节点——把该节点录制过的日志按 id 过滤后重新发到仿真总线上，按录制间距发送，仿真 restbus 的落地方案。
 - **仿真节点**：类 CAPL 的小语言编译执行，`on start` / `on message` / `on fr slot` / `on timer` / `on errorFrame` 事件驱动，读写 DBC 信号、收发帧、随机与波形内建。`frame(Bus.Frame)` 可创建多个独立帧实例，写物理信号字段后用 `send_frame` 一次发一帧（CAN 走节点总线，FR/ETH 只进本会话）。每个回调有指令预算，有缺陷的脚本不会卡住总线，出错节点自动停止运行。可绑定到 DBC 节点，绑定后能否发送由该节点的角色决定。编辑器三栏：处理器大纲、静态收发事实表、函数与报文速插。语言参考见 [docs/script_language.md](docs/script_language.md)，可运行示例见 `examples/`。
 - **派生信号**：脚本 `emit_value("名", 表达式)` 一行发布，像数据库信号一样进 Signals / Data / State Tracker。
-- **系统变量**：CANoe 式的命名空间变量（初值 / 界限 / 单位 / 备注），专用窗口管理，脚本读写，同时发布为可观测流；每次测量开始复位为初值。
+- **变量**：**Variables…** 窗口分 **System variables**（CANoe 式命名空间变量：初值 / 界限 / 单位 / 备注，脚本读写，每次测量开始复位）与 **Computed channels**（全局表达式派生通道，引用整个 catalog 与已有计算通道，可用 `[CAN1:signal]` 消歧）；两者都随工程保存并发布为可观测流，计算通道同时进入曲线、Monitor/Data/State、Triggers 与脚本 `derived("Name")`。
 - **Monitor 监控面板**：轻量纯文本行，一行一个信号，行内阈值着色规则让"温度超 90 变红"这类告警一眼可见。
 - **State Tracker**：对订阅信号的历史做状态分段——枚举标签、二进制方波、会话稳定配色，支持自定义区间与固定颜色，短区段按最短显示时长合并，区段表可导出 CSV。
 - **Write 窗口**：整系统一条滚动输出——节点 `print`、装配层检查与告警、节点停止的错误、命令事件分色带时间戳；可按类别过滤、导出文本。
@@ -82,7 +82,7 @@ cargo run -- --web --replay <path.asc|blf>      # 载入并开始回放
 **Rate / Signals / Monitor / Data / State**，下栏
 **Statistics / Bus / Spec / Write**。**Session…** 切换工程/回放（文件可在浏览器里选）；
 **Buses…** 管总线、DBC/FIBEX/ARXML、通道与节点角色；**Generator… / Triggers… /
-SysVars…** 编辑发送条目、触发器与系统变量；**Scripts…** 编辑、调试并运行节点脚本
+Variables…** 编辑发送条目、触发器、系统变量与计算通道；**Scripts…** 编辑、调试并运行节点脚本
 （行断点、局部/全局变量、`on stop` + `test()` 结果）；**Export…** 导出 ASC/PCAP 与
 各表 CSV。回放载入后出现第二工具栏（播放头、Speed、Step、Play for/to）。信号选择
 覆盖 CAN、FlexRay 与 Ethernet，Monitor/Data/State 行与曲线选择随工程保存；硬件挂载
@@ -92,7 +92,7 @@ SysVars…** 编辑发送条目、触发器与系统变量；**Scripts…** 编�
 
 1. `cargo run` 启动演示仿真（或 **Session…** 载入工程/回放），顶栏 Start/Stop/Pause/Clear 控制测量。
 2. **Buses…** 加载 DBC 或 ARXML、连接 Kvaser/Vector 通道，并把 DBC 节点切成**模拟**或**离线**。
-3. **Generator…** 打开要发的报文并调周期/载荷/**Sources** 波形；**Triggers…** 配条件和动作；**SysVars…** 建变量。
+3. **Generator…** 打开要发的报文并调周期/载荷/**Sources** 波形；**Triggers…** 配条件和动作；**Variables…** 建系统变量或计算通道。
 4. Trace / Messages 看流量与解码；Signals 里勾信号画曲线，**Read** 只订阅读数。
 5. 顶栏切到 **Panel**，Edit 下用 **+ Add** 摆控件（Button/Value/Bar/Gauge/Lamp/Toggle/Setpoint），Done 后直接操作；页面可 Export/Import `.rxpanel`。
 6. 下栏 **Statistics / Bus / Spec / Write** 看计量、负载、规格对账与日志。

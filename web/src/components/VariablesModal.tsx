@@ -1,5 +1,7 @@
 import { useEffect, useState } from "preact/hooks";
 import type { SysVar } from "../types";
+import type { DerivedDef, DerivedReference } from "../derived";
+import { DerivedPanel } from "./DerivedPanel";
 
 export interface SysVarEdit {
   namespace: string;
@@ -18,6 +20,12 @@ interface Props {
   onSetValue: (namespace: string, name: string, value: number) => void;
   onDefine: (edit: SysVarEdit) => void;
   onDelete: (namespace: string, name: string) => void;
+  derived: DerivedDef[];
+  derivedRefs: DerivedReference[];
+  onAddDerived: (definition: DerivedDef) => void;
+  onRemoveDerived: (id: string) => void;
+  onRuleDerived?: (definition: DerivedDef) => void;
+  initialTab?: "values" | "computed";
   onClose: () => void;
 }
 
@@ -150,14 +158,21 @@ function ValueInput({
   );
 }
 
-export function SysVarsModal({
+export function VariablesModal({
   vars,
   onSetValue,
   onDefine,
   onDelete,
+  derived,
+  derivedRefs,
+  onAddDerived,
+  onRemoveDerived,
+  onRuleDerived,
+  initialTab = "values",
   onClose,
 }: Props) {
   const [draft, setDraft] = useState<Draft | null>(null);
+  const [tab, setTab] = useState<"values" | "computed">(initialTab);
   const checked = draft ? validate(draft) : null;
 
   useEffect(() => {
@@ -185,19 +200,52 @@ export function SysVarsModal({
         class="sysvars-modal"
         role="dialog"
         aria-modal="true"
-        aria-label="System Variables"
+        aria-label="Variables"
         onMouseDown={(event) => event.stopPropagation()}
       >
         <header class="modal-head">
-          <h2>System Variables</h2>
+          <h2>Variables</h2>
           <div class="picker-head-right">
-            <span>{vars.length} variables</span>
+            <span>
+              {vars.length} values · {derived.length} computed
+            </span>
             <button type="button" onClick={onClose}>
               Close
             </button>
           </div>
         </header>
 
+        <div class="variables-tabs" role="tablist">
+          <button
+            type="button"
+            role="tab"
+            aria-selected={tab === "values"}
+            class={tab === "values" ? "on" : ""}
+            onClick={() => setTab("values")}
+          >
+            System variables
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={tab === "computed"}
+            class={tab === "computed" ? "on" : ""}
+            onClick={() => setTab("computed")}
+          >
+            Computed channels
+          </button>
+        </div>
+
+        {tab === "computed" ? (
+          <DerivedPanel
+            defs={derived}
+            references={derivedRefs}
+            onSave={onAddDerived}
+            onRemove={onRemoveDerived}
+            onRule={onRuleDerived}
+          />
+        ) : (
+          <>
         <div class="sv-tools">
           <button type="button" onClick={() => setDraft(newDraft())}>
             + Variable
@@ -358,6 +406,8 @@ export function SysVarsModal({
             </div>
           )}
         </div>
+          </>
+        )}
       </div>
     </div>
   );

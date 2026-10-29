@@ -2965,6 +2965,43 @@ body.row-resizing {
   font-style: normal;
 }
 
+.picker-computed h4 {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.picker-derived-row {
+  display: grid;
+  grid-template-columns: minmax(0, 160px) minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 8px;
+  border-bottom: 1px solid var(--line-soft);
+  font-size: 10.5px;
+}
+
+.picker-derived-row span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.picker-derived-row code {
+  overflow: hidden;
+  color: var(--muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.picker-derived-row small {
+  color: var(--muted);
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
 .picker-signal {
   display: flex;
   align-items: center;
@@ -6176,6 +6213,43 @@ button.danger:hover:not(:disabled) {
   border: 1px solid #2b3542;
   border-radius: 6px;
   box-shadow: 0 20px 60px rgb(0 0 0 / 55%);
+}
+
+.variables-tabs {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 2px;
+  padding: 6px 12px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.variables-tabs button {
+  padding: 5px 10px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: 10.5px;
+}
+
+.variables-tabs button:hover:not(:disabled) {
+  background: transparent;
+  color: inherit;
+}
+
+.variables-tabs button.on {
+  border-bottom-color: var(--accent);
+  color: inherit;
+}
+
+.derived-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 0;
+  overflow: auto;
+  padding: 12px;
 }
 
 .sv-tools {

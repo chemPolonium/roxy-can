@@ -1254,10 +1254,10 @@ export function SignalChart({
         {onOpenDerived && (
           <button
             type="button"
-            title="Create a math channel from the selected signals"
+            title="Manage computed channels in the Variables window"
             onClick={onOpenDerived}
           >
-            Derived…
+            Channels…
           </button>
         )}
         {onOpenReference && (

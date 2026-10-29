@@ -192,11 +192,20 @@ function collectRefs(node: Node, out: Set<string>) {
   }
 }
 
-function resolveRefs(
+/// The minimum an expression needs to resolve a `[reference]`: a stable key,
+/// a display name and the bus label used in `[Bus:name]`. Chart lanes and
+/// catalog entries both satisfy this.
+export interface DerivedReference {
+  key: string;
+  name: string;
+  bus: string;
+}
+
+function resolveRefs<T extends DerivedReference>(
   names: Set<string>,
-  series: SignalSeries[],
-): { refs: Map<string, SignalSeries>; error?: string } {
-  const refs = new Map<string, SignalSeries>();
+  series: T[],
+): { refs: Map<string, T>; error?: string } {
+  const refs = new Map<string, T>();
   for (const name of names) {
     const exact = series.filter(
       (signal) =>
@@ -322,7 +331,7 @@ function invalidCall(node: Node): string | null {
 
 export function validateDerivedExpression(
   expression: string,
-  series: SignalSeries[],
+  series: DerivedReference[],
 ): string | null {
   try {
     const ast = new Parser(tokenize(expression)).parse();
@@ -344,7 +353,7 @@ export function validateDerivedExpression(
 /// same-named signal on another bus cannot turn a working lane ambiguous.
 export function resolveDerivedSources(
   expression: string,
-  series: SignalSeries[],
+  series: DerivedReference[],
 ): DerivedSource[] {
   try {
     const ast = new Parser(tokenize(expression)).parse();

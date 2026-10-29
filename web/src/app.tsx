@@ -35,12 +35,12 @@ import { CommandPalette } from "./components/CommandPalette";
 import type { PaletteCommand } from "./components/CommandPalette";
 import { DataPanel } from "./components/DataPanel";
 import { DbcExplorer } from "./components/DbcExplorer";
-import { DerivedModal } from "./components/DerivedModal";
 import { EventJumpModal } from "./components/EventJumpModal";
 import {
   buildAlignedCsv,
   resolveDerivedSources,
   type DerivedDef,
+  type DerivedReference,
 } from "./derived";
 import { ExportModal } from "./components/ExportModal";
 import { FilePick } from "./components/FilePick";
@@ -71,8 +71,8 @@ import { ScriptsModal } from "./components/ScriptsModal";
 import { StatePanel } from "./components/StatePanel";
 import { StateRuleModal } from "./components/StateRuleModal";
 import { StatsTable } from "./components/StatsTable";
-import { SysVarsModal } from "./components/SysVarsModal";
-import type { SysVarEdit } from "./components/SysVarsModal";
+import { VariablesModal } from "./components/VariablesModal";
+import type { SysVarEdit } from "./components/VariablesModal";
 import { TimeJump } from "./components/TimeJump";
 import { TraceTable } from "./components/TraceTable";
 import type { TraceJump } from "./components/TraceTable";
@@ -446,7 +446,9 @@ export function App() {
   const [reference, setReference] = useState<ReferenceRun | null>(null);
   const [referenceOpen, setReferenceOpen] = useState(false);
   const [derivedDefs, setDerivedDefs] = useState<DerivedDef[]>([]);
-  const [derivedOpen, setDerivedOpen] = useState(false);
+  const [variablesTab, setVariablesTab] = useState<"values" | "computed">(
+    "values",
+  );
   const [derivedRule, setDerivedRule] = useState<DerivedDef | null>(null);
   const [eventOpen, setEventOpen] = useState(false);
   const [workspaceHydrated, setWorkspaceHydrated] = useState(false);
@@ -545,6 +547,32 @@ export function App() {
     if (!state) return;
     setDerivedDefs(state.derived ?? []);
   }, [derivedSignature, state?.workspaceRev]);
+
+  // Everything a computed expression may reference: the whole catalog plus
+  // the computed channels already defined. This is independent of what the
+  // Signals tab happens to plot.
+  const derivedReferences = useMemo<DerivedReference[]>(() => {
+    const refs: DerivedReference[] = [];
+    for (const channel of catalog?.channels ?? []) {
+      for (const message of channel.messages) {
+        for (const signal of message.signals) {
+          refs.push({
+            key: signal.key,
+            name: signal.name,
+            bus: channel.name,
+          });
+        }
+      }
+    }
+    for (const definition of derivedDefs) {
+      refs.push({
+        key: `derived:${definition.id}`,
+        name: definition.name,
+        bus: "derived",
+      });
+    }
+    return refs;
+  }, [catalog, derivedDefs]);
 
   // Keep the backend copy warm so a save carries the current tabs, cursors,
   // splitters and Trace columns.
@@ -910,7 +938,7 @@ export function App() {
     // signals on different buses.
     const pinned = defs.map((definition) => ({
       ...definition,
-      sources: resolveDerivedSources(definition.expression, signals),
+      sources: resolveDerivedSources(definition.expression, derivedReferences),
     }));
     void run({ type: "set_derived", defs: pinned });
   };
@@ -1358,6 +1386,13 @@ export function App() {
     if (scriptsOpen && !catalog && !catalogLoading) void loadCatalog();
   }, [scriptsOpen, catalog, catalogLoading]);
 
+  // Computed expressions reference the whole catalog, not just plotted lanes.
+  useEffect(() => {
+    if (sysvarsOpen && !catalog && !catalogLoading) {
+      void loadCatalog();
+    }
+  }, [sysvarsOpen, catalog, catalogLoading]);
+
   // Panel setpoints pick from the catalog's writable signals.
   useEffect(() => {
     if (mainView === "panel" && !catalog && !catalogLoading) void loadCatalog();
@@ -1405,7 +1440,7 @@ export function App() {
     void loadCatalog();
   };
 
-  const openSysvars = () => {
+  const openVariables = (tab: "values" | "computed" = "values") => {
     setSessionOpen(false);
     setScriptsOpen(false);
     setBusesOpen(false);
@@ -1415,6 +1450,7 @@ export function App() {
     setStatePickerOpen(false);
     setGeneratorOpen(false);
     setTriggersOpen(false);
+    setVariablesTab(tab);
     setSysvarsOpen(true);
   };
 
@@ -2009,11 +2045,11 @@ export function App() {
       run: openTriggers,
     },
     {
-      id: "open-sysvars",
-      label: "Open SysVars…",
+      id: "open-variables",
+      label: "Open Variables…",
       group: "Open",
-      hint: "System variable definitions and values",
-      run: openSysvars,
+      hint: "System values and computed channels",
+      run: () => openVariables(),
     },
     {
       id: "open-scripts",
@@ -2051,7 +2087,7 @@ export function App() {
       label: "New derived signal…",
       group: "Signals",
       hint: "Math channel over the selected signals",
-      run: () => setDerivedOpen(true),
+      run: () => openVariables("computed"),
     },
     {
       id: "signal-event",
@@ -2294,7 +2330,7 @@ export function App() {
           paused={state?.tracePaused ?? false}
           reference={reference}
           onOpenReference={() => setReferenceOpen(true)}
-          onOpenDerived={() => setDerivedOpen(true)}
+          onOpenDerived={() => openVariables("computed")}
           overlay={signalOverlay}
           onToggleOverlay={() => setSignalOverlay((value) => !value)}
           yModes={chartYModes}
@@ -2792,9 +2828,9 @@ export function App() {
           <button
             type="button"
             disabled={!online}
-            onClick={openSysvars}
+            onClick={() => openVariables()}
           >
-            SysVars…
+            Variables…
           </button>
           <button type="button" disabled={!online} onClick={openSession}>
             Session…
@@ -3481,7 +3517,7 @@ export function App() {
                   paused={state?.tracePaused ?? false}
                   reference={reference}
                   onOpenReference={() => setReferenceOpen(true)}
-                  onOpenDerived={() => setDerivedOpen(true)}
+                  onOpenDerived={() => openVariables("computed")}
                   overlay={signalOverlay}
                   onToggleOverlay={() => setSignalOverlay((value) => !value)}
                   yModes={chartYModes}
@@ -3954,7 +3990,7 @@ export function App() {
       )}
 
       {sysvarsOpen && (
-        <SysVarsModal
+        <VariablesModal
           vars={state?.sysvars ?? []}
           onSetValue={(namespace, name, value) =>
             void run({ type: "set_sys_var", namespace, name, value })
@@ -3963,6 +3999,20 @@ export function App() {
           onDelete={(namespace, name) =>
             void run({ type: "delete_sys_var", namespace, name })
           }
+          derived={derivedDefs}
+          derivedRefs={derivedReferences}
+          onAddDerived={(definition) => {
+            saveDerived([...derivedDefs, definition]);
+            showToast(`Computed ${definition.name} added`);
+          }}
+          onRemoveDerived={(id) =>
+            saveDerived(derivedDefs.filter((definition) => definition.id !== id))
+          }
+          onRuleDerived={(definition) => {
+            setSysvarsOpen(false);
+            setDerivedRule(definition);
+          }}
+          initialTab={variablesTab}
           onClose={() => setSysvarsOpen(false)}
         />
       )}
@@ -3979,6 +4029,11 @@ export function App() {
           onToggle={toggleSignal}
           onReadToggle={toggleReadSignal}
           onCopyTo={copyChartSelection}
+          derived={derivedDefs}
+          onManageDerived={() => {
+            setPickerOpen(false);
+            openVariables("computed");
+          }}
           onClose={() => setPickerOpen(false)}
         />
       )}
@@ -4519,24 +4574,6 @@ export function App() {
           nowS={chartCenterS}
           onJump={(time) => viewTimeUs(Math.round(time * 1e6))}
           onClose={() => setEventOpen(false)}
-        />
-      )}
-      {derivedOpen && (
-        <DerivedModal
-          defs={derivedDefs}
-          series={signals}
-          onSave={(definition) => {
-            saveDerived([...derivedDefs, definition]);
-            showToast(`Derived ${definition.name} added`);
-          }}
-          onRemove={(id) =>
-            saveDerived(derivedDefs.filter((definition) => definition.id !== id))
-          }
-          onRule={(definition) => {
-            setDerivedOpen(false);
-            setDerivedRule(definition);
-          }}
-          onClose={() => setDerivedOpen(false)}
         />
       )}
       {referenceOpen && (

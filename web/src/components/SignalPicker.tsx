@@ -5,6 +5,7 @@ import type {
   CatalogMessage,
   CatalogSignal,
 } from "../types";
+import type { DerivedDef } from "../derived";
 
 interface Props {
   catalog: Catalog | null;
@@ -29,6 +30,8 @@ interface Props {
     on: boolean,
   ) => void;
   onCopyTo?: (target: "monitor" | "data" | "state") => void;
+  derived?: DerivedDef[];
+  onManageDerived?: () => void;
   onClose: () => void;
 }
 
@@ -51,6 +54,8 @@ export function SignalPicker({
   onToggle,
   onReadToggle,
   onCopyTo,
+  derived = [],
+  onManageDerived,
   onClose,
 }: Props) {
   const [query, setQuery] = useState("");
@@ -91,6 +96,16 @@ export function SignalPicker({
       })
       .filter((group) => group.messages.length > 0);
   }, [catalog, query, kinds]);
+
+  const computed = useMemo(() => {
+    const needle = query.trim().toLowerCase();
+    return derived.filter(
+      (definition) =>
+        !needle ||
+        definition.name.toLowerCase().includes(needle) ||
+        definition.expression.toLowerCase().includes(needle),
+    );
+  }, [derived, query]);
 
   return (
     <div class="modal-backdrop" onMouseDown={onClose}>
@@ -137,7 +152,7 @@ export function SignalPicker({
               <span>{error}</span>
             </div>
           )}
-          {!loading && !error && groups.length === 0 && (
+          {!loading && !error && groups.length === 0 && computed.length === 0 && (
             <div class="empty">
               <strong>{query ? "No matching signals" : "No signals available"}</strong>
               <span>
@@ -262,6 +277,29 @@ export function SignalPicker({
                 ))}
               </section>
             ))}
+          {!loading && !error && computed.length > 0 && (
+            <section class="picker-channel picker-computed">
+              <h4>
+                Computed
+                {onManageDerived && (
+                  <button
+                    type="button"
+                    class="mini"
+                    onClick={onManageDerived}
+                  >
+                    Manage…
+                  </button>
+                )}
+              </h4>
+              {computed.map((definition) => (
+                <div class="picker-derived-row" key={definition.id}>
+                  <span>{definition.name}</span>
+                  <code>{definition.expression}</code>
+                  <small>plotted</small>
+                </div>
+              ))}
+            </section>
+          )}
         </div>
         {onCopyTo && (
           <div class="picker-copy">

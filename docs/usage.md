@@ -183,12 +183,15 @@ roxy-can -h                               完整帮助
 - 每行可开一条阈值规则（`>=` 或 `<=` 时整行换色），行内改阈值、切方向、点色号换色。
 - 行随工程保存（键、标签、小数位、规则全部写入工程）；Clear 清空，单行 `x` 删除。
 
-## 系统变量
+## Variables（系统变量与计算通道）
 
-- **SysVars…**：CANoe 式命名空间变量。表里列 namespace、name、实时值（行内可改）、Init、Min、Max、单位/备注。定义随工程保存。
+- **Variables…**（原 SysVars…）：全局变量窗口，两个页签——**System variables** 与 **Computed channels**。定义都随工程保存，不依赖 Signals 页签当前画了什么。
+- **System variables**：CANoe 式命名空间变量。表里列 namespace、name、实时值（行内可改）、Init、Min、Max、单位/备注。
+- **Computed channels**：表达式派生通道（`[signal]`、`[CAN1:signal]` 或已有计算通道），参考列表来自整个 catalog 加已有计算通道；同名的不同总线信号在建议里显示为 `CAN1:...` / `CAN2:...`，表达式必须用带总线前缀的形式。State 色段仍在同一页编辑。
+- Signals 选择器的 **Computed** 分组列出已有计算通道，**Manage…** 回到 Variables 的 Computed 页；曲线工具栏 **Channels…** 也是同一入口。
 - 脚本用 `sys_get("ns::name")` / `sys_set("ns::name", v)` 读写系统变量；信号用 `报文名.信号名`（非标识符名字用 `报文名["信号 名"]`）读取。写入被夹在界限内；引用未定义的变量/报文/信号在节点启动时报出来。
-- 每个变量发布为一条可观测流，信号树里按 namespace 分组。
-- 每次开始测量所有变量回到声明的初值。值为数值型；改名 = 删旧 + 建新，脚本引用不会自动跟随。
+- 每个系统变量发布为一条可观测流，信号树里按 namespace 分组；计算通道同样进入曲线、Monitor/Data/State、Triggers 与脚本 `derived("Name")`。
+- 每次开始测量所有系统变量回到声明的初值。值为数值型；改名 = 删旧 + 建新，脚本引用不会自动跟随。
 
 ## Write 窗口
 
