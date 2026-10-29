@@ -2654,12 +2654,10 @@ impl BusCore {
                 db.frame_index(i)
                     .map(|f| (db, i, f.triggering.slot_id as u16))
             });
-            if let Some((db, frame_ix, slot)) = decoded {
+            if let Some((_, frame_ix, slot)) = decoded {
                 let stride = self.applied_stride_us;
                 let t_us = row.t_us;
-                let values = self
-                    .model_fr_values(&row, frame_ix)
-                    .unwrap_or_else(|| db.decode_signals(frame_ix, &row.payload));
+                let values = self.model_fr_values(&row, frame_ix).unwrap_or_default();
                 for d in values {
                     let key = crate::app::fr_signal_key(row.bus, slot, &d.name);
                     let Some(entry) = self.subs.get_mut(&key) else {
@@ -3351,9 +3349,6 @@ impl BusCore {
             let Some(input) = inputs.get_mut(&ch) else {
                 continue;
             };
-            let Some(db) = self.channel_dbc(ch) else {
-                continue;
-            };
             let f = CanFrame {
                 t_us: agg.last_t_us,
                 channel: ch,
@@ -3364,9 +3359,7 @@ impl BusCore {
                 dir: agg.dir,
                 flags: agg.flags,
             };
-            let decoded = self
-                .model_can_decoded(&f, false)
-                .unwrap_or_else(|| db.decode_signals(&f));
+            let decoded = self.model_can_decoded(&f, false).unwrap_or_default();
             for d in decoded {
                 input.signals.insert((id, d.name), d.phys);
             }
@@ -3381,9 +3374,6 @@ impl BusCore {
         // branch above already does over its own aggregates.
         if !inputs.is_empty() {
             for ((bus, slot, occupant), agg) in &self.fr_aggs {
-                let Some(db) = self.fr_dbs.get(bus) else {
-                    continue;
-                };
                 let Some(frame_ix) = occupant.frame_ix() else {
                     continue;
                 };
@@ -3400,7 +3390,7 @@ impl BusCore {
                 };
                 let decoded = self
                     .model_fr_decoded(&row, frame_ix, false)
-                    .unwrap_or_else(|| db.decode_signals(frame_ix, &agg.payload));
+                    .unwrap_or_default();
                 for d in decoded {
                     let key = (*bus, *slot, d.name);
                     for input in inputs.values_mut() {
@@ -3749,13 +3739,7 @@ impl BusCore {
             let decoded = agg
                 .occupant
                 .frame_ix()
-                .and_then(|ix| {
-                    self.model_fr_decoded(&row, ix, false).or_else(|| {
-                        self.fr_dbs
-                            .get(bus)
-                            .map(|db| db.decode_signals(ix, &agg.payload))
-                    })
-                })
+                .and_then(|ix| self.model_fr_decoded(&row, ix, false))
                 .unwrap_or_default();
             out.insert(
                 key,
@@ -7679,7 +7663,7 @@ impl BusCore {
                             .frame_ix_at(row.slot, row.cycle, row.ab)
                             .and_then(|frame_ix| {
                                 self.model_fr_decoded(row, frame_ix, false)
-                                    .unwrap_or_else(|| db.decode_signals(frame_ix, &row.payload))
+                                    .unwrap_or_default()
                                     .into_iter()
                                     .find(|d| d.name == *signal)
                             }) {
@@ -8412,6 +8396,7 @@ mod tests {
             0,
             fr_db_one_signal_on(12, "Speed", "km/h", crate::fr_db::FrChannel::A),
         );
+        core.rebuild_fr_models();
         let key = crate::app::fr_signal_key(0, 12, "Speed");
         core.subscribe_signal(key.clone());
 
@@ -8505,6 +8490,7 @@ mod tests {
     fn flexray_frames_fold_signals_into_subscriptions() {
         let mut core = BusCore::new(Vec::new());
         core.fr_dbs.insert(0, fr_db_one_signal(12, "Speed", "km/h"));
+        core.rebuild_fr_models();
         let key = crate::app::fr_signal_key(0, 12, "Speed");
         core.subscribe_signal(key.clone());
 
@@ -8528,6 +8514,7 @@ mod tests {
     fn a_flexray_signal_crossing_fires_on_the_decoded_value() {
         let mut core = BusCore::new(Vec::new());
         core.fr_dbs.insert(0, fr_db_one_signal(12, "Speed", "km/h"));
+        core.rebuild_fr_models();
         core.triggers.push(crate::trigger::Trigger::new(
             crate::trigger::TriggerCond::FrSignalCross {
                 bus: 0,
@@ -8726,6 +8713,7 @@ mod tests {
         let mut core = BusCore::new(Vec::new());
         core.fr_dbs.insert(0, fr_db_one_signal(12, "Speed", "km/h"));
         core.fr_dbs.insert(1, fr_db_one_signal(12, "Torque", "Nm"));
+        core.rebuild_fr_models();
         let on0 = crate::app::fr_signal_key(0, 12, "Speed");
         let on1 = crate::app::fr_signal_key(1, 12, "Torque");
         // The names that belong to the *other* cluster: subscribing them
