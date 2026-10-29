@@ -261,6 +261,43 @@ impl App {
             }
         }
         project.generators = Some(generators);
+        let mut triggers = Vec::new();
+        for cfg in &config.triggers {
+            let cluster = match cfg.kind {
+                0..=3 => ids
+                    .can
+                    .get(cfg.ch as usize)
+                    .copied()
+                    .map(crate::model::ClusterId),
+                5 | 6 => ids.fr.get(&cfg.ch).copied().map(crate::model::ClusterId),
+                _ => Some(crate::model::ClusterId(0)),
+            };
+            let Some(cluster) = cluster else {
+                continue;
+            };
+            let action_cluster = if cfg.action == 2 {
+                ids.can
+                    .get(cfg.send_ch as usize)
+                    .copied()
+                    .map(crate::model::ClusterId)
+            } else {
+                None
+            };
+            triggers.push(crate::model::TriggerCfgV2 {
+                kind: cfg.kind,
+                cluster: cluster.0,
+                id: cfg.id,
+                signal: cfg.signal.clone(),
+                threshold: cfg.threshold,
+                rising: cfg.rising,
+                extended: cfg.ext,
+                action: cfg.action,
+                action_cluster: action_cluster.map(|id| id.0),
+                action_id: cfg.send_id,
+                enabled: cfg.enabled,
+            });
+        }
+        project.triggers = Some(triggers);
         let written = serde_json::to_string_pretty(&project)
             .map_err(|e| e.to_string())
             .and_then(|j| std::fs::write(&path, j).map_err(|e| e.to_string()));
@@ -382,6 +419,51 @@ impl App {
                         }
                     }
                 }
+            }
+            // v2 trigger rows name their buses by cluster id; the core still
+            // keys rules by 路号, so convert back through the saved map. A
+            // rule whose cluster is gone is dropped rather than pointed at a
+            // different bus.
+            if let Some(triggers) = &project.triggers {
+                let map = project.legacy_bus_map.as_ref();
+                let bus_of = |ids: Option<&Vec<crate::model::ClusterId>>, cluster: u32| {
+                    ids?.iter()
+                        .position(|id| id.0 == cluster)
+                        .map(|bus| bus as u8)
+                };
+                let (can_ids, fr_ids) = map
+                    .map(|m| (Some(&m.can), Some(&m.flexray)))
+                    .unwrap_or((None, None));
+                cfg.triggers = triggers
+                    .iter()
+                    .filter_map(|t| {
+                        let ch = match t.kind {
+                            0..=3 => bus_of(can_ids, t.cluster)?,
+                            5 | 6 => bus_of(fr_ids, t.cluster)?,
+                            _ => 0,
+                        };
+                        let send_ch = if t.action == 2 {
+                            t.action_cluster
+                                .and_then(|cluster| bus_of(can_ids, cluster))
+                                .unwrap_or(0)
+                        } else {
+                            0
+                        };
+                        Some(crate::config::TriggerCfg {
+                            kind: t.kind,
+                            ch,
+                            id: t.id,
+                            signal: t.signal.clone(),
+                            threshold: t.threshold,
+                            rising: t.rising,
+                            ext: t.extended,
+                            action: t.action,
+                            send_ch,
+                            send_id: t.action_id,
+                            enabled: t.enabled,
+                        })
+                    })
+                    .collect();
             }
             self.reset_to_defaults();
             cfg.resolve_paths(path.parent());

@@ -221,6 +221,34 @@ fn default_cycle() -> u64 {
     100_000
 }
 
+/// One trigger rule with its buses named by cluster id. `kind` keeps the v1
+/// numbering (0 signal crossing … 7 derived) so the condition decoder in
+/// `Config::apply` stays the single interpreter of these rules.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TriggerCfgV2 {
+    pub kind: u8,
+    #[serde(default)]
+    pub cluster: u32,
+    #[serde(default)]
+    pub id: u32,
+    #[serde(default)]
+    pub signal: String,
+    #[serde(default)]
+    pub threshold: f64,
+    #[serde(default)]
+    pub rising: bool,
+    #[serde(default)]
+    pub extended: bool,
+    pub action: u8,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub action_cluster: Option<u32>,
+    #[serde(default)]
+    pub action_id: u32,
+    #[serde(default)]
+    pub enabled: bool,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProjectV2 {
@@ -242,6 +270,10 @@ pub struct ProjectV2 {
     /// is a project that deliberately has no generator entries.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub generators: Option<Vec<GeneratorCfg>>,
+    /// Same rule for trigger rows: `None` predates the section, `Some(empty)`
+    /// is a project with no rules.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub triggers: Option<Vec<TriggerCfgV2>>,
     /// Old bus index → cluster id, kept so the frontend can rewrite its
     /// opaque `web` workspace during the v1→v2 migration.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -263,6 +295,7 @@ impl Default for ProjectV2 {
             frame_overrides: Vec::new(),
             replay: Vec::new(),
             generators: None,
+            triggers: None,
             legacy_bus_map: None,
             rest: serde_json::Map::new(),
         }

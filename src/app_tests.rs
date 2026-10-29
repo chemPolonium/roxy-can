@@ -306,6 +306,18 @@ fn a_project_saves_schema_v2_and_reopens_the_same_cluster_ids() {
         .expect("the new generator row");
     assert!(app.set_tx_hex(row, "11 22 33"), "hex accepted");
     app.set_tx_active(row, true);
+    app.triggers.push(crate::trigger::Trigger::new(
+        crate::trigger::TriggerCond::SignalCross {
+            ch: 1,
+            id: 0x321,
+            ext: false,
+            signal: "EngSpeed".into(),
+            threshold: 12.5,
+            rising: true,
+        },
+        crate::trigger::TriggerAction::Send { ch: 1, id: 0x321 },
+    ));
+    app.refresh_snapshot();
     app.settle();
     assert!(app.save_project(Some(path.clone())), "save writes the file");
 
@@ -336,6 +348,22 @@ fn a_project_saves_schema_v2_and_reopens_the_same_cluster_ids() {
     );
     assert_eq!(saved["dataText"], "11 22 33");
     assert_eq!(saved["active"], true);
+    let rule = value["triggers"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["signal"] == "EngSpeed")
+        .unwrap_or_else(|| panic!("trigger row saved: {}", value["triggers"]));
+    assert_eq!(
+        rule["cluster"], ids.can[1],
+        "the condition names its cluster: {rule}"
+    );
+    assert_eq!(
+        rule["actionCluster"], ids.can[1],
+        "the reaction send names its cluster"
+    );
+    assert_eq!(rule["threshold"], 12.5);
+    assert_eq!(rule["kind"], 0);
 
     let mut restored = App::headless();
     restored.open_project_path(&path);
@@ -353,6 +381,28 @@ fn a_project_saves_schema_v2_and_reopens_the_same_cluster_ids() {
         .expect("the v2 generator row reopens");
     assert_eq!(reopened.data_text, "11 22 33");
     assert!(reopened.active);
+    let rule = restored
+        .snap
+        .triggers
+        .iter()
+        .find(|t| matches!(&t.cond, crate::trigger::TriggerCond::SignalCross { signal, .. } if signal == "EngSpeed"))
+        .expect("the v2 trigger reopens");
+    assert_eq!(
+        rule.cond,
+        crate::trigger::TriggerCond::SignalCross {
+            ch: 1,
+            id: 0x321,
+            ext: false,
+            signal: "EngSpeed".into(),
+            threshold: 12.5,
+            rising: true,
+        },
+        "the cluster id is translated back to its bus"
+    );
+    assert_eq!(
+        rule.action,
+        crate::trigger::TriggerAction::Send { ch: 1, id: 0x321 }
+    );
     assert_eq!(restored.snap.channel_count, app.snap.channel_count);
     assert_eq!(
         restored

@@ -181,6 +181,9 @@ fn rest_from_v1(config: &Config) -> serde_json::Map<String, Value> {
         "eth_buses",
         "can_arxml",
         "eth_frame_length_includes_header",
+        // Now written as typed v2 sections with cluster ids.
+        "triggers",
+        "generators",
     ] {
         object.remove(field);
     }

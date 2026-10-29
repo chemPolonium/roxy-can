@@ -58,7 +58,7 @@ pub use runtime::{DecodedSignal, decode_payload, encode_payload};
 #[allow(unused_imports)]
 pub use schema::{
     CanCfg, ClusterCfg, EtherCfg, FlexRayCfg, FrameOverrideCfg, GeneratorCfg, IdAliasCfg,
-    PROJECT_FORMAT, PROJECT_VERSION, ProjectV2, ReplayCfg,
+    PROJECT_FORMAT, PROJECT_VERSION, ProjectV2, ReplayCfg, TriggerCfgV2,
 };
 
 use serde::{Deserialize, Serialize};

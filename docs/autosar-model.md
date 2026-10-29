@@ -893,7 +893,7 @@ v1 工程在打开时一次性迁移到内存 v2，保存时写 v2；原文件�
 | 4 运行时切换 | 订阅已切 | BusCore 为 CAN/FR/ETH 分配全局 `ClusterId` 并各自构建 `Comm`/`PlanCache`；三类订阅值都走统一展开计划，CAN 复用报文也已按模型 mux 条件解码，三类 Messages 展开行由核心用模型解码后随快照下发；CAN/FR 信号触发器与脚本节点输入改为模型优先，旧解码仅作无模型时回退。`SigKey` 全链路与 Statistics 尚未切换 |
 | 5 发送/硬件/回放 | 首个切片 | Panel 三协议物理值发送、Generator 的 CAN/FR 驱动信号、脚本 `send_frame` 的三协议编码均走统一编码器；回放通道映射以 cluster id 写入 schema v2 并在打开时还原。硬件发送与回放运行时的 cluster 路由未切换 |
 | 6 高级特性执行 | 首个切片 | Multiplexed（ARXML 动态部分 + DBC `mux_when`）、Container 展开、Secured PDU payload 链接、E2E profile 与 SystemSignal/PDU 的结构关联已进模型；`TRANSFORMATION-PROP-SET` 读取 packing byte order。认证仍为 `Unverified`，E2E 校验/Transformation 数值执行与 golden 位级测试未做 |
-| 7 Buses UI 与迁移 | 列表与入口已统一 | `.rxproj` 保存 schema v2 并恢复 ClusterId，generator 行以 `GeneratorCfg` 的 cluster id 写入并在打开时换回路号；Buses 顶部统一 Cluster 表（ID/Kind/Name/Bus/Frames/Source），原 Add bus / Import ARXML / FR / ETH 四个入口收成一个 **Add cluster** 菜单（CAN / ARXML / FlexRay FIBEX / Ethernet ARXML）。每类详情仍按 kind 分卡，v1 视图段真正迁移未完成 |
+| 7 Buses UI 与迁移 | 列表与入口已统一 | `.rxproj` 保存 schema v2 并恢复 ClusterId，generator 与 trigger 行分别以 `GeneratorCfg` / `TriggerCfgV2` 的 cluster id 写入，打开时换回 路号（条件与反应发送都走映射，映射缺失的规则丢弃而不是改指别的路）；Buses 顶部统一 Cluster 表（ID/Kind/Name/Bus/Frames/Source），原 Add bus / Import ARXML / FR / ETH 四个入口收成一个 **Add cluster** 菜单（CAN / ARXML / FlexRay FIBEX / Ethernet ARXML）。每类详情仍按 kind 分卡，v1 视图段真正迁移未完成 |
 | 8 清理与发布 | 未开始 | — |
 
 剩余工作按计划顺序：`SigKey` 全链路与 Statistics 切到统一 key；工程 v2 把窗口/触发器/派生定义从兼容 `config` 段迁成显式段；E2E 校验、Transformation 数值执行与真实多协议/SecOC/E2E 语料；最后删除旧运行时路径与兼容层。当前 ARXML 文档模型已直接进核心，但回放/硬件仍以路号路由，`SigKey` 与前端 `signalRef` 也还没换。
