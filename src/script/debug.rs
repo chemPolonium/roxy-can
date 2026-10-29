@@ -47,6 +47,10 @@ struct Inner {
     step_from: Option<u32>,
     pause_requested: bool,
     paused: bool,
+    /// The VM has built and published locals/stack for the current pause.
+    /// `should_pause` knows the line before the VM snapshot exists, so the
+    /// public view must not claim `paused` until `wait_paused` installs it.
+    view_ready: bool,
     /// A breakpoint on this line already fired; do not fire again until the
     /// line changes.
     skip_line: Option<u32>,
@@ -74,6 +78,7 @@ impl DebugControl {
                 step_from: None,
                 pause_requested: false,
                 paused: false,
+                view_ready: false,
                 skip_line: None,
                 view: DebugView::default(),
                 last_poll: Instant::now(),
@@ -95,7 +100,7 @@ impl DebugControl {
         inner.last_poll = Instant::now();
         inner.view.enabled = inner.enabled;
         inner.view.node = inner.node;
-        inner.view.paused = inner.paused;
+        inner.view.paused = inner.paused && inner.view_ready;
         inner.view.breakpoints = inner.breakpoints.iter().copied().collect();
         inner.view.clone()
     }
@@ -108,6 +113,7 @@ impl DebugControl {
         inner.step_from = None;
         inner.pause_requested = false;
         inner.paused = false;
+        inner.view_ready = false;
         inner.skip_line = None;
         inner.view = DebugView {
             enabled: true,
@@ -139,6 +145,7 @@ impl DebugControl {
     fn resume(&self, step: bool) -> DebugView {
         let mut inner = self.lock();
         inner.paused = false;
+        inner.view_ready = false;
         inner.pause_requested = false;
         inner.step_from = if step { inner.view.line } else { None };
         let view = self.publish(&mut inner);
@@ -150,6 +157,7 @@ impl DebugControl {
         let mut inner = self.lock();
         inner.enabled = false;
         inner.paused = false;
+        inner.view_ready = false;
         inner.pause_requested = false;
         inner.step_from = None;
         inner.skip_line = None;
@@ -190,6 +198,7 @@ impl DebugControl {
         }
         if hit {
             inner.paused = true;
+            inner.view_ready = false;
             inner.skip_line = Some(line);
             inner.view.line = Some(line);
             inner.view.paused = true;
@@ -212,6 +221,7 @@ impl DebugControl {
         view.paused = true;
         view.breakpoints = inner.breakpoints.iter().copied().collect();
         inner.view = view;
+        inner.view_ready = true;
         inner.last_poll = Instant::now();
         while inner.enabled && inner.paused {
             let (next, _) = self
@@ -222,6 +232,7 @@ impl DebugControl {
             if inner.enabled && inner.paused && inner.last_poll.elapsed() > CLIENT_TIMEOUT {
                 inner.enabled = false;
                 inner.paused = false;
+                inner.view_ready = false;
                 inner.view.paused = false;
                 inner.view.note = Some("debugger timed out (no browser poll)".to_string());
                 self.active.store(false, Ordering::Release);
@@ -311,7 +322,12 @@ mod tests {
         control.resume(true);
         assert!(!control.should_pause(id, 2));
         assert!(control.should_pause(id, 3));
-        assert_eq!(control.view().line, Some(3));
+        let pending = control.view();
+        assert_eq!(pending.line, Some(3));
+        assert!(
+            !pending.paused,
+            "a hit is not public until the VM publishes locals and stack"
+        );
         control.stop();
     }
 
