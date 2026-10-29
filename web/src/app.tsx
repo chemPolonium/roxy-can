@@ -1772,6 +1772,40 @@ export function App() {
     );
   };
 
+  const toggleDerivedObserver = (
+    target: "monitor" | "data" | "state",
+    definition: DerivedDef,
+    on: boolean,
+  ) => {
+    const common = {
+      kind: "derived",
+      ch: 0,
+      id: 0,
+      ext: false,
+      frame: definition.id,
+      name: definition.name,
+    };
+    if (target === "monitor") {
+      void run(
+        on
+          ? { type: "add_monitor", ...common }
+          : { type: "remove_monitor", ...common },
+      );
+    } else if (target === "data") {
+      void run(
+        on
+          ? { type: "add_data", ...common }
+          : { type: "remove_data", ...common },
+      );
+    } else {
+      void run(
+        on
+          ? { type: "add_state", ...common }
+          : { type: "remove_state", ...common },
+      );
+    }
+  };
+
   const moveSignal = (key: string, to: number) => {    const from = chartSeries.findIndex((signal) => signal.key === key);
     const target = clamp(to, 0, chartSeries.length - 1);
     if (from < 0 || from === target) return;
@@ -4161,6 +4195,11 @@ export function App() {
           watched={monitorKeys}
           title="Monitor signals"
           kinds={["can", "fr", "eth"]}
+          derived={derivedDefs}
+          derivedToggleLabel="Watch"
+          onDerivedToggle={(definition, on) =>
+            toggleDerivedObserver("monitor", definition, on)
+          }
           onToggle={(channel, message, signal, on) =>
             void run(
               on
@@ -4197,6 +4236,10 @@ export function App() {
           watched={monitorKeys}
           title="Data signals"
           kinds={["can", "fr", "eth"]}
+          derived={derivedDefs}
+          onDerivedToggle={(definition, on) =>
+            toggleDerivedObserver("data", definition, on)
+          }
           onToggle={(channel, message, signal, on) =>
             void run(
               on
@@ -4233,6 +4276,10 @@ export function App() {
           watched={monitorKeys}
           title="State signals"
           kinds={["can", "fr", "eth"]}
+          derived={derivedDefs}
+          onDerivedToggle={(definition, on) =>
+            toggleDerivedObserver("state", definition, on)
+          }
           onToggle={(channel, message, signal, on) =>
             void run(
               on

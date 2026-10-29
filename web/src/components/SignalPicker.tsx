@@ -34,6 +34,9 @@ interface Props {
   onManageDerived?: () => void;
   onDerivedToggle?: (definition: DerivedDef, on: boolean) => void;
   onDerivedReadToggle?: (definition: DerivedDef, on: boolean) => void;
+  /// Label for pickers that only add/remove a computed channel (Monitor /
+  /// Data / State) instead of Plot/Read.
+  derivedToggleLabel?: string;
   onClose: () => void;
 }
 
@@ -60,6 +63,7 @@ export function SignalPicker({
   onManageDerived,
   onDerivedToggle,
   onDerivedReadToggle,
+  derivedToggleLabel = "Add",
   onClose,
 }: Props) {
   const [query, setQuery] = useState("");
@@ -341,6 +345,15 @@ export function SignalPicker({
                           Read
                         </button>
                       </div>
+                    ) : onDerivedToggle ? (
+                      <button
+                        type="button"
+                        class={`mini ${on ? "on" : ""}`}
+                        aria-pressed={on}
+                        onClick={() => onDerivedToggle(definition, !on)}
+                      >
+                        {on ? "Remove" : derivedToggleLabel}
+                      </button>
                     ) : (
                       <small>computed</small>
                     )}

@@ -6972,6 +6972,18 @@ mod tests {
             command_key("eth", 0, 0, false, None, "x".to_string()).is_none(),
             "an Ethernet address without a frame name is incomplete"
         );
+        assert_eq!(
+            command_key(
+                "derived",
+                0,
+                0,
+                false,
+                Some("d1".to_string()),
+                "Double".to_string()
+            ),
+            Some(SigKey::derived("d1", "Double")),
+            "observer rows can address a computed channel by definition id"
+        );
         assert!(command_key("fr", 0, 70_000, false, None, "x".to_string()).is_none());
     }
 
