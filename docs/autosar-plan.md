@@ -17,8 +17,9 @@ CAN/FlexRay/Ethernet 的首选描述来源，DBC/FIBEX 只作为导入适配器�
 > 名与信号数、SignalPicker catalog、Buses 帧数都优先取模型；Container 按头 ID/
 > 长度门控，identity/linear Transformation 执行，SecOC 与 E2E 做结构校验并明确
 > `Unverified`；E2E Profile 1/2 的计数器连续性逐帧统计并进 Messages。窗口/nodes/
-> derived/web 已迁为 typed v2 段。`SigKey` 全链路、窗口 picks 的 cluster 化、
-> 硬件/回放 cluster 路由与旧路径清理仍未完成。逐项状态见 [`docs/autosar-model.md`](autosar-model.md) 第 10 节。
+> derived/web 已迁为 typed v2 段，Trace 手选帧也按 cluster id 保存；生产解码路径
+> （含 Reference 与 CLI 导出）已全部走模型。`SigKey` 全链路、硬件/回放 cluster
+> 路由与旧表结构删除仍未完成。逐项状态见 [`docs/autosar-model.md`](autosar-model.md) 第 10 节。
 
 ## 1. 原则
 
