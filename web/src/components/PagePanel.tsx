@@ -241,9 +241,14 @@ function FrameField({
   };
 
   /// Changing the addressed frame drops physical values: they belong to the
-  /// old signal set.
+  /// old signal set. A manual address is no longer a catalog selection.
   const readdress = (next: PanelFrameSend): boolean =>
-    commit({ ...next, mode: "raw", values: [] });
+    commit({
+      ...next,
+      mode: "raw",
+      values: [],
+      ...(next.protocol === "can" ? { source: "raw" as const } : {}),
+    });
 
   const defaultFor = (kind: "can" | "fr" | "eth"): PanelFrameSend => {
     if (kind === "can") {
@@ -296,7 +301,21 @@ function FrameField({
         return entry.bus === frame.bus && entry.frame === frame.frame;
       })
     : undefined;
-  const physical = frame?.mode === "physical" && frameDef !== undefined;
+  const source =
+    protocol !== "can" ? "catalog" : frameDef ? (frame?.source ?? "catalog") : "raw";
+  const catalogOptions = frameDefs.filter(
+    (entry): entry is PanelFrameDef & { id: number } =>
+      entry.protocol === "can" &&
+      entry.id !== undefined &&
+      entry.bus === (frame?.protocol === "can" ? frame.channel : 0),
+  );
+  const catalogValue =
+    source === "catalog" && frame?.protocol === "can" && frameDef
+      ? `${frame.id}:${frame.extended ? 1 : 0}`
+      : "raw";
+  const modeEnabled =
+    protocol === "can" ? source === "catalog" && frameDef !== undefined : frameDef !== undefined;
+  const physical = modeEnabled && frame?.mode === "physical";
 
   const commitId = () => {
     setEditing(null);
@@ -366,7 +385,9 @@ function FrameField({
 
   const dataHint =
     protocol === "can"
-      ? "Sends once when clicked."
+      ? source === "catalog"
+        ? "Sends once when clicked."
+        : "Raw frame. Pick a defined message to edit physical values."
       : protocol === "fr"
         ? "Session only — the FR port stays receive-only."
         : `Session only — no Ethernet transmit port.${
@@ -414,6 +435,54 @@ function FrameField({
                   {bus.name}
                 </option>
               ))}
+            </select>
+          </label>
+          <label>
+            Message
+            <select
+              value={catalogValue}
+              onFocus={onFocus}
+              onChange={(event) => {
+                const value = (event.target as HTMLSelectElement).value;
+                const current = base();
+                if (current.protocol !== "can") return;
+                if (value === "raw") {
+                  commit({
+                    ...current,
+                    source: "raw",
+                    mode: "raw",
+                    values: [],
+                  });
+                  return;
+                }
+                const [idText, extendedText] = value.split(":");
+                const id = Number(idText);
+                const def = catalogOptions.find(
+                  (entry) =>
+                    entry.id === id &&
+                    Boolean(entry.extended) === (extendedText === "1"),
+                );
+                if (!def) return;
+                commit({
+                  ...current,
+                  source: "catalog",
+                  id,
+                  extended: Boolean(def.extended),
+                  mode: "raw",
+                  values: [],
+                });
+              }}
+            >
+              <option value="raw">Raw frame (manual ID)</option>
+              {catalogOptions.map((entry) => {
+                const key = `${entry.id}:${entry.extended ? 1 : 0}`;
+                const id = `0x${entry.id.toString(16).toUpperCase()}`;
+                return (
+                  <option value={key} key={key}>
+                    {entry.name ? `${id} · ${entry.name}` : id}
+                  </option>
+                );
+              })}
             </select>
           </label>
           <div class="page-frame-row">
@@ -570,7 +639,7 @@ function FrameField({
           </label>
         </>
       )}
-      {frameDef && (
+      {modeEnabled && (
         <label>
           Mode
           <select

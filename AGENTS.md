@@ -15,8 +15,8 @@
   Fullscreen API，画布尺寸保持不变。控件类型先有 Button（**On click** 三选一：
   Write signals / Send message / 脚本动作；Write signals 只应用一组 Signal writes，
   逐项写入并汇总失败；Send message 按一次发一条 CAN/FlexRay/Ethernet 报文
-  （CAN 可发 DBC 外 ID 并进硬件，FR/ETH 只进本会话；命中目录帧时
-  （CAN 按 ID、FR 按槽、ETH 按矩阵帧）可切 Raw / Physical，Physical 按目录
+  （CAN 可发 DBC 外 ID 并进硬件，FR/ETH 只进本会话；CAN 先选 Raw frame
+  或目录报文，目录报文与 FR/ETH 已知帧可切 Raw / Physical，Physical 按目录
   信号物理值编码，未写信号取声明初始值）；
   仿真控制只在顶部工具栏，不再放进面板按钮；脚本动作可带一个数值参数）、Value（只读信号/派生/SysVar，可按升序上限分段染数字颜色）、
   Bar / Gauge（按 min/max 填充，复用同一套色段）、Lamp（源值达到阈值时点亮，

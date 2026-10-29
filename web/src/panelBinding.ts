@@ -38,6 +38,8 @@ export interface PanelFrameDef {
   extended?: boolean;
   slot?: number;
   frame?: string;
+  /// Catalog message/frame name, for the send-message picker.
+  name?: string;
   signals: PanelFrameSignal[];
 }
 

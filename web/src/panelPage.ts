@@ -23,6 +23,9 @@ export type PanelFrameSend = (
   | { protocol: "fr"; bus: number; slot: number; data: string }
   | { protocol: "eth"; bus: number; frame: string; data: string }
 ) & {
+  /// CAN address selector: a manually typed raw frame or a catalog message.
+  /// Missing means the editor infers it from whether the ID matches.
+  source?: "raw" | "catalog";
   /// Raw sends `data`; physical encodes `values` against the catalog frame.
   /// Missing means raw (older pages).
   mode?: "raw" | "physical";
@@ -410,6 +413,10 @@ function normalisePanelFrame(raw: unknown): PanelFrameSend | undefined {
   if (data === null) return undefined;
   const hex = formatPanelHex(data);
   const mode = value.mode === "physical" ? "physical" : "raw";
+  const source =
+    value.source === "raw" || value.source === "catalog"
+      ? value.source
+      : undefined;
   const values = normalisePanelFrameValues(value.values);
   const frame: PanelFrameSend =
     protocol === "can"
@@ -419,6 +426,7 @@ function normalisePanelFrame(raw: unknown): PanelFrameSend | undefined {
           id: Number(value.id),
           extended: Boolean(value.extended),
           data: hex,
+          source,
           mode,
           values,
         }
@@ -428,6 +436,7 @@ function normalisePanelFrame(raw: unknown): PanelFrameSend | undefined {
             bus: Number(value.bus),
             slot: Number(value.slot),
             data: hex,
+            source,
             mode,
             values,
           }
@@ -436,6 +445,7 @@ function normalisePanelFrame(raw: unknown): PanelFrameSend | undefined {
             bus: Number(value.bus),
             frame: text(value.frame, 120),
             data: hex,
+            source,
             mode,
             values,
           };

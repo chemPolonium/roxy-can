@@ -609,6 +609,7 @@ describe("panel page", () => {
             id: 0x100,
             extended: false,
             data: "",
+            source: "catalog",
             mode: "physical",
             values: [{ name: "EngineSpeed", value: 1000 }],
           },
@@ -621,6 +622,7 @@ describe("panel page", () => {
     });
     expect(page?.widgets[0]).toMatchObject({
       frame: {
+        source: "catalog",
         mode: "physical",
         values: [{ name: "EngineSpeed", value: 1000 }],
       },
@@ -628,6 +630,7 @@ describe("panel page", () => {
     const round = importPanelFile(JSON.parse(exportPanelFile(page!)));
     expect("page" in round && round.page.widgets[0]).toMatchObject({
       frame: {
+        source: "catalog",
         mode: "physical",
         values: [{ name: "EngineSpeed", value: 1000 }],
       },

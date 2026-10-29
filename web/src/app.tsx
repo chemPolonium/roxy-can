@@ -2470,6 +2470,7 @@ export function App() {
             bus: channel.index,
             id: message.id,
             extended: message.extended,
+            name: message.name,
             signals: signals(message),
           }));
         }
@@ -2478,6 +2479,7 @@ export function App() {
             protocol: "fr" as const,
             bus: channel.index,
             slot: message.id,
+            name: message.name,
             signals: signals(message),
           }));
         }
@@ -2485,6 +2487,7 @@ export function App() {
           protocol: "eth" as const,
           bus: channel.index,
           frame: message.frame ?? message.name,
+          name: message.frame ?? message.name,
           signals: signals(message),
         }));
       }),
