@@ -4,8 +4,9 @@
 //! triggerings select the frames that belong to it. Signal and PDU definitions
 //! are shared by the whole document, exactly as AUTOSAR states them.
 //!
-//! Advanced PDUs are read into the model now (kinds, selectors, containers,
-//! secured payload refs); executing them belongs to Phase 6.
+//! Advanced PDUs are read into the model (kinds, selectors, containers,
+//! secured payload refs); the decode plan executes mux/container structure
+//! and linear transformations, while E2E authentication stays unverified.
 
 use roxmltree::{Document, Node};
 use std::collections::{BTreeMap, HashMap, HashSet};

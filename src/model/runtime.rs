@@ -1,8 +1,8 @@
 //! Plan-driven decoding and encoding.
 //!
-//! `BusCore` will call these after the Phase 4 switch. They take only a
-//! flattened [`DecodePlan`] and the payload bytes, so the per-frame path never
-//! walks the model tree.
+//! `BusCore` calls these for every subscribed, expanded or generated frame.
+//! They take only a flattened [`DecodePlan`] and the payload bytes, so the
+//! per-frame path never walks the model tree.
 
 use super::*;
 use crate::decode::{extract_raw, from_physical, pack_raw, to_physical};

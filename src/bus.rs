@@ -4444,9 +4444,9 @@ impl BusCore {
     }
 
     /// Rebuilds the unified model and its decode plans for one CAN channel.
-    /// The model is already the source of signal values for ordinary
-    /// (non-multiplexed) frames; a multiplexed DBC message still falls back
-    /// to the legacy decoder until Phase 6 models its selector.
+    /// The model is the source of signal values for every frame it knows,
+    /// including multiplexed DBC messages (`mux_when`) and containers; the
+    /// legacy decoder remains only for a channel whose table has no model.
     fn rebuild_can_model(&mut self, ch: usize) {
         if self.model_comms.len() <= ch {
             self.model_comms.resize(ch + 1, None);
