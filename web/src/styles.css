@@ -2543,30 +2543,6 @@ body.row-resizing {
   color: inherit;
 }
 
-.chart-y-mode {
-  display: flex;
-  align-items: center;
-  gap: 3px;
-  height: 14px;
-  padding: 0 4px;
-  border: 1px solid var(--line);
-  border-radius: 3px;
-  background: var(--panel);
-  color: var(--muted);
-  font-size: 9px;
-  line-height: 12px;
-}
-
-.chart-y-mode select {
-  height: 12px;
-  padding: 0;
-  border: none;
-  background: transparent;
-  color: inherit;
-  font-size: 9px;
-  outline: none;
-}
-
 .chart-cursor-delta {
   display: flex;
   align-items: center;
@@ -2645,6 +2621,10 @@ body.row-resizing {
 
 .signal-menu .signal-menu-remove {
   color: var(--error);
+}
+
+.signal-menu button.on {
+  color: var(--accent);
 }
 
 .rate-chart,

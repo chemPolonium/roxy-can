@@ -263,7 +263,7 @@ export function SignalChart({
   hasReadout = false,
   readRange = null,
   readCount = 0,
-  yMode = "auto",
+  yModes,
   onYMode,
   ranges,
 }: {
@@ -291,9 +291,10 @@ export function SignalChart({
   hasReadout?: boolean;
   readRange?: { first: number; last: number } | null;
   readCount?: number;
-  /// Value-axis policy for the stacked lanes. Overlay stays normalized.
-  yMode?: ChartYMode;
-  onYMode?: (mode: ChartYMode) => void;
+  /// Value-axis policy per signal; missing entries are Auto. Overlay stays
+  /// normalized.
+  yModes?: Record<string, ChartYMode>;
+  onYMode?: (key: string, mode: ChartYMode) => void;
   /// Declared communication ranges by series key, for the DBC mode.
   ranges?: Record<string, { min: number; max: number }>;
 }) {
@@ -526,7 +527,7 @@ export function SignalChart({
           );
           if (memory) yMemoryRef.current.set(signal.key, memory);
           const scale = chartYRange(
-            yMode,
+            "auto",
             { min, max },
             ranges?.[signal.key],
             memory,
@@ -609,6 +610,7 @@ export function SignalChart({
         const signal = series[i];
         const top = TOP + i * laneH;
         const color = colors.signals[signal.color % colors.signals.length];
+        const yMode = yModes?.[signal.key] ?? "auto";
         if (i % 2 === 1) {
           ctx.fillStyle = colors.signalStripe;
           ctx.fillRect(0, top, width, laneH);
@@ -1017,7 +1019,7 @@ export function SignalChart({
     hasReadout,
     readRange,
     readCount,
-    yMode,
+    yModes,
     ranges,
   ]);
 
@@ -1026,6 +1028,7 @@ export function SignalChart({
     return Math.max(1, (canvas?.clientWidth ?? 0) - GUTTER - 8);
   };
   const menuSignal = laneMenu ? series[laneMenu.index] : undefined;
+  const menuYMode = menuSignal ? (yModes?.[menuSignal.key] ?? "auto") : "auto";
   const cursorLabelList = cursorLabels(cursors);
   const cursorA =
     cursorLabelList.indexOf("A") >= 0
@@ -1240,30 +1243,6 @@ export function SignalChart({
             Overlay
           </button>
         )}
-        {onYMode && !overlay && (
-          <label
-            class="chart-y-mode"
-            title={
-              yMode === "memory"
-                ? "Remember every value seen in this run; the range only grows"
-                : yMode === "dbc"
-                  ? "Use each signal's declared communication min/max"
-                  : "Fit the values visible in the time window"
-            }
-          >
-            Y
-            <select
-              value={yMode}
-              onChange={(event) =>
-                onYMode((event.target as HTMLSelectElement).value as ChartYMode)
-              }
-            >
-              <option value="auto">Auto</option>
-              <option value="memory">Memory</option>
-              <option value="dbc">DBC</option>
-            </select>
-          </label>
-        )}
         {cursorA && cursorB && (
           <span
             class="chart-cursor-delta"
@@ -1305,7 +1284,7 @@ export function SignalChart({
           class="trace-menu signal-menu"
           style={{
             left: `${Math.min(laneMenu.x, window.innerWidth - 190)}px`,
-            top: `${Math.min(laneMenu.y, window.innerHeight - 240)}px`,
+            top: `${Math.min(laneMenu.y, window.innerHeight - 340)}px`,
           }}
           onPointerDown={(event) => event.stopPropagation()}
           onContextMenu={(event) => event.preventDefault()}
@@ -1358,6 +1337,32 @@ export function SignalChart({
           >
             Move down
           </button>
+          <div class="signal-menu-sep" />
+          {(
+            [
+              ["auto", "Y: Auto", "Fit the values visible in the time window"],
+              [
+                "memory",
+                "Y: Memory",
+                "Remember every value seen in this run; the range only grows",
+              ],
+              ["dbc", "Y: DBC range", "Use the declared communication min/max"],
+            ] as const
+          ).map(([mode, label, hint]) => (
+            <button
+              type="button"
+              key={mode}
+              class={menuYMode === mode ? "on" : ""}
+              title={hint}
+              onClick={() => {
+                onYMode?.(menuSignal.key, mode);
+                setLaneMenu(null);
+              }}
+            >
+              {menuYMode === mode ? "✓ " : ""}
+              {label}
+            </button>
+          ))}
           <button
             type="button"
             class="signal-menu-remove"

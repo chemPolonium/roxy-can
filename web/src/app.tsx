@@ -154,7 +154,7 @@ interface SavedView {
   splitRatio: number;
   overlay: boolean;
   signalView: SignalView;
-  yMode?: ChartYMode;
+  yModes?: Record<string, ChartYMode>;
   cursors: ChartCursor[];
   panelPage?: PanelPage;
   panelBook?: PanelBook;
@@ -193,6 +193,14 @@ function normalizeView(saved: Partial<SavedView>): Partial<SavedView> {
       });
     }
   }
+  const yModes: Record<string, ChartYMode> = {};
+  if (saved.yModes && typeof saved.yModes === "object") {
+    for (const [key, mode] of Object.entries(saved.yModes).slice(0, 256)) {
+      if (mode === "auto" || mode === "memory" || mode === "dbc") {
+        yModes[key] = mode;
+      }
+    }
+  }
   return {
     tab: saved.tab && tabs.includes(saved.tab) ? saved.tab : undefined,
     mainView:
@@ -212,10 +220,7 @@ function normalizeView(saved: Partial<SavedView>): Partial<SavedView> {
     chartSplit: typeof saved.chartSplit === "boolean" ? saved.chartSplit : false,
     splitRatio: clamp(Number(saved.splitRatio) || 0.6, 0.25, 0.75),
     overlay: typeof saved.overlay === "boolean" ? saved.overlay : false,
-    yMode:
-      saved.yMode === "memory" || saved.yMode === "dbc"
-        ? saved.yMode
-        : "auto",
+    yModes,
     signalView: { windowS, endS },
     cursors,
     panelBook:
@@ -428,8 +433,8 @@ export function App() {
   const [chartCursors, setChartCursors] = useState<ChartCursor[]>(
     savedView.cursors ?? [],
   );
-  const [chartYMode, setChartYMode] = useState<ChartYMode>(
-    savedView.yMode ?? "auto",
+  const [chartYModes, setChartYModes] = useState<Record<string, ChartYMode>>(
+    savedView.yModes ?? {},
   );
   const [chartFullscreen, setChartFullscreen] = useState(false);
   const [toast, setToast] = useState("");
@@ -728,7 +733,7 @@ export function App() {
           splitRatio,
           overlay: signalOverlay,
           signalView,
-          yMode: chartYMode,
+          yModes: chartYModes,
           cursors: chartCursors,
           panelBook,
         }),
@@ -745,7 +750,7 @@ export function App() {
     splitRatio,
     signalOverlay,
     signalView,
-    chartYMode,
+    chartYModes,
     chartCursors,
     panelBook,
   ]);
@@ -939,6 +944,10 @@ export function App() {
       frame: row.frame,
       name: row.name,
     });
+  };
+
+  const setSignalYMode = (key: string, mode: ChartYMode) => {
+    setChartYModes((current) => ({ ...current, [key]: mode }));
   };
 
   const chartSignalAction = (key: string, action: ChartSignalAction) => {
@@ -2288,8 +2297,8 @@ export function App() {
           onOpenDerived={() => setDerivedOpen(true)}
           overlay={signalOverlay}
           onToggleOverlay={() => setSignalOverlay((value) => !value)}
-          yMode={chartYMode}
-          onYMode={setChartYMode}
+          yModes={chartYModes}
+          onYMode={setSignalYMode}
           ranges={signalRanges}
         />
       );
@@ -3475,8 +3484,8 @@ export function App() {
                   onOpenDerived={() => setDerivedOpen(true)}
                   overlay={signalOverlay}
                   onToggleOverlay={() => setSignalOverlay((value) => !value)}
-                  yMode={chartYMode}
-                  onYMode={setChartYMode}
+                  yModes={chartYModes}
+                  onYMode={setSignalYMode}
                   ranges={signalRanges}
                   hasReadout={readSeries.length > 0}
                   readRange={readRange}
