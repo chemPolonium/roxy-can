@@ -3585,11 +3585,9 @@ fn frame_dto(app: &App, frame: &CanFrame) -> WebFrame {
             .unwrap_or_else(|| format!("CAN{}", frame.channel + 1)),
         id: frame.id,
         extended: frame.extended,
-        name: channel
-            .and_then(|c| c.dbc.as_ref())
-            .and_then(|db| db.message_name(frame.id))
-            .unwrap_or("")
-            .to_string(),
+        name: app
+            .message_name(frame.channel, frame.id, frame.extended)
+            .unwrap_or_default(),
         dir: match frame.dir {
             Direction::Rx => "Rx",
             Direction::Tx => "Tx",

@@ -1110,7 +1110,9 @@ impl App {
             } else {
                 format!("{:03X}", agg.id)
             };
-            let name = self.message_name(agg.channel, agg.id).unwrap_or("-");
+            let name = self
+                .message_name(agg.channel, agg.id, agg.extended)
+                .unwrap_or_else(|| "-".to_string());
             rows.push(StatsRowText {
                 label: format!("{id_str}  {name}"),
                 bus: self.channel_name(agg.channel),
@@ -1367,7 +1369,9 @@ impl App {
                     return false;
                 }
                 if dbc_only || !filter.is_empty() {
-                    let name = self.message_name(a.channel, a.id).unwrap_or("-");
+                    let name = self
+                        .message_name(a.channel, a.id, a.extended)
+                        .unwrap_or_else(|| "-".to_string());
                     if dbc_only && name == "-" {
                         return false;
                     }
@@ -1397,8 +1401,8 @@ impl App {
             } else {
                 format!("{:03X}", agg.id)
             };
-            let declared = self.message_name(agg.channel, agg.id);
-            let name = declared.unwrap_or("-");
+            let declared = self.message_name(agg.channel, agg.id, agg.extended);
+            let name = declared.as_deref().unwrap_or("-");
             // The expanded tree reads the last frame's signals exactly as
             // before; only the refresh rate changed.
             let frame = CanFrame {

@@ -779,7 +779,7 @@ impl App {
             }
             _ => {}
         }
-        let name = self.message_name(f.channel, f.id);
+        let name = self.message_name(f.channel, f.id, f.extended);
         if flt.dbc_only && name.is_none() {
             return false;
         }

@@ -228,7 +228,8 @@ impl App {
         let mut s =
             String::from("bus,id,name,count,cycle_min_ms,cycle_avg_ms,cycle_max_ms,len,flags\n");
         for a in &rows {
-            let name = self.message_name(a.channel, a.id).unwrap_or("-");
+            let name = self.message_name(a.channel, a.id, a.extended);
+            let name = name.as_deref().unwrap_or("-");
             let bus = self.channel_name(a.channel);
             let (cmin, cavg, cmax) = if a.count > 1 {
                 (a.min_us / 1000.0, a.cycle_us / 1000.0, a.max_us / 1000.0)
@@ -320,7 +321,8 @@ impl App {
                 if !Self::scope_match(scope, manual, a.channel, a.id) {
                     return false;
                 }
-                let name = self.message_name(a.channel, a.id).unwrap_or("-");
+                let name = self.message_name(a.channel, a.id, a.extended);
+                let name = name.as_deref().unwrap_or("-");
                 if dbc_only && name == "-" {
                     return false;
                 }
@@ -334,7 +336,8 @@ impl App {
         rows.sort_by_key(|a| (a.channel, a.id));
         let mut s = String::from("bus,id,name,dir,count,cycle_ms,len,flags,data\n");
         for a in &rows {
-            let name = self.message_name(a.channel, a.id).unwrap_or("-");
+            let name = self.message_name(a.channel, a.id, a.extended);
+            let name = name.as_deref().unwrap_or("-");
             let bus = self.channel_name(a.channel);
             let dir = match a.dir {
                 Direction::Rx => "Rx",

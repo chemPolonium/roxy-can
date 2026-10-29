@@ -135,8 +135,12 @@ impl App {
             .and_then(|m| m.cycle_us)
     }
 
-    pub fn message_name(&self, ch: u8, id: u32) -> Option<&str> {
-        self.channel_dbc(ch).and_then(|db| db.message_name(id))
+    pub fn message_name(&self, ch: u8, id: u32, ext: bool) -> Option<String> {
+        self.model_can_name(ch, id, ext).or_else(|| {
+            self.channel_dbc(ch)
+                .and_then(|db| db.message_name_of((id, ext)))
+                .map(str::to_string)
+        })
     }
 
     pub fn channel_name(&self, ch: u8) -> String {
