@@ -591,3 +591,15 @@ fn a_signal_transformation_reference_links_to_a_transformation() {
         "an unknown chain is reported, not silently ignored: {issues:?}"
     );
 }
+
+/// Frame ports declare who sends a frame; the model exposes that so the
+/// generator's node table no longer has to read the DBC's transmitter field.
+#[test]
+fn frame_ports_name_the_sender_ecu() {
+    let comm = import(CAN_TEXT, "CanCluster", 1);
+    let frame = comm.frames.values().next().expect("frame imported");
+    assert_eq!(comm.frame_sender(frame), Some("ECU_A"));
+    let sent = comm.frames_sent_by(frame.cluster, "ECU_A");
+    assert_eq!(sent.len(), 1);
+    assert!(comm.frames_sent_by(frame.cluster, "ECU_B").is_empty());
+}

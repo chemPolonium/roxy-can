@@ -5313,10 +5313,11 @@ impl BusCore {
             .map(|(n, _)| n.clone())
             .collect();
         for node in simulated {
-            let ids = self
-                .channel_dbc(ch as u8)
-                .map(|db| db.node_tx_ids(&node))
-                .unwrap_or_default();
+            let ids = self.model_tx_ids(ch as u8, &node).unwrap_or_else(|| {
+                self.channel_dbc(ch as u8)
+                    .map(|db| db.node_tx_ids(&node))
+                    .unwrap_or_default()
+            });
             for id in ids {
                 self.add_entry(ch as u8, id);
             }
@@ -5682,10 +5683,11 @@ impl BusCore {
         // Membership comes from the live database, not from each entry's
         // stamped `node`: loading another DBC does not rebuild the generator,
         // so a stamp can name a message this node no longer owns.
-        let ids = self
-            .channel_dbc(channel)
-            .map(|db| db.node_tx_ids(node))
-            .unwrap_or_default();
+        let ids = self.model_tx_ids(channel, node).unwrap_or_else(|| {
+            self.channel_dbc(channel)
+                .map(|db| db.node_tx_ids(node))
+                .unwrap_or_default()
+        });
         if role == NodeRole::Simulated {
             for id in &ids {
                 self.add_entry(channel, *id);
@@ -5826,30 +5828,41 @@ impl BusCore {
             return;
         }
         let model_cycle = self.model_can_cycle_us(ch, id);
-        let (name, node, len, cycle_us) = self
-            .channel_dbc(ch)
-            .and_then(|db| db.message_of(id))
-            .map(|m| {
+        let (name, node, len, cycle_us) =
+            if let Some((name, node, len, cycle)) = self.model_frame_meta(ch, id) {
                 (
-                    m.name.clone(),
-                    m.transmitter.clone(),
-                    m.dlc.min(crate::can::frame::MAX_CAN_FD_LEN as u64) as u8,
-                    // A declared 0 is event-triggered, so `unwrap_or` rather
-                    // than `unwrap_or_default` on the Option: only "the DBC
-                    // said nothing" gets our invented period.
-                    m.cycle_us
+                    name,
+                    node,
+                    len,
+                    cycle
                         .or(model_cycle)
                         .unwrap_or(crate::app::DEFAULT_TX_CYCLE_US),
                 )
-            })
-            .unwrap_or_else(|| {
-                (
-                    format!("{id:X}"),
-                    String::new(),
-                    8,
-                    crate::app::DEFAULT_TX_CYCLE_US,
-                )
-            });
+            } else {
+                self.channel_dbc(ch)
+                    .and_then(|db| db.message_of(id))
+                    .map(|m| {
+                        (
+                            m.name.clone(),
+                            m.transmitter.clone(),
+                            m.dlc.min(crate::can::frame::MAX_CAN_FD_LEN as u64) as u8,
+                            // A declared 0 is event-triggered, so `unwrap_or` rather
+                            // than `unwrap_or_default` on the Option: only "the DBC
+                            // said nothing" gets our invented period.
+                            m.cycle_us
+                                .or(model_cycle)
+                                .unwrap_or(crate::app::DEFAULT_TX_CYCLE_US),
+                        )
+                    })
+                    .unwrap_or_else(|| {
+                        (
+                            format!("{id:X}"),
+                            String::new(),
+                            8,
+                            crate::app::DEFAULT_TX_CYCLE_US,
+                        )
+                    })
+            };
         let data_text = vec!["00"; len as usize].join(" ");
         self.tx_list.push(TxMsg {
             channel: ch,
@@ -7795,6 +7808,32 @@ impl BusCore {
             .and_then(|db| db.message_of(id))
             .and_then(|m| m.cycle_us)
             .or_else(|| self.model_can_cycle_us(ch, id))
+    }
+
+    /// The CAN ids a model-declared sender ECU puts on `ch`, from the frame
+    /// ports the document carries.
+    fn model_tx_ids(&self, ch: u8, node: &str) -> Option<Vec<u32>> {
+        let (comm, _, cluster) = self.can_codec(ch)?;
+        let mut ids: Vec<u32> = comm
+            .frames_sent_by(cluster, node)
+            .into_iter()
+            .filter_map(|frame| frame.address.can_id())
+            .collect();
+        ids.sort_unstable();
+        ids.dedup();
+        Some(ids)
+    }
+
+    /// Frame name, sender, length and cycle as the model declares them.
+    fn model_frame_meta(&self, ch: u8, id: u32) -> Option<(String, String, u8, Option<u64>)> {
+        let (comm, _, cluster) = self.can_codec(ch)?;
+        let frame = comm.frame_by_can_id(cluster, id).into_iter().next()?;
+        Some((
+            frame.name.clone(),
+            comm.frame_sender(frame).unwrap_or_default().to_string(),
+            frame.length.min(crate::can::frame::MAX_CAN_FD_LEN as u32) as u8,
+            frame.timing.cycle_us,
+        ))
     }
 
     fn model_can_cycle_us(&self, ch: u8, id: u32) -> Option<u64> {

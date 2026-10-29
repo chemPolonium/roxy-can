@@ -1020,6 +1020,37 @@ impl Comm {
             .find(|f| f.name.eq_ignore_ascii_case(name))
     }
 
+    /// The ECU a frame's sender port names, if the document declares one.
+    pub fn frame_sender(&self, frame: &Frame) -> Option<&str> {
+        self.frame_relations
+            .iter()
+            .find(|relation| relation.frame == frame.id && relation.role == RelationRole::Sender)
+            .and_then(|relation| self.ecus.get(&relation.ecu))
+            .map(|ecu| ecu.name.as_str())
+    }
+
+    /// Frames in `cluster` whose sender port names `ecu`.
+    pub fn frames_sent_by(&self, cluster: ClusterId, ecu: &str) -> Vec<&Frame> {
+        let senders: Vec<EcuId> = self
+            .ecus
+            .values()
+            .filter(|candidate| candidate.name == ecu)
+            .map(|candidate| candidate.id)
+            .collect();
+        if senders.is_empty() {
+            return Vec::new();
+        }
+        self.frames_in_cluster(cluster)
+            .filter(|frame| {
+                self.frame_relations.iter().any(|relation| {
+                    relation.frame == frame.id
+                        && relation.role == RelationRole::Sender
+                        && senders.contains(&relation.ecu)
+                })
+            })
+            .collect()
+    }
+
     pub fn frame_by_can_id(&self, cluster: ClusterId, id: u32) -> Vec<&Frame> {
         self.frames_in_cluster(cluster)
             .filter(|f| f.address.can_id() == Some(id))
