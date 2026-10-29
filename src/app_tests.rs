@@ -317,6 +317,9 @@ fn a_project_saves_schema_v2_and_reopens_the_same_cluster_ids() {
         },
         crate::trigger::TriggerAction::Send { ch: 1, id: 0x321 },
     ));
+    app.trace_windows[0]
+        .manual
+        .insert(crate::workspace::Pick::Can { ch: 1, id: 0x321 });
     app.refresh_snapshot();
     app.settle();
     assert!(app.save_project(Some(path.clone())), "save writes the file");
@@ -333,6 +336,15 @@ fn a_project_saves_schema_v2_and_reopens_the_same_cluster_ids() {
     assert!(
         value["config"].get("trace_windows").is_none(),
         "windows left the compat blob"
+    );
+    assert!(
+        value["traceWindows"][0]["manual_clusters"]
+            .as_array()
+            .is_some_and(|rows| rows
+                .iter()
+                .any(|row| row[0] == ids.can[1] && row[1] == 0x321)),
+        "window picks are saved by cluster id: {}",
+        value["traceWindows"][0]
     );
     assert!(value["clusters"].as_array().unwrap().len() >= ids.can.len());
     assert!(value["legacyBusMap"]["can"].is_array());
@@ -381,6 +393,12 @@ fn a_project_saves_schema_v2_and_reopens_the_same_cluster_ids() {
         restored.trace_windows.len(),
         app.trace_windows.len(),
         "windows come back from the typed section"
+    );
+    assert!(
+        restored.trace_windows[0]
+            .manual
+            .contains(&crate::workspace::Pick::Can { ch: 1, id: 0x321 }),
+        "the cluster-id pick maps back to its bus"
     );
     assert_eq!(restored.snap.cluster_ids, ids);
     assert_eq!(

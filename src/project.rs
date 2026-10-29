@@ -321,6 +321,18 @@ impl App {
         // Workspace sections move out of the compat blob and into typed v2
         // fields; their picks still name buses by index for now.
         project.trace_windows = config.trace_windows.clone();
+        for window in &mut project.trace_windows {
+            window.manual_clusters = window
+                .manual
+                .iter()
+                .filter_map(|&(bus, id)| ids.can.get(bus as usize).map(|cluster| (*cluster, id)))
+                .collect();
+            window.fr_manual_clusters = window
+                .fr_manual
+                .iter()
+                .filter_map(|&(bus, slot)| ids.fr.get(&bus).map(|cluster| (*cluster, slot)))
+                .collect();
+        }
         project.msg_windows = config.msg_windows.clone();
         project.stats_windows = config.stats_windows.clone();
         project.graphics = config.graphics.clone();
@@ -554,6 +566,36 @@ impl App {
             }
             if let Some(workspace) = &project.workspace {
                 cfg.web = Some(workspace.clone());
+            }
+            // Window picks saved by cluster id turn back into the bus indexes
+            // the trace tables use.
+            if let Some(map) = &project.legacy_bus_map {
+                for window in &mut cfg.trace_windows {
+                    if !window.manual_clusters.is_empty() {
+                        window.manual = window
+                            .manual_clusters
+                            .iter()
+                            .filter_map(|&(cluster, id)| {
+                                map.can
+                                    .iter()
+                                    .position(|saved| saved.0 == cluster)
+                                    .map(|bus| (bus as u8, id))
+                            })
+                            .collect();
+                    }
+                    if !window.fr_manual_clusters.is_empty() {
+                        window.fr_manual = window
+                            .fr_manual_clusters
+                            .iter()
+                            .filter_map(|&(cluster, slot)| {
+                                map.flexray
+                                    .iter()
+                                    .position(|saved| saved.0 == cluster)
+                                    .map(|bus| (bus as u8, slot))
+                            })
+                            .collect();
+                    }
+                }
             }
             self.reset_to_defaults();
             cfg.resolve_paths(path.parent());
