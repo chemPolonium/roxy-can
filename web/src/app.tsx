@@ -562,6 +562,12 @@ export function App() {
             bus: channel.name,
             frame:
               channel.kind === "can"
+                ? message.name
+                : channel.kind === "fr"
+                  ? `slot${message.id}`
+                  : (message.frame ?? message.name),
+            frameId:
+              channel.kind === "can"
                 ? `0x${message.id
                     .toString(16)
                     .toUpperCase()

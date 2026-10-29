@@ -1376,7 +1376,7 @@ fn resolve_derived_ref(
             continue;
         }
         if let Some(frame) = frame
-            && !derived_ref_frame_matches(key, frame)
+            && !derived_ref_frame_matches(key, frame, channels)
         {
             continue;
         }
@@ -1389,16 +1389,23 @@ fn resolve_derived_ref(
 }
 
 /// Matches the middle part of `[Bus:Frame:Signal]` against the frame class
-/// the series key came from. CAN accepts the hex id (`0x0C7`), FlexRay a slot
-/// number or `slotN`, Ethernet the frame name.
-fn derived_ref_frame_matches(key: &SigKey, qualifier: &str) -> bool {
+/// the series key came from. CAN accepts the hex id (`0x0C7`) or the DBC
+/// message name, FlexRay a slot number or `slotN`, Ethernet the frame name.
+fn derived_ref_frame_matches(key: &SigKey, qualifier: &str, channels: &[Channel]) -> bool {
     match key {
-        SigKey::Can { id, .. } => {
+        SigKey::Can { ch, id, ext, .. } => {
             let digits = qualifier
                 .strip_prefix("0x")
                 .or_else(|| qualifier.strip_prefix("0X"))
                 .unwrap_or(qualifier);
-            u32::from_str_radix(digits, 16).ok() == Some(*id)
+            if u32::from_str_radix(digits, 16).ok() == Some(*id) {
+                return true;
+            }
+            channels
+                .get(*ch as usize)
+                .and_then(|channel| channel.dbc.as_ref())
+                .and_then(|db| db.message_name_of((*id, *ext)))
+                .is_some_and(|name| name == qualifier)
         }
         SigKey::Fr { slot, .. } => {
             qualifier.eq_ignore_ascii_case(&format!("slot{slot}"))
@@ -7799,6 +7806,27 @@ BA_ "GenSigStartValue" SG_ 512 Temp 80;
         assert_eq!(
             resolve_derived_ref("CAN2:WheelSpeedFR", &keys, &channels, &own),
             None
+        );
+    }
+
+    /// The frame qualifier also accepts the DBC message name, not only the
+    /// hex id.
+    #[test]
+    fn derived_refs_accept_message_names() {
+        let db = std::sync::Arc::new(
+            crate::dbc::load_dbc_str(crate::sample_data::SAMPLE_DBC).expect("sample DBC"),
+        );
+        let mut core = BusCore::new(Vec::new());
+        core.add_channel_with_dbc("CAN1".to_string(), db, 500, &mut String::new());
+        let keys = vec![SigKey::can(0, 0x100, false, "EngineSpeed")];
+        let own = SigKey::derived("x", "self");
+        assert_eq!(
+            resolve_derived_ref("CAN1:EngineStatus:EngineSpeed", &keys, &core.channels, &own),
+            Some(keys[0].clone())
+        );
+        assert_eq!(
+            resolve_derived_ref("CAN1:0x100:EngineSpeed", &keys, &core.channels, &own),
+            Some(keys[0].clone())
         );
     }
 }

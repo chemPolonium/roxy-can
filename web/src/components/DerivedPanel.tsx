@@ -30,10 +30,15 @@ export function DerivedPanel({
       : validateDerivedExpression(expression, references);
   const counts = new Map<string, number>();
   const busCounts = new Map<string, number>();
+  const frameCounts = new Map<string, number>();
   for (const reference of references) {
     counts.set(reference.name, (counts.get(reference.name) ?? 0) + 1);
     const busKey = `${reference.bus}:${reference.name}`;
     busCounts.set(busKey, (busCounts.get(busKey) ?? 0) + 1);
+    if (reference.frame) {
+      const frameKey = `${reference.bus}:${reference.frame}:${reference.name}`;
+      frameCounts.set(frameKey, (frameCounts.get(frameKey) ?? 0) + 1);
+    }
   }
   const computedRefs = references.filter(
     (reference) => reference.bus === "derived",
@@ -47,10 +52,21 @@ export function DerivedPanel({
     const sharedName = (counts.get(reference.name) ?? 0) > 1;
     const sharedBus =
       (busCounts.get(`${reference.bus}:${reference.name}`) ?? 0) > 1;
+    let token = reference.frame;
+    if (
+      sharedBus &&
+      reference.frame &&
+      (frameCounts.get(
+        `${reference.bus}:${reference.frame}:${reference.name}`,
+      ) ?? 0) > 1 &&
+      reference.frameId
+    ) {
+      token = reference.frameId;
+    }
     const label = !sharedName
       ? reference.name
-      : sharedBus && reference.frame
-        ? `${reference.bus}:${reference.frame}:${reference.name}`
+      : sharedBus && token
+        ? `${reference.bus}:${token}:${reference.name}`
         : `${reference.bus}:${reference.name}`;
     return { key: reference.key, label };
   });
@@ -148,7 +164,7 @@ export function DerivedPanel({
         </label>
         <p class={`hint ${error ? "derived-error" : ""}`}>
           {error ??
-            "Use [signal], [CAN1:signal] or [CAN2:0x0C7:signal] when one bus repeats a name; supports + - * /, abs(), sqrt(), min(), max()."}
+            "Use [signal], [CAN1:signal] or [CAN2:Message:signal] (id also works) when one bus repeats a name; supports + - * /, abs(), sqrt(), min(), max()."}
         </p>
         <div class="derived-picks">
           {picks.map((pick) => (

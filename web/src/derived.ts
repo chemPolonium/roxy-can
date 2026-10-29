@@ -199,9 +199,11 @@ export interface DerivedReference {
   key: string;
   name: string;
   bus: string;
-  /// Optional message/slot qualifier for `[Bus:Message:Signal]` when one bus
+  /// Optional frame/name qualifier for `[Bus:Frame:Signal]` when one bus
   /// carries the same signal name in two frames.
   frame?: string;
+  /// The hex id (CAN) or slot token accepted as the same frame qualifier.
+  frameId?: string;
 }
 
 function resolveRefs<T extends DerivedReference>(
@@ -216,6 +218,8 @@ function resolveRefs<T extends DerivedReference>(
         `${signal.bus}:${signal.name}` === name ||
         (signal.frame !== undefined &&
           `${signal.bus}:${signal.frame}:${signal.name}` === name) ||
+        (signal.frameId !== undefined &&
+          `${signal.bus}:${signal.frameId}:${signal.name}` === name) ||
         signal.key === name,
     );
     if (exact.length === 0) {
