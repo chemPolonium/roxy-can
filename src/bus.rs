@@ -2192,7 +2192,11 @@ impl BusCore {
                                 .channels
                                 .get(b.channel as usize)
                                 .and_then(|c| c.dbc.clone());
-                            b.load_queue(dbc.as_deref(), self.sim_t_us);
+                            let node_ids = b
+                                .node_filter
+                                .as_deref()
+                                .and_then(|node| self.model_node_tx_ids(b.channel, node));
+                            b.load_queue_with(dbc.as_deref(), node_ids, self.sim_t_us);
                         }
                         b
                     })
@@ -4744,9 +4748,10 @@ impl BusCore {
         }
         // The role declarations are already in place on a reload, so the
         // fresh table has to meet them: Simulated nodes get entries for
-        // messages the database newly declares.
-        self.seed_entries_for_simulated(ch);
+        // messages the database newly declares. The model is rebuilt first
+        // because the node table now reads the frame ports from it.
         self.rebuild_can_model(ch);
+        self.seed_entries_for_simulated(ch);
         *status = match first_error {
             Some(e) => format!("{name} DBC partial: {loaded} file(s), {total} messages ({e})"),
             None => format!("{name} DBC loaded: {total} messages"),
@@ -5313,11 +5318,7 @@ impl BusCore {
             .map(|(n, _)| n.clone())
             .collect();
         for node in simulated {
-            let ids = self.model_tx_ids(ch as u8, &node).unwrap_or_else(|| {
-                self.channel_dbc(ch as u8)
-                    .map(|db| db.node_tx_ids(&node))
-                    .unwrap_or_default()
-            });
+            let ids = self.model_tx_ids(ch as u8, &node).unwrap_or_default();
             for id in ids {
                 self.add_entry(ch as u8, id);
             }
@@ -5683,11 +5684,7 @@ impl BusCore {
         // Membership comes from the live database, not from each entry's
         // stamped `node`: loading another DBC does not rebuild the generator,
         // so a stamp can name a message this node no longer owns.
-        let ids = self.model_tx_ids(channel, node).unwrap_or_else(|| {
-            self.channel_dbc(channel)
-                .map(|db| db.node_tx_ids(node))
-                .unwrap_or_default()
-        });
+        let ids = self.model_tx_ids(channel, node).unwrap_or_default();
         if role == NodeRole::Simulated {
             for id in &ids {
                 self.add_entry(channel, *id);
@@ -5749,7 +5746,11 @@ impl BusCore {
                 .channels
                 .get(block.channel as usize)
                 .and_then(|c| c.dbc.clone());
-            block.load_queue(dbc.as_deref(), self.sim_t_us);
+            let node_ids = block
+                .node_filter
+                .as_deref()
+                .and_then(|node| self.model_node_tx_ids(block.channel, node));
+            block.load_queue_with(dbc.as_deref(), node_ids, self.sim_t_us);
         }
         *status = format!("replay block `{}` added (disabled)", block.name);
         self.replay_blocks.push(block);
@@ -5797,6 +5798,19 @@ impl BusCore {
     /// the measurement state, so a broken path surfaces now, not silently
     /// at the next start.
     fn set_replay_block_enabled(&mut self, id: u64, on: bool, status: &mut String) {
+        // The model lookup needs `&self`, the queue edit needs `&mut self`;
+        // resolve the node's ids between the two borrows.
+        let Some((channel, node)) = self
+            .replay_blocks
+            .iter()
+            .find(|b| b.id == id)
+            .map(|b| (b.channel, b.node_filter.clone()))
+        else {
+            return;
+        };
+        let node_ids = node
+            .as_deref()
+            .and_then(|name| self.model_node_tx_ids(channel, name));
         let Some(block) = self.replay_blocks.iter_mut().find(|b| b.id == id) else {
             return;
         };
@@ -5806,7 +5820,7 @@ impl BusCore {
                 .channels
                 .get(block.channel as usize)
                 .and_then(|c| c.dbc.clone());
-            block.load_queue(dbc.as_deref(), self.sim_t_us);
+            block.load_queue_with(dbc.as_deref(), node_ids, self.sim_t_us);
             *status = match (&block.last_error, block.enabled) {
                 (Some(e), _) => format!("replay block `{}`: {e}", block.name),
                 (None, true) => format!(
@@ -7822,6 +7836,16 @@ impl BusCore {
         ids.sort_unstable();
         ids.dedup();
         Some(ids)
+    }
+
+    /// Like [`Self::model_tx_ids`], but only when the model actually knows the
+    /// node; an unknown node falls back to the description table's error.
+    fn model_node_tx_ids(&self, ch: u8, node: &str) -> Option<Vec<u32>> {
+        let (comm, _, _) = self.can_codec(ch)?;
+        if !comm.ecus.values().any(|ecu| ecu.name == node) {
+            return None;
+        }
+        self.model_tx_ids(ch, node)
     }
 
     /// Frame name, sender, length and cycle as the model declares them.

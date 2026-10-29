@@ -84,6 +84,18 @@ impl ReplayBlock {
     /// queue is runtime state: a DBC swap changes what a node-filtered
     /// block sends. A failed load disables the block and records why.
     pub fn load_queue(&mut self, dbc: Option<&SymbolTable>, sim_t_us: u64) {
+        self.load_queue_with(dbc, None, sim_t_us);
+    }
+
+    /// [`Self::load_queue`] with the node's transmit ids already resolved by
+    /// the caller's model; the description table is only consulted when the
+    /// caller has no model for this bus.
+    pub fn load_queue_with(
+        &mut self,
+        dbc: Option<&SymbolTable>,
+        model_node_ids: Option<Vec<u32>>,
+        sim_t_us: u64,
+    ) {
         self.queue.clear();
         self.cursor = 0;
         self.anchor_us = sim_t_us;
@@ -94,11 +106,14 @@ impl ReplayBlock {
             let mut stream = crate::log::open_stream(std::path::Path::new(&self.path))
                 .map_err(|e| e.to_string())?;
             let node_ids: Option<Vec<u32>> = match &self.node_filter {
-                Some(node) => Some(match dbc {
-                    Some(db) if db.nodes.iter().any(|n| n == node) => db.node_tx_ids(node),
-                    _ => {
-                        return Err(format!("node `{node}` is not in the bus's database"));
-                    }
+                Some(node) => Some(match model_node_ids {
+                    Some(ids) => ids,
+                    None => match dbc {
+                        Some(db) if db.nodes.iter().any(|n| n == node) => db.node_tx_ids(node),
+                        _ => {
+                            return Err(format!("node `{node}` is not in the bus's database"));
+                        }
+                    },
                 }),
                 None => None,
             };
