@@ -5045,6 +5045,18 @@ struct WebE2e {
     jumps: u64,
 }
 
+fn e2e_dto(track: &crate::bus::E2eView) -> WebE2e {
+    WebE2e {
+        profile: track.profile,
+        data_id: track.data_id,
+        counter: track.counter,
+        frames: track.frames,
+        repeats: track.repeats,
+        gaps: track.gaps,
+        jumps: track.jumps,
+    }
+}
+
 #[derive(Clone, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct WebMessage {
@@ -5864,18 +5876,7 @@ fn build_state(app: &App, series: &VecDeque<WebSeriesPoint>, fps: f64) -> WebSta
                 data: hex(m.payload()),
                 signal_count,
                 signals,
-                e2e: snap
-                    .e2e
-                    .get(&(m.channel, m.id, m.extended))
-                    .map(|track| WebE2e {
-                        profile: track.profile,
-                        data_id: track.data_id,
-                        counter: track.counter,
-                        frames: track.frames,
-                        repeats: track.repeats,
-                        gaps: track.gaps,
-                        jumps: track.jumps,
-                    }),
+                e2e: snap.e2e.get(&(m.channel, m.id, m.extended)).map(e2e_dto),
             }
         })
         .collect();
@@ -5925,7 +5926,7 @@ fn build_state(app: &App, series: &VecDeque<WebSeriesPoint>, fps: f64) -> WebSta
             data: hex(&m.payload),
             signal_count,
             signals,
-            e2e: None,
+            e2e: snap.fr_e2e.get(&(m.bus, m.slot)).map(e2e_dto),
         });
     }
     for a in &snap.eth_aggs {
@@ -5982,7 +5983,19 @@ fn build_state(app: &App, series: &VecDeque<WebSeriesPoint>, fps: f64) -> WebSta
             data: String::new(),
             signal_count,
             signals,
-            e2e: None,
+            e2e: app
+                .eth_buses
+                .get(&a.key.bus)
+                .and_then(|config| {
+                    let flow = a.key.flow();
+                    match config.db.match_flow(&flow, app.eth_length_includes_header) {
+                        crate::eth::db::EthMatch::Unique(index) => {
+                            Some(config.db.frames[index].name.clone())
+                        }
+                        _ => None,
+                    }
+                })
+                .and_then(|frame| snap.eth_e2e.get(&frame).map(e2e_dto)),
         });
     }
     messages.sort_by_key(|m| {

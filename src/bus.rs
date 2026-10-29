@@ -827,6 +827,9 @@ pub struct Snapshot {
     /// E2E counter continuity per CAN message; absent when the message is
     /// not protected or its profile layout is not checked.
     pub e2e: std::collections::BTreeMap<(u8, u32, bool), E2eView>,
+    /// The same for FlexRay slots and Ethernet frames.
+    pub fr_e2e: std::collections::BTreeMap<(u8, u16), E2eView>,
+    pub eth_e2e: std::collections::BTreeMap<String, E2eView>,
     /// The same for FlexRay slots, keyed by `(bus, slot)`.
     pub fr_model_frames: std::collections::BTreeMap<(u8, u16), ModelFrameView>,
     /// The same for Ethernet frames, keyed by frame name.
@@ -1258,6 +1261,8 @@ pub struct BusCore {
     pub(crate) model_issues_seen: std::collections::HashSet<String>,
     /// E2E counter continuity per CAN message, updated on every frame.
     pub(crate) e2e_tracks: std::collections::BTreeMap<(u8, u32, bool), E2eView>,
+    pub(crate) fr_e2e_tracks: std::collections::BTreeMap<(u8, u16), E2eView>,
+    pub(crate) eth_e2e_tracks: std::collections::BTreeMap<String, E2eView>,
     /// Counter for naming new buses (CAN3, CAN4, ...).
     pub(crate) bus_counter: usize,
     /// The interactive generator's entries: what this tool transmits as.
@@ -1608,6 +1613,8 @@ impl BusCore {
             eth_dbs: Default::default(),
             model_issues_seen: Default::default(),
             e2e_tracks: Default::default(),
+            fr_e2e_tracks: Default::default(),
+            eth_e2e_tracks: Default::default(),
             eth_length_includes_header: false,
             trace_paused: false,
             paused_at_us: None,
@@ -2626,6 +2633,9 @@ impl BusCore {
             self.recorder.write_fr(&row);
         }
         let ix = self.tally_fr_row(&row);
+        if let Some(frame_ix) = ix {
+            self.track_fr_e2e(&row, frame_ix);
+        }
         // Its share of the medium is one static slot, however long the payload:
         // `gstaticSlot` macroticks of the cluster's own `gmacrotick`. No
         // description, or one without slot timing, and the frame still counts --
@@ -3559,6 +3569,24 @@ impl BusCore {
             }
         }
 
+        // E2E continuity is a property of the frame, not of an observer.
+        let tracked_frame = self.eth_dbs.get(&frame.bus).and_then(|db| {
+            let flow = crate::eth::db::EthFlow {
+                vlan: frame.vlan,
+                dst: frame.dst,
+                src: frame.src,
+                ethertype: frame.ethertype,
+                payload_len: frame.len(),
+            };
+            match db.match_flow(&flow, self.eth_length_includes_header) {
+                crate::eth::db::EthMatch::Unique(index) => Some(db.frames[index].name.clone()),
+                _ => None,
+            }
+        });
+        if let Some(frame_name) = tracked_frame {
+            self.track_eth_e2e(frame.bus, &frame_name, &frame.payload);
+        }
+
         self.eth_trace.push(frame);
     }
 
@@ -3813,6 +3841,8 @@ impl BusCore {
             cluster_ids: self.cluster_ids_view(),
             model_frames: self.model_frames_view(),
             e2e: self.e2e_tracks.clone(),
+            fr_e2e: self.fr_e2e_tracks.clone(),
+            eth_e2e: self.eth_e2e_tracks.clone(),
             fr_model_frames: self.fr_model_frames_view(),
             eth_model_frames: self.eth_model_frames_view(),
             expanded_signals: self.expanded_signals_view(),
@@ -4866,6 +4896,74 @@ impl BusCore {
         note_e2e(
             self.e2e_tracks
                 .entry((f.channel, f.id, f.extended))
+                .or_default(),
+            reading,
+        );
+    }
+
+    fn track_fr_e2e(&mut self, row: &crate::trace::FrRow, frame_ix: usize) {
+        let (Some(comm), Some(plans), Some(db), Some(model_db)) = (
+            self.fr_models.get(&row.bus),
+            self.fr_model_plans.get(&row.bus),
+            self.fr_dbs.get(&row.bus),
+            self.fr_model_dbs.get(&row.bus),
+        ) else {
+            return;
+        };
+        if !Arc::ptr_eq(model_db, db) {
+            return;
+        }
+        let Some(name) = db.frame_index(frame_ix).map(|frame| frame.name.clone()) else {
+            return;
+        };
+        let Some(&cluster) = self.fr_cluster_ids.get(&row.bus) else {
+            return;
+        };
+        let Some(frame) = comm.frame_by_name(cluster, &name) else {
+            return;
+        };
+        let Some(plan) = plans.get(frame.id) else {
+            return;
+        };
+        let Some(reading) = crate::model::decode_e2e(plan, &row.payload)
+            .into_iter()
+            .next()
+        else {
+            return;
+        };
+        note_e2e(
+            self.fr_e2e_tracks.entry((row.bus, row.slot)).or_default(),
+            reading,
+        );
+    }
+
+    fn track_eth_e2e(&mut self, bus: u8, frame_name: &str, payload: &[u8]) {
+        let (Some(comm), Some(plans), Some(db), Some(model_db)) = (
+            self.eth_models.get(&bus),
+            self.eth_model_plans.get(&bus),
+            self.eth_dbs.get(&bus),
+            self.eth_model_dbs.get(&bus),
+        ) else {
+            return;
+        };
+        if !Arc::ptr_eq(model_db, db) {
+            return;
+        }
+        let Some(&cluster) = self.eth_cluster_ids.get(&bus) else {
+            return;
+        };
+        let Some(frame) = comm.frame_by_name(cluster, frame_name) else {
+            return;
+        };
+        let Some(plan) = plans.get(frame.id) else {
+            return;
+        };
+        let Some(reading) = crate::model::decode_e2e(plan, payload).into_iter().next() else {
+            return;
+        };
+        note_e2e(
+            self.eth_e2e_tracks
+                .entry(frame_name.to_string())
                 .or_default(),
             reading,
         );
