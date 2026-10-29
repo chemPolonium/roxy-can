@@ -24,6 +24,7 @@ export function DerivedPanel({
   const [name, setName] = useState("");
   const [unit, setUnit] = useState("");
   const [expression, setExpression] = useState("");
+  const [editing, setEditing] = useState<string | null>(null);
   const error =
     expression.trim() === ""
       ? null
@@ -107,19 +108,47 @@ export function DerivedPanel({
     setExpression((old) => `${old}${old.trim() ? " " : ""}[${reference}]`);
   };
 
-  const save = () => {
-    if (!name.trim() || !expression.trim() || error) return;
-    onSave({
-      id: `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`,
-      name: name.trim(),
-      unit: unit.trim(),
-      expression: expression.trim(),
-      cuts: [],
-      names: [],
-    });
+  const resetForm = () => {
+    setEditing(null);
     setName("");
     setUnit("");
     setExpression("");
+  };
+
+  const beginEdit = (definition: DerivedDef) => {
+    setEditing(definition.id);
+    setName(definition.name);
+    setUnit(definition.unit);
+    setExpression(definition.expression);
+  };
+
+  const save = () => {
+    if (!name.trim() || !expression.trim() || error) return;
+    const original = editing
+      ? defs.find((definition) => definition.id === editing)
+      : undefined;
+    if (editing && !original) {
+      resetForm();
+      return;
+    }
+    onSave(
+      original
+        ? {
+            ...original,
+            name: name.trim(),
+            unit: unit.trim(),
+            expression: expression.trim(),
+          }
+        : {
+            id: `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`,
+            name: name.trim(),
+            unit: unit.trim(),
+            expression: expression.trim(),
+            cuts: [],
+            names: [],
+          },
+    );
+    resetForm();
   };
 
   return (
@@ -127,7 +156,10 @@ export function DerivedPanel({
       {defs.length > 0 && (
         <div class="derived-list">
           {defs.map((definition) => (
-            <div class="derived-item" key={definition.id}>
+            <div
+              class={`derived-item ${editing === definition.id ? "editing" : ""}`}
+              key={definition.id}
+            >
               <span class="derived-item-name">
                 {definition.name}
                 {definition.unit && <em>{definition.unit}</em>}
@@ -138,6 +170,13 @@ export function DerivedPanel({
                   error
                 </span>
               )}
+              <button
+                type="button"
+                class="mini"
+                onClick={() => beginEdit(definition)}
+              >
+                Edit
+              </button>
               {onRule && (
                 <button
                   type="button"
@@ -254,13 +293,18 @@ export function DerivedPanel({
             bands travel with the project.
           </span>
           <span class="spacer" />
+          {editing && (
+            <button type="button" onClick={resetForm}>
+              Cancel
+            </button>
+          )}
           <button
             type="button"
             class="primary"
             disabled={!name.trim() || !expression.trim() || Boolean(error)}
             onClick={save}
           >
-            Add
+            {editing ? "Save" : "Add"}
           </button>
         </div>
       </div>

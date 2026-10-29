@@ -31,7 +31,7 @@ Rate/Signals/Monitor/Data/State 标签页、下栏 Statistics/Bus/Spec/Write，
 - **回放块**：依附于 DBC 节点——把该节点录制过的日志按 id 过滤后重新发到仿真总线上，按录制间距发送，仿真 restbus 的落地方案。
 - **仿真节点**：类 CAPL 的小语言编译执行，`on start` / `on message` / `on fr slot` / `on timer` / `on errorFrame` 事件驱动，读写 DBC 信号、收发帧、随机与波形内建。`frame(Bus.Frame)` 可创建多个独立帧实例，写物理信号字段后用 `send_frame` 一次发一帧（CAN 走节点总线，FR/ETH 只进本会话）。每个回调有指令预算，有缺陷的脚本不会卡住总线，出错节点自动停止运行。可绑定到 DBC 节点，绑定后能否发送由该节点的角色决定。编辑器三栏：处理器大纲、静态收发事实表、函数与报文速插。语言参考见 [docs/script_language.md](docs/script_language.md)，可运行示例见 `examples/`。
 - **派生信号**：脚本 `emit_value("名", 表达式)` 一行发布，像数据库信号一样进 Signals / Data / State Tracker。
-- **变量**：**Variables…** 窗口分 **System variables**（CANoe 式命名空间变量：初值 / 界限 / 单位 / 备注，脚本读写，每次测量开始复位）与 **Computed channels**（全局表达式派生通道，编辑器按 Bus / Frame / Signal 三栏点选插入完整 `[Bus:Frame:Signal]`，引用整个 catalog 与已有计算通道，跨总线用 `[CAN1:signal]`、同路重复名用 `[CAN2:WheelInfoIEEE:signal]`（或 ID）消歧）；两者都随工程保存并发布为可观测流，计算通道同时进入曲线、Monitor/Data/State、Triggers 与脚本 `derived("Name")`。
+- **变量**：**Variables…** 窗口分 **System variables**（CANoe 式命名空间变量：初值 / 界限 / 单位 / 备注，脚本读写，每次测量开始复位）与 **Computed channels**（全局表达式派生通道，编辑器按 Bus / Frame / Signal 三栏点选插入完整 `[Bus:Frame:Signal]`，引用整个 catalog 与已有计算通道，跨总线用 `[CAN1:signal]`、同路重复名用 `[CAN2:WheelInfoIEEE:signal]`（或 ID）消歧）；两者都随工程保存并发布为可观测流，计算通道行内 Edit 沿用原 id 并保留色段/触发器，同时进入曲线、Monitor/Data/State、Triggers 与脚本 `derived("Name")`。
 - **Monitor 监控面板**：轻量纯文本行，一行一个信号，行内阈值着色规则让"温度超 90 变红"这类告警一眼可见。
 - **State Tracker**：对订阅信号的历史做状态分段——枚举标签、二进制方波、会话稳定配色，支持自定义区间与固定颜色，短区段按最短显示时长合并，区段表可导出 CSV。
 - **Write 窗口**：整系统一条滚动输出——节点 `print`、装配层检查与告警、节点停止的错误、命令事件分色带时间戳；可按类别过滤、导出文本。

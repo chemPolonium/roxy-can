@@ -4015,8 +4015,21 @@ export function App() {
           derived={derivedDefs}
           derivedRefs={derivedReferences}
           onAddDerived={(definition) => {
-            saveDerived([...derivedDefs, definition]);
-            showToast(`Computed ${definition.name} added`);
+            const exists = derivedDefs.some(
+              (entry) => entry.id === definition.id,
+            );
+            saveDerived(
+              exists
+                ? derivedDefs.map((entry) =>
+                    entry.id === definition.id ? definition : entry,
+                  )
+                : [...derivedDefs, definition],
+            );
+            showToast(
+              exists
+                ? `Computed ${definition.name} updated`
+                : `Computed ${definition.name} added`,
+            );
           }}
           onRemoveDerived={(id) =>
             saveDerived(derivedDefs.filter((definition) => definition.id !== id))

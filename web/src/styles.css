@@ -4550,6 +4550,10 @@ button.danger:hover:not(:disabled) {
   border-bottom: 0;
 }
 
+.derived-item.editing {
+  background: var(--accent-soft);
+}
+
 .derived-item-name {
   flex: 0 0 auto;
   font-size: 10.5px;
