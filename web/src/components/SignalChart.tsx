@@ -73,17 +73,20 @@ function lowerBound(points: [number, number][], target: number): number {
   return lo;
 }
 
-/// Signal value at a cursor time, interpolated the same way the line is
-/// drawn between samples.
-function sampleAt(points: [number, number][], target: number): number | null {
+/// Signal value at a cursor time: the latest sample at or before it, matching
+/// what the bus actually carried. The line between samples is only a visual
+/// join; it must not invent values the signal never had.
+export function sampleAt(
+  points: [number, number][],
+  target: number,
+): number | null {
   if (points.length === 0) return null;
   const index = lowerBound(points, target);
   if (index === 0) return points[0][1];
   if (index >= points.length) return points[points.length - 1][1];
-  const [t0, v0] = points[index - 1];
   const [t1, v1] = points[index];
-  if (t1 <= t0) return v1;
-  return v0 + ((v1 - v0) * (target - t0)) / (t1 - t0);
+  if (t1 === target) return v1;
+  return points[index - 1][1];
 }
 
 interface MinMaxBin {
@@ -711,6 +714,20 @@ export function SignalChart({
             }
           }
           ctx.stroke();
+          // Sparse windows keep the sample points visible so a reader can
+          // see exactly where the curve steps from one message to the next.
+          const count = to - from;
+          if (count > 0 && plotW / count >= 4) {
+            ctx.fillStyle = color;
+            for (let k = from; k < to; k += 1) {
+              const [t, value] = points[k];
+              const x = GUTTER + ((t - start) / view.windowS) * plotW;
+              if (x < GUTTER || x > GUTTER + plotW) continue;
+              ctx.beginPath();
+              ctx.arc(x, y(value), 1.8, 0, Math.PI * 2);
+              ctx.fill();
+            }
+          }
         } else if (bins) {
           ctx.strokeStyle = color;
           ctx.globalAlpha = 0.55;

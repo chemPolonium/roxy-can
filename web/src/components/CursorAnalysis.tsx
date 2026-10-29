@@ -1,23 +1,5 @@
 import type { SignalSeries } from "../types";
-import { cursorLabels, type ChartCursor } from "./SignalChart";
-
-function valueAt(points: [number, number][], t: number): number | null {
-  if (points.length === 0) return null;
-  if (t <= points[0][0]) return points[0][1];
-  const last = points[points.length - 1];
-  if (t >= last[0]) return last[1];
-  let lo = 0;
-  let hi = points.length - 1;
-  while (lo + 1 < hi) {
-    const mid = (lo + hi) >> 1;
-    if (points[mid][0] <= t) lo = mid;
-    else hi = mid;
-  }
-  const [t0, v0] = points[lo];
-  const [t1, v1] = points[hi];
-  const span = t1 - t0;
-  return span > 0 ? v0 + ((v1 - v0) * (t - t0)) / span : v0;
-}
+import { cursorLabels, sampleAt, type ChartCursor } from "./SignalChart";
 
 function formatValue(value: number | null): string {
   if (value === null || !Number.isFinite(value)) return "—";
@@ -143,8 +125,8 @@ export function CursorAnalysis({
           const last = signal.points[signal.points.length - 1];
           const valueA = live
             ? (last?.[1] ?? null)
-            : valueAt(signal.points, a!.t);
-          const valueB = b ? valueAt(signal.points, b.t) : null;
+            : sampleAt(signal.points, a!.t);
+          const valueB = b ? sampleAt(signal.points, b.t) : null;
           const stats = b ? rangeStats(signal.points, from, to) : null;
           return (
             <div class="cursor-analysis-row" key={signal.key}>
