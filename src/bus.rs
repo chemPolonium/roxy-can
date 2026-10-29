@@ -1899,14 +1899,17 @@ impl BusCore {
                 let id = self.node_counter;
                 self.nodes
                     .push(crate::node::ScriptNode::new(id, name, channel));
+                let node_channel = attached
+                    .as_ref()
+                    .map(|(bound, _)| *bound)
+                    .unwrap_or(channel);
                 let last = self.nodes.last_mut().expect("just added");
                 last.attached = attached.clone();
                 // A bound script lives on its node's bus: the binding, not
                 // the passed-in channel, decides the wire (and the gate).
-                if let Some((ach, _)) = attached {
-                    last.channel = ach;
-                }
+                last.channel = node_channel;
                 if self.measuring {
+                    let codecs = self.can_codec_map();
                     let dbc = self
                         .channels
                         .get(channel as usize)
@@ -1914,7 +1917,12 @@ impl BusCore {
                     let keys = self.sysvar_keys();
                     let last = self.nodes.last_mut().expect("just added");
                     last.sysvar_keys = keys;
-                    last.start_with(dbc, Some(&self.fr_dbs), Some(&self.eth_dbs));
+                    last.start_with(
+                        dbc,
+                        Some(&self.fr_dbs),
+                        Some(&self.eth_dbs),
+                        codecs.get(&node_channel).cloned(),
+                    );
                 }
                 self.nodes_dirty = true;
             }
@@ -1942,6 +1950,11 @@ impl BusCore {
             }
             BusCommand::SetNodeSource { id, source } => {
                 let keys = self.sysvar_keys();
+                let codec = self
+                    .nodes
+                    .iter()
+                    .find(|n| n.id == id)
+                    .and_then(|n| self.can_codec(n.channel));
                 if let Some(n) = self.nodes.iter_mut().find(|n| n.id == id) {
                     let dbc = self
                         .channels
@@ -1953,6 +1966,7 @@ impl BusCore {
                         dbc,
                         Some(&self.fr_dbs),
                         Some(&self.eth_dbs),
+                        codec,
                         self.measuring,
                     );
                     self.nodes_dirty = true;
@@ -1960,6 +1974,11 @@ impl BusCore {
             }
             BusCommand::SetNodeEnabled { id, on } => {
                 let keys = self.sysvar_keys();
+                let codec = self
+                    .nodes
+                    .iter()
+                    .find(|n| n.id == id)
+                    .and_then(|n| self.can_codec(n.channel));
                 if let Some(n) = self.nodes.iter_mut().find(|n| n.id == id) {
                     let dbc = self
                         .channels
@@ -1971,6 +1990,7 @@ impl BusCore {
                         dbc,
                         Some(&self.fr_dbs),
                         Some(&self.eth_dbs),
+                        codec,
                         self.measuring,
                     );
                     self.nodes_dirty = true;
@@ -1978,6 +1998,7 @@ impl BusCore {
             }
             BusCommand::SetNodes { nodes } => {
                 let keys = self.sysvar_keys();
+                let codecs = self.can_codec_map();
                 self.nodes = nodes
                     .into_iter()
                     .map(|cfg| {
@@ -1999,7 +2020,12 @@ impl BusCore {
                                 .get(n.channel as usize)
                                 .and_then(|c| c.dbc.clone());
                             n.sysvar_keys = keys.clone();
-                            n.start_with(dbc, Some(&self.fr_dbs), Some(&self.eth_dbs));
+                            n.start_with(
+                                dbc,
+                                Some(&self.fr_dbs),
+                                Some(&self.eth_dbs),
+                                codecs.get(&n.channel).cloned(),
+                            );
                         }
                         n
                     })
@@ -2879,6 +2905,7 @@ impl BusCore {
     /// run the main chunk, fire `on start`.
     fn nodes_start(&mut self) {
         let keys = self.sysvar_keys();
+        let codecs = self.can_codec_map();
         for node in &mut self.nodes {
             if node.enabled {
                 let dbc = self
@@ -2886,7 +2913,12 @@ impl BusCore {
                     .get(node.channel as usize)
                     .and_then(|c| c.dbc.clone());
                 node.sysvar_keys = keys.clone();
-                node.start_with(dbc, Some(&self.fr_dbs), Some(&self.eth_dbs));
+                node.start_with(
+                    dbc,
+                    Some(&self.fr_dbs),
+                    Some(&self.eth_dbs),
+                    codecs.get(&node.channel).cloned(),
+                );
             }
         }
         self.nodes_dirty = true;
@@ -4097,6 +4129,25 @@ impl BusCore {
     /// palette color and the database's display type. An existing
     /// subscription for the key is left untouched.
     /// A CAN key carrying the channel's cluster id, for canonical wire text.
+    /// The model a node's buffer builtins encode/decode through, when the
+    /// channel has one built from its current table.
+    pub(crate) fn can_codec(&self, ch: u8) -> Option<crate::node::CanCodec> {
+        let index = ch as usize;
+        let comm = self.model_comms.get(index)?.as_ref()?.clone();
+        let plans = self.model_plans.get(index)?.as_ref()?.clone();
+        let db = self.channels.get(index)?.dbc.as_ref()?;
+        if !Arc::ptr_eq(self.model_dbs.get(index)?.as_ref()?, db) {
+            return None;
+        }
+        Some((comm, plans, *self.can_cluster_ids.get(index)?))
+    }
+
+    fn can_codec_map(&self) -> std::collections::HashMap<u8, crate::node::CanCodec> {
+        (0..self.channels.len() as u8)
+            .filter_map(|ch| self.can_codec(ch).map(|codec| (ch, codec)))
+            .collect()
+    }
+
     pub(crate) fn can_key(&self, ch: u8, id: u32, ext: bool, name: String) -> SigKey {
         let cluster = self
             .can_cluster_ids

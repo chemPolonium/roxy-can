@@ -11,6 +11,13 @@
 use crate::script::{Handler, HandlerKind, HostInput, Value, Vm, compile};
 use std::collections::{HashMap, VecDeque};
 
+/// The CAN model a node's buffer builtins encode and decode through.
+pub type CanCodec = (
+    std::sync::Arc<crate::model::Comm>,
+    std::sync::Arc<crate::model::PlanCache>,
+    crate::model::ClusterId,
+);
+
 /// Log lines kept per node, oldest first.
 const LOG_CAP: usize = 200;
 /// Instruction allowance per handler run: plenty for stimulus logic,
@@ -228,16 +235,18 @@ impl ScriptNode {
     /// [`Self::start_with`].
     #[cfg(test)]
     pub fn start(&mut self, dbc: Option<std::sync::Arc<crate::dbc::SymbolTable>>) {
-        self.start_with(dbc, None, None);
+        self.start_with(dbc, None, None, None);
     }
 
     /// [`Self::start`] plus the FlexRay/Ethernet descriptions the dotted
-    /// reads (`FR0.CarSpeed`, `ETH0.Frame.Signal`) resolve against.
+    /// reads (`FR0.CarSpeed`, `ETH0.Frame.Signal`) resolve against, and the
+    /// CAN model the buffer builtins encode/decode through.
     pub fn start_with(
         &mut self,
         dbc: Option<std::sync::Arc<crate::dbc::SymbolTable>>,
         fr_dbs: Option<&std::collections::BTreeMap<u8, std::sync::Arc<crate::fr_db::FrDb>>>,
         eth_dbs: Option<&std::collections::BTreeMap<u8, std::sync::Arc<crate::eth::db::EthDb>>>,
+        can_codec: Option<CanCodec>,
     ) {
         self.errored = false;
         self.issue = None;
@@ -434,7 +443,7 @@ impl ScriptNode {
         vm.eth_bus_named_ids = eth_bus_named_ids;
         vm.node_channel = self.channel;
         vm.host_extern = Some(Box::new(move |name, args| {
-            node_extern(dbc.as_deref(), name, args)
+            node_extern(dbc.as_deref(), can_codec.as_ref(), name, args)
         }));
         if let Err(e) = vm.run() {
             let message = e.to_string();
@@ -577,6 +586,7 @@ impl ScriptNode {
         dbc: Option<std::sync::Arc<crate::dbc::SymbolTable>>,
         fr_dbs: Option<&std::collections::BTreeMap<u8, std::sync::Arc<crate::fr_db::FrDb>>>,
         eth_dbs: Option<&std::collections::BTreeMap<u8, std::sync::Arc<crate::eth::db::EthDb>>>,
+        can_codec: Option<CanCodec>,
         measuring: bool,
     ) {
         self.source = source;
@@ -584,7 +594,7 @@ impl ScriptNode {
         self.issue = None;
         self.tests.clear();
         if measuring && self.enabled {
-            self.start_with(dbc, fr_dbs, eth_dbs);
+            self.start_with(dbc, fr_dbs, eth_dbs, can_codec);
         } else if let Ok(script) = compile(&self.source) {
             // Stopped nodes still publish their declared panel actions so
             // the Panel editor can offer them before the first start.
@@ -603,12 +613,13 @@ impl ScriptNode {
         dbc: Option<std::sync::Arc<crate::dbc::SymbolTable>>,
         fr_dbs: Option<&std::collections::BTreeMap<u8, std::sync::Arc<crate::fr_db::FrDb>>>,
         eth_dbs: Option<&std::collections::BTreeMap<u8, std::sync::Arc<crate::eth::db::EthDb>>>,
+        can_codec: Option<CanCodec>,
         measuring: bool,
     ) {
         self.enabled = on;
         if measuring {
             if on {
-                self.start_with(dbc, fr_dbs, eth_dbs);
+                self.start_with(dbc, fr_dbs, eth_dbs, can_codec);
             } else {
                 self.runtime = None;
                 self.errored = false;
@@ -1838,11 +1849,13 @@ pub fn dbc_checks(
 ///   representable.
 fn node_extern(
     dbc: Option<&crate::dbc::SymbolTable>,
+    can_codec: Option<&CanCodec>,
     name: &str,
     args: &[Value],
 ) -> Result<Option<Value>, String> {
-    let db =
-        dbc.ok_or_else(|| "no database on this channel: signal builtins unavailable".to_string())?;
+    if dbc.is_none() && can_codec.is_none() {
+        return Err("no database on this channel: signal builtins unavailable".to_string());
+    }
     match name {
         "set_sig" => {
             if args.len() != 4 {
@@ -1862,6 +1875,46 @@ fn node_extern(
                 Value::Float(f) => *f,
                 _ => return Err("set_sig: value must be a number".into()),
             };
+            if let Some((comm, plans, cluster)) = can_codec {
+                let Some(frame) = comm.frames_in_cluster(*cluster).find(|frame| {
+                    matches!(
+                        frame.address,
+                        crate::model::FrameAddress::Can {
+                            id: frame_id,
+                            extended: false,
+                            ..
+                        } if frame_id == id as u32
+                    )
+                }) else {
+                    return Err(format!("set_sig: unknown message {id:#x}"));
+                };
+                let Some(plan) = plans.get(frame.id) else {
+                    return Err(format!("set_sig: unknown message {id:#x}"));
+                };
+                let Some(signal) = comm
+                    .signals_in_frame(frame)
+                    .into_iter()
+                    .find(|signal| signal.name == *sig)
+                else {
+                    return Err(format!("set_sig: unknown message/signal {id:#x} {sig}"));
+                };
+                let mut data = buf.lock().expect("buffer poisoned");
+                if data.len() < 8 {
+                    data.resize(8, 0);
+                }
+                let written =
+                    crate::model::encode_payload(comm, plan, &[(signal.id, value)], &mut data[..]);
+                return if written == 1 {
+                    Ok(Some(Value::Nil))
+                } else {
+                    Err(format!(
+                        "set_sig: signal \"{sig}\" does not fit the payload"
+                    ))
+                };
+            }
+            let db = dbc.ok_or_else(|| {
+                "no database on this channel: signal builtins unavailable".to_string()
+            })?;
             let mut data = buf.lock().expect("buffer poisoned");
             if data.len() < 8 {
                 data.resize(8, 0);
@@ -1886,6 +1939,39 @@ fn node_extern(
                 return Err("get_sig: signal name must be a string".into());
             };
             let data = buf.lock().expect("buffer poisoned");
+            if let Some((comm, plans, cluster)) = can_codec {
+                let Some(frame) = comm.frames_in_cluster(*cluster).find(|frame| {
+                    matches!(
+                        frame.address,
+                        crate::model::FrameAddress::Can {
+                            id: frame_id,
+                            extended: false,
+                            ..
+                        } if frame_id == id as u32
+                    )
+                }) else {
+                    return Err(format!("get_sig: unknown message {id:#x}"));
+                };
+                let Some(plan) = plans.get(frame.id) else {
+                    return Err(format!("get_sig: unknown message {id:#x}"));
+                };
+                for value in crate::model::decode_payload(comm, plan, &data) {
+                    let Some(signal) = comm.signals.get(&value.signal) else {
+                        continue;
+                    };
+                    if signal.name != *sig {
+                        continue;
+                    }
+                    return match value.physical {
+                        Some(phys) => Ok(Some(Value::Float(phys))),
+                        None => Err(format!("get_sig: signal \"{sig}\" is outside the buffer")),
+                    };
+                }
+                return Err(format!("get_sig: unknown message/signal {id:#x} {sig}"));
+            }
+            let db = dbc.ok_or_else(|| {
+                "no database on this channel: signal builtins unavailable".to_string()
+            })?;
             let frame = crate::can::frame::CanFrame {
                 t_us: 0,
                 channel: 0,
@@ -2292,7 +2378,7 @@ BO_ 512 GearInfo: 8 GearBox
         assert_eq!(issue.line, 1);
         assert!(issue.col.is_some(), "the token column is kept");
         assert!(!issue.message.is_empty());
-        n.set_source("on start { }".into(), None, None, None, false);
+        n.set_source("on start { }".into(), None, None, None, None, false);
         assert!(n.issue().is_none(), "an edit clears the stale diagnostic");
     }
 
@@ -2833,7 +2919,7 @@ BO_ 256 Real: 2 ECU
         let mut dbs = std::collections::BTreeMap::new();
         dbs.insert(0, fr_dbc(&[(13, "CarSpeed")]));
         let mut n = node("on message 0x100 { print(FR0.CarSpeed); }");
-        n.start_with(None, Some(&dbs), None);
+        n.start_with(None, Some(&dbs), None, None);
         assert!(!n.errored(), "{:?}", n.log_snapshot());
         let input = HostInput {
             fr_signals: [((0, 13, "CarSpeed".to_string()), 88.0)]
@@ -2845,7 +2931,7 @@ BO_ 256 Real: 2 ECU
         assert_eq!(n.log_snapshot(), ["88.0"]);
 
         let mut typo = node("on message 0x100 { print(FR0.CarSped); }");
-        typo.start_with(None, Some(&dbs), None);
+        typo.start_with(None, Some(&dbs), None, None);
         assert!(
             typo.log_snapshot()
                 .iter()
@@ -2857,7 +2943,7 @@ BO_ 256 Real: 2 ECU
         let mut ambiguous_dbs = std::collections::BTreeMap::new();
         ambiguous_dbs.insert(0, fr_dbc(&[(13, "CarSpeed"), (14, "CarSpeed")]));
         let mut ambiguous = node("on start { print(FR0.CarSpeed); }");
-        ambiguous.start_with(None, Some(&ambiguous_dbs), None);
+        ambiguous.start_with(None, Some(&ambiguous_dbs), None, None);
         assert!(
             ambiguous
                 .log_snapshot()
@@ -2957,7 +3043,7 @@ BO_ 256 Real: 2 ECU
         let mut dbs = std::collections::BTreeMap::new();
         dbs.insert(0, fr_dbc(&[(13, "CarSpeed")]));
         let mut n = node("on message 0x100 { print(FR.PowerTrain.CarSpeed); }");
-        n.start_with(None, Some(&dbs), None);
+        n.start_with(None, Some(&dbs), None, None);
         assert!(
             !n.log_snapshot().iter().any(|l| l.contains("[check]")),
             "{:?}",
@@ -2976,7 +3062,7 @@ BO_ 256 Real: 2 ECU
         let mut spaced = std::collections::BTreeMap::new();
         spaced.insert(0, fr_dbc(&[(13, "Car Speed")]));
         let mut n2 = node("on message 0x100 { print(FR[\"PowerTrain\"][\"Car Speed\"]); }");
-        n2.start_with(None, Some(&spaced), None);
+        n2.start_with(None, Some(&spaced), None, None);
         let input = HostInput {
             fr_signals: [((0, 13, "Car Speed".to_string()), 7.0)]
                 .into_iter()
@@ -2987,7 +3073,7 @@ BO_ 256 Real: 2 ECU
         assert_eq!(n2.log_snapshot(), ["7.0"]);
 
         let mut unknown = node("on start { print(FR.Nope.CarSpeed); }");
-        unknown.start_with(None, Some(&dbs), None);
+        unknown.start_with(None, Some(&dbs), None, None);
         assert!(
             unknown
                 .log_snapshot()
@@ -3001,7 +3087,7 @@ BO_ 256 Real: 2 ECU
         ambiguous_dbs.insert(0, fr_dbc(&[(13, "CarSpeed")]));
         ambiguous_dbs.insert(1, fr_dbc(&[(14, "CarSpeed")]));
         let mut ambiguous = node("on start { print(FR.PowerTrain.CarSpeed); }");
-        ambiguous.start_with(None, Some(&ambiguous_dbs), None);
+        ambiguous.start_with(None, Some(&ambiguous_dbs), None, None);
         assert!(
             ambiguous
                 .log_snapshot()
@@ -3019,7 +3105,7 @@ BO_ 256 Real: 2 ECU
         let mut before = std::collections::BTreeMap::new();
         before.insert(0, fr_dbc(&[(13, "CarSpeed")]));
         let mut n = node("on message 0x100 { print(FR.PowerTrain.CarSpeed); }");
-        n.start_with(None, Some(&before), None);
+        n.start_with(None, Some(&before), None, None);
         let mut after = std::collections::BTreeMap::new();
         after.insert(0, fr_dbc(&[(20, "CarSpeed")]));
         n.refresh_fr_named(&after);
@@ -3072,7 +3158,7 @@ BO_ 256 Real: 2 ECU
         dbs.insert(0, std::sync::Arc::new(db));
 
         let mut n = node("on message 0x100 { print(ETH.Body.FrameA.Speed); }");
-        n.start_with(None, None, Some(&dbs));
+        n.start_with(None, None, Some(&dbs), None);
         assert!(
             !n.log_snapshot().iter().any(|l| l.contains("[check]")),
             "{:?}",
@@ -3093,7 +3179,7 @@ BO_ 256 Real: 2 ECU
             ("on start { print(ETH.Body.FrameA.Torque); }", "Torque"),
         ] {
             let mut bad = node(src);
-            bad.start_with(None, None, Some(&dbs));
+            bad.start_with(None, None, Some(&dbs), None);
             assert!(
                 bad.log_snapshot()
                     .iter()
@@ -3135,7 +3221,7 @@ BO_ 256 Real: 2 ECU
         );
 
         let mut n = node("on message 0x100 { print(ETH0.FrameA.Speed); }");
-        n.start_with(None, None, Some(&dbs));
+        n.start_with(None, None, Some(&dbs), None);
         assert!(!n.errored(), "{:?}", n.log_snapshot());
         assert!(
             !n.log_snapshot().iter().any(|l| l.contains("[check]")),
@@ -3156,7 +3242,7 @@ BO_ 256 Real: 2 ECU
             ("on start { print(ETH0.FrameA.Torque); }", "Torque"),
         ] {
             let mut bad = node(src);
-            bad.start_with(None, None, Some(&dbs));
+            bad.start_with(None, None, Some(&dbs), None);
             assert!(
                 bad.log_snapshot()
                     .iter()
@@ -3416,6 +3502,50 @@ BO_ 512 Status: 8 ECU
         // A later frame flushes the on-start send: the composed buffer
         // leaves as the payload, little-endian raw 4000 (1000 / 0.25) in
         // bytes 0-1.
+        let out = n.dispatch_frame(0, 0x1, false, false, &[], &HostInput::default());
+        assert_eq!(
+            out,
+            vec![(0x200, false, vec![0xA0, 0x0F, 0, 0, 0, 0, 0, 0])]
+        );
+    }
+
+    /// The same builtins through the model codec, which is what the core
+    /// passes once a channel has plans.
+    #[test]
+    fn set_sig_and_get_sig_use_the_model_codec() {
+        use crate::model::{ClusterId, ClusterSource, ElementIds, PlanCache, import_symbol_table};
+        let db = std::sync::Arc::new(crate::dbc::load_dbc_str(SIG_DBC).unwrap());
+        let mut ids = ElementIds::new();
+        let outcome = import_symbol_table(
+            &db,
+            "CAN1",
+            ClusterId(1),
+            &ClusterSource::Dbc {
+                path: String::new(),
+            },
+            &mut ids,
+            500,
+            2000,
+        );
+        let (plans, _) = PlanCache::build(&outcome.comm, 1);
+        let codec = (
+            std::sync::Arc::new(outcome.comm),
+            std::sync::Arc::new(plans),
+            ClusterId(1),
+        );
+        let mut n = node(
+            r#"
+                let buf = bytes(8);
+                on start {
+                    set_sig(buf, 0x200, "RPM", 1000);
+                    print(get_sig(buf, 0x200, "RPM"));
+                }
+                on message 0x1 { send(0x200, buf); }
+            "#,
+        );
+        n.start_with(None, None, None, Some(codec));
+        assert!(n.running(), "log: {:?}", n.log_snapshot());
+        assert_eq!(n.log_snapshot(), ["1000.0"]);
         let out = n.dispatch_frame(0, 0x1, false, false, &[], &HostInput::default());
         assert_eq!(
             out,
