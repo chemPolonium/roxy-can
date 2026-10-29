@@ -47,7 +47,7 @@ CAN 的地址是 `(通道, id, 帧类)`，FlexRay 的地址是 `(路/cluster, �
 
 ## 描述文件读取
 
-DBC 与 ARXML 都只读：解析出的事实先进统一模型（`Cluster → Network → Frame → PDU → Signal`），DBC/FIBEX 由适配器转成同一模型，`SymbolTable` / `FrDb` / 以太网矩阵只留给尚未迁移的旧解码路径与表格。核心按 `DecodePlan`/`PlanCache` 解码与编码；ARXML 文档里的 mux、container、linear transformation 直接进计划。编辑与写回不在这条路径上。需要补解析时参考同目录的 roxy-arxml / roxy-dbc，但只移植读取侧事实（元数据、布局、约束），不搬序列化/往返保真代码。
+DBC 与 ARXML 都只读：解析出的事实先进统一模型（`Cluster → Network → Frame → PDU → Signal`），DBC/FIBEX 由适配器转成同一模型，`SymbolTable` / `FrDb` / 以太网矩阵只保留文件解析、发送元数据与 UI 表格；旧解码/编码方法已仅测试可见。核心按 `DecodePlan`/`PlanCache` 解码与编码；ARXML 文档里的 mux、container、linear transformation 直接进计划。编辑与写回不在这条路径上。需要补解析时参考同目录的 roxy-arxml / roxy-dbc，但只移植读取侧事实（元数据、布局、约束），不搬序列化/往返保真代码。
 
 - **DBC**：`CM_` 报文/信号注释、`VFrameFormat`（DLC ≤ 8 的 CAN FD 帧）、`SIG_VALTYPE_`、`SG_MUL_VAL_`、周期属性都进目录；注释与帧类在 DBC explorer 的悬停/标签里显示。
 - **ARXML**：CAN 的 `SW-BASE-TYPE/BASE-TYPE-ENCODING`（`2C`、`IEEE754`）决定符号与浮点，类型名只作缺省回退；FlexRay 的 `COMPU-METHOD` 限值按 factor/offset 换算成物理量程（负 factor 交换上下界），没有可用范围时目录保持 0..0，写 Setpoint 按不夹取处理。
@@ -55,7 +55,7 @@ DBC 与 ARXML 都只读：解析出的事实先进统一模型（`Cluster → Ne
 
 ## 帧键：标准/扩展分家
 
-同数值的标准帧与扩展帧是**两个不同的报文**：DBC 表、聚合、规格、订阅信号键全部带帧类位。脚本与生成器按"id ≤ 0x7FF 标准、> 0x7FF 扩展"划类，`send`、`on message`、信号编解码同一规则；裸 id 场景（显示与名称回退查找）标准优先、回退到扩展帧。已知妥协记在 `TODO.md`。
+同数值的标准帧与扩展帧是**两个不同的报文**：DBC 表、聚合与规格按帧类位区分；订阅键以集群 id + 帧类 + 名字为身份，总线路号只在路由时由集群解析。脚本与生成器按"id ≤ 0x7FF 标准、> 0x7FF 扩展"划类，`send`、`on message`、信号编解码同一规则；裸 id 场景（显示与名称回退查找）标准优先、回退到扩展帧。已知妥协记在 `TODO.md`。
 
 ## 角色模型：数据来源、角色、驱动三分离
 
@@ -72,7 +72,7 @@ DBC 与 ARXML 都只读：解析出的事实先进统一模型（`Cluster → Ne
 ## 实体表与三类驱动
 
 - **节点的表示**：Web 没有独立的 Network 页。Buses… 的 Nodes chip 是角色开关（模拟/离线），Generator… 按节点分组列出条目与回放块，Scripts… 里绑定节点；三处都读同一份核心节点/角色模型，没有第二份拓扑。
-- **回放块**：一份录制日志 + 过滤器（按发送节点或 id 列表），测量启动时装载队列、把时间归一化到首帧记 0，随后与发生器共用仿真时钟按录制间距发送。**仅仿真模式生效**——回放模式下日志本身就是信号源，块保持静默。块流量照常进入聚合、负载、规格与触发：它们就是总线流量。装载失败停用块并在状态行报错；新块默认停用。
+- **回放块**：一份录制日志 + 过滤器（按发送节点或 id 列表；节点发送表优先取模型的 FRAME-PORT 关系，无模型才回退 DBC），测量启动时装载队列、把时间归一化到首帧记 0，随后与发生器共用仿真时钟按录制间距发送；文件通道到工程的映射按 cluster id 记录，播放时才解析成当前路号。**仅仿真模式生效**——回放模式下日志本身就是信号源，块保持静默。块流量照常进入聚合、负载、规格与触发：它们就是总线流量。装载失败停用块并在状态行报错；新块默认停用。
 - **派生信号**：脚本一行发布"名字 + 本节点算出的值"，脚本语言就是求值器，不另造第二套表达式引擎。发布为合成订阅流，键空间前缀高于一切真实 id，绝不与帧信号的键重复；会话上限约束不同名数量（防脚本循环造名）。
 - **计算通道**：工程级 `DerivedDef` 表达式同样由 core 按步采样，键为 `derived:<id>`；Variables 窗口只负责编辑，曲线/Monitor/Data/State/触发器和脚本共用这条订阅流。编辑器把 `[reference]` 的解析结果存成 `sources`，core 优先使用 pinned key，缺失时才按当前订阅和总线名回退。
 
@@ -101,7 +101,7 @@ DBC 与 ARXML 都只读：解析出的事实先进统一模型（`Cluster → Ne
 - **模型**：`panelPage.ts` 的控件注册表声明每类控件的创建、字段、最小/默认尺寸与补丁（Button / Value / Bar / Gauge / Lamp / Toggle / Setpoint）；页面是固定 8px 网格画布，坐标按格保存，多页面 book 随 workspace 走。Setpoint 用 `target` 区分 SysVar 与信号；Button 的 `writes` 是随页面保存的信号预设；旧页面里的 Numeric（无 target）与 Setpoint（旧 kind）在加载时迁移，持久格式只剩一种可编辑控件。
 - **绑定与能力**：`panelBinding.ts` 是纯选择器层——解析 source、SysVar、色段、量程比例、弧线路径、运行中的动作集合与禁用原因；PagePanel 只负责渲染与编辑命令。
 - **右键**：Edit 下控件、空白画布与页签各有一套上下文菜单（复制/删除；粘贴/添加/撤销；页面重命名/复制/导出/删除），统一 `role="menu"` 与 ↑/↓/Home/End/Esc，Esc 只关菜单；右键按下不触发拖动。
-- **执行链**：按钮的 **On click** 三选一、互斥——**Write signals** 走 `panel_write_signals` → `BusCommand::PanelWriteSignals`，逐项调用同一个写入实现并汇总失败（会话帧无法回滚，所以不做原子失败），不碰仿真；**Send message** 走 `panel_send_frame` / `panel_send_fr_frame` / `panel_send_eth_frame`，校验总线/地址/长度后发一条原始报文：CAN 帧排进本步的接收队列，像生成器帧一样计数、解码、录制并进入已连接硬件；FlexRay 帧按槽声明长度补齐后只注入本会话；Ethernet 按矩阵 VLAN/EtherType 与固定 MAC 注入本会话 flow，长度必须与帧声明一致；CAN 已知报文带 `physical` 时改由 `signals` 编码：按目录信号夹取写入、未写信号取声明初始值，载荷宽度用报文 DLC；FR/ETH 的 physical 走同一组 `signals`，宽度用槽/矩阵的声明长度；**Script action** 走 `run_panel_action` → `on panel_action`（可带数值参数）。启动/停止/暂停等仿真控制只保留在顶部工具栏，不再由面板按钮发送 `PanelAction`；组合逻辑由脚本实现；Setpoint 的 SysVar target 写 `set_sys_var`，信号 target 统一走键寻址的 `panel_write_signal`（`SigKey` 的 Can/Fr/Eth/Derived）：CAN 按 DBC 夹取、编码进 generator 基载荷、摘掉该信号的波形源并注入一帧；FlexRay 按簇描述解析 slot 里的占用帧、夹取后编码，并只在本次测量内注入一帧（选择帧实际激活的周期，读回能解出同一帧）；Ethernet 按帧的 PDU+信号位偏移编码，用矩阵 VLAN、`ethertype_hint`（缺省 `0x88B5`）和固定本机管理 MAC 注入一个 TX 会话帧，匹配与回读走现有 flow 解码；派生信号直接拒绝。两种 target 提交后都可带值触发同名动作。目录里既没有声明范围（max ≤ min）时按不夹取处理，与后端一致。
+- **执行链**：按钮的 **On click** 三选一、互斥——**Write signals** 走 `panel_write_signals` → `BusCommand::PanelWriteSignals`，逐项调用同一个写入实现并汇总失败（会话帧无法回滚，所以不做原子失败），不碰仿真；**Send message** 走 `panel_send_frame` / `panel_send_fr_frame` / `panel_send_eth_frame`，校验总线/地址/长度后发一条原始报文：CAN 帧排进本步的接收队列，像生成器帧一样计数、解码、录制并进入已连接硬件；FlexRay 帧按槽声明长度补齐后只注入本会话；Ethernet 按矩阵 VLAN/EtherType 与固定 MAC 注入本会话 flow，长度必须与帧声明一致；CAN 已知报文带 `physical` 时改由 `signals` 编码：按目录信号夹取写入、未写信号取声明初始值，载荷宽度用报文 DLC；FR/ETH 的 physical 走同一组 `signals`，宽度用槽/矩阵的声明长度；**Script action** 走 `run_panel_action` → `on panel_action`（可带数值参数）。启动/停止/暂停等仿真控制只保留在顶部工具栏，不再由面板按钮发送 `PanelAction`；组合逻辑由脚本实现；Setpoint 的 SysVar target 写 `set_sys_var`，信号 target 统一走键寻址的 `panel_write_signal`（`SigKey` 的 Can/Fr/Eth/Derived）：CAN 按统一模型夹取、用 `encode_payload` 写进 generator 基载荷、摘掉该信号的波形源并注入一帧；FlexRay 仍用描述决定当前 cycle 的占用帧，信号位置与编码取模型 plan，并只在本次测量内注入一帧；Ethernet 按模型帧与 plan 编码，用矩阵 VLAN、`ethertype_hint`（缺省 `0x88B5`）和固定本机管理 MAC 注入一个 TX 会话帧，匹配与回读走现有 flow 解码；派生信号直接拒绝。两种 target 提交后都可带值触发同名动作。目录里既没有声明范围（max ≤ min）时按不夹取处理，与后端一致。
 - **回读**：Setpoint 把目标信号按 Read 订阅（`select_signal read=true`），用同一份序列显示总线实际值；前端记录自己添加的 key，控件改绑/删除时只回收这些订阅，用户手动 Plot/Read 的信号不动。这就是面板唯一自动订阅的入口。
 - **文件**：`.rxpanel` 由前端序列化，导入严格校验（类型/画幅/最小尺寸/重叠）后才作为新页面追加，绝不静默丢弃。
 - **测试**：模型、选择器与导入导出有 Vitest；动作、参数与写信号有 Rust 无头测试（真实 core）；交互用浏览器 + CDP 实机走查。
