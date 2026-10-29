@@ -5422,12 +5422,30 @@ fn build_state(app: &App, series: &VecDeque<WebSeriesPoint>, fps: f64) -> WebSta
         .iter()
         .map(|(bus, cfg)| {
             let watch = app.snap.fr_watches.iter().find(|watch| watch.bus == *bus);
+            let model = app
+                .fr_models
+                .get(bus)
+                .and_then(|comm| comm.clusters.values().next());
             WebFrBus {
                 bus: *bus,
                 name: app.fr_bus_name(*bus),
-                path: cfg.path.clone(),
-                cluster: cfg.db.params.name.clone(),
-                frames: cfg.db.frames.len(),
+                path: model
+                    .and_then(|cluster| cluster.sources.first())
+                    .and_then(|source| source.path())
+                    .map(str::to_string)
+                    .unwrap_or_else(|| cfg.path.clone()),
+                cluster: model
+                    .map(|cluster| cluster.name.clone())
+                    .unwrap_or_else(|| cfg.db.params.name.clone()),
+                frames: model
+                    .map(|cluster| {
+                        app.fr_models
+                            .get(bus)
+                            .map(|comm| comm.frames_in_cluster(cluster.id).count())
+                            .unwrap_or(0)
+                    })
+                    .filter(|count| *count > 0)
+                    .unwrap_or(cfg.db.frames.len()),
                 attached: watch.is_some(),
                 channel: watch.map(|watch| watch.channel_index).unwrap_or(-1),
             }
@@ -5436,12 +5454,38 @@ fn build_state(app: &App, series: &VecDeque<WebSeriesPoint>, fps: f64) -> WebSta
     let eth_buses: Vec<WebEthBus> = app
         .eth_buses
         .iter()
-        .map(|(bus, cfg)| WebEthBus {
-            bus: *bus,
-            name: app.eth_bus_label(*bus),
-            path: cfg.path.clone(),
-            clusters: cfg.db.clusters.len(),
-            frames: cfg.db.frames.len(),
+        .map(|(bus, cfg)| {
+            let model = app
+                .eth_models
+                .get(bus)
+                .and_then(|comm| comm.clusters.values().next());
+            WebEthBus {
+                bus: *bus,
+                name: app.eth_bus_label(*bus),
+                path: model
+                    .and_then(|cluster| cluster.sources.first())
+                    .and_then(|source| source.path())
+                    .map(str::to_string)
+                    .unwrap_or_else(|| cfg.path.clone()),
+                clusters: app
+                    .eth_models
+                    .get(bus)
+                    .map(|comm| comm.clusters.len())
+                    .unwrap_or(cfg.db.clusters.len()),
+                frames: app
+                    .eth_models
+                    .get(bus)
+                    .map(|comm| {
+                        comm.frames
+                            .values()
+                            .filter(|frame| {
+                                matches!(frame.address, crate::model::FrameAddress::Ethernet { .. })
+                            })
+                            .count()
+                    })
+                    .filter(|count| *count > 0)
+                    .unwrap_or(cfg.db.frames.len()),
+            }
         })
         .collect();
     let mut clusters: Vec<WebCluster> = Vec::new();
@@ -5451,7 +5495,15 @@ fn build_state(app: &App, series: &VecDeque<WebSeriesPoint>, fps: f64) -> WebSta
             kind: "can".to_string(),
             name: bus.name.clone(),
             bus: bus.index,
-            source: bus.dbc_paths.first().cloned().unwrap_or_default(),
+            source: app
+                .model_comms
+                .get(index)
+                .and_then(|slot| slot.as_ref())
+                .and_then(|comm| comm.clusters.values().next())
+                .and_then(|cluster| cluster.sources.first())
+                .and_then(|source| source.path())
+                .map(str::to_string)
+                .unwrap_or_else(|| bus.dbc_paths.first().cloned().unwrap_or_default()),
             frames: {
                 let model = snap
                     .model_frames
