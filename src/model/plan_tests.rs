@@ -184,6 +184,8 @@ fn fixture() -> Comm {
 
     // Secured PDU with a 16-bit header and Pdu 10 as payload.
     let mut secured_pdu = pdu(40, PduKind::Secured);
+    // 16-bit header over an 8-byte payload needs twelve bytes.
+    secured_pdu.length = 12;
     secured_pdu.secured = Some(SecuredPduMeta {
         header: SecuredPduHeader::Header16,
         payload: Some(PduId(10)),
@@ -287,4 +289,55 @@ fn plan_cache_holds_one_plan_per_frame() {
     assert_eq!(cache.version, 7);
     assert_eq!(cache.get(FrameId(3)).unwrap().frame, Some(FrameId(3)));
     assert!(cache.get(FrameId(99)).is_none());
+}
+
+#[test]
+fn a_secured_pdu_that_cannot_hold_its_payload_is_reported() {
+    let mut comm = Comm::default();
+    comm.pdus.insert(PduId(1), pdu(1, PduKind::Signal));
+    let mut secured = pdu(2, PduKind::Secured);
+    secured.length = 4;
+    secured.header_type = ContainerHeaderType::None;
+    secured.secured = Some(SecuredPduMeta {
+        header: SecuredPduHeader::NoHeader,
+        payload: Some(PduId(1)),
+        data_id: Some(1),
+        freshness_value_id: None,
+        secured_area: Some((0, 64)),
+        auth_info_length: Some(5),
+        verification: SecVerification::Unverified,
+    });
+    comm.pdus.insert(PduId(2), secured);
+    let mut frame = frame(2, 2);
+    frame.length = 4;
+    comm.frames.insert(FrameId(2), frame);
+    comm.frame_pdu_mappings.insert(
+        MappingId(2),
+        FramePduMapping {
+            id: MappingId(2),
+            frame: FrameId(2),
+            pdu: PduId(2),
+            start_bit: 0,
+            byte_order: ByteOrder::LittleEndian,
+        },
+    );
+    let (_, issues) = build_decode_plan(&comm, comm.frames.get(&FrameId(2)).unwrap(), 1);
+    assert!(
+        issues
+            .iter()
+            .any(|issue| issue.message.contains("header plus payload")),
+        "{issues:?}"
+    );
+    assert!(
+        issues
+            .iter()
+            .any(|issue| issue.message.contains("secured area")),
+        "{issues:?}"
+    );
+    assert!(
+        issues
+            .iter()
+            .any(|issue| issue.message.contains("authenticator")),
+        "{issues:?}"
+    );
 }

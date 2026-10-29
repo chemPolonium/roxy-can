@@ -1316,6 +1316,25 @@ fn read_ethernet_meta(frame: Node<'_, '_>) -> Option<EthernetFrameMeta> {
     }
 }
 
+/// The authenticator length stated on the authentication-props object a
+/// secured PDU references. System descriptions usually carry the
+/// authenticator size there rather than inline on the PDU.
+fn referenced_auth_info_length(node: Node<'_, '_>) -> Option<f64> {
+    let root = node.ancestors().last()?;
+    let reference = node
+        .descendants()
+        .find(|n| n.has_tag_name("AUTHENTICATION-PROPS-REF"))?
+        .text()?
+        .trim()
+        .to_string();
+    let tail = reference.rsplit('/').next()?.trim();
+    root.descendants()
+        .find(|n| {
+            n.has_tag_name("SECURE-COMMUNICATION-AUTHENTICATION-PROPS") && short_name(*n) == tail
+        })
+        .and_then(|n| child_number(n, "AUTH-INFO-TX-LENGTH"))
+}
+
 fn read_pdu_shape(
     node: Node<'_, '_>,
 ) -> (
@@ -1359,16 +1378,30 @@ fn read_pdu_shape(
                 .descendants()
                 .find(|n| n.has_tag_name("SECURE-COMMUNICATION-PROPS"));
             let number = |tag: &str| props.and_then(|p| child_number(p, tag)).map(|v| v as u64);
+            // The secured area and the authenticator length live inside
+            // SECURE-COMMUNICATION-PROPS in system descriptions; some tools
+            // also put the authenticator length on the referenced
+            // authentication-props object instead.
+            let secured_area = props.and_then(|p| {
+                child_number(p, "SECURED-AREA-OFFSET").and_then(|offset| {
+                    child_number(p, "SECURED-AREA-LENGTH")
+                        .map(|length| (offset as u32, length as u32))
+                })
+            });
+            let auth_info_length = props
+                .and_then(|p| {
+                    child_number(p, "AUTH-INFO-LENGTH")
+                        .or_else(|| child_number(p, "AUTH-INFO-TX-LENGTH"))
+                })
+                .or_else(|| referenced_auth_info_length(node))
+                .map(|v| v as u32);
             let secured = SecuredPduMeta {
                 header,
                 payload: None,
                 data_id: number("DATA-ID"),
                 freshness_value_id: number("FRESHNESS-VALUE-ID"),
-                secured_area: child_number(node, "SECURED-AREA-OFFSET").and_then(|offset| {
-                    child_number(node, "SECURED-AREA-LENGTH")
-                        .map(|length| (offset as u32, length as u32))
-                }),
-                auth_info_length: child_number(node, "AUTH-INFO-LENGTH").map(|v| v as u32),
+                secured_area,
+                auth_info_length,
                 verification: SecVerification::Unverified,
             };
             (

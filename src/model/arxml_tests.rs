@@ -292,8 +292,14 @@ const ADVANCED_TEXT: &str = r#"<?xml version="1.0"?>
  <SECURED-I-PDU><SHORT-NAME>Sec</SHORT-NAME><LENGTH>16</LENGTH>
   <USE-SECURED-PDU-HEADER>SECURED-PDU-HEADER-16-BIT</USE-SECURED-PDU-HEADER>
   <PAYLOAD-REF DEST="I-SIGNAL-I-PDU">/P/PduA</PAYLOAD-REF>
-  <SECURE-COMMUNICATION-PROPS><DATA-ID>291</DATA-ID><FRESHNESS-VALUE-ID>1</FRESHNESS-VALUE-ID></SECURE-COMMUNICATION-PROPS>
+  <AUTHENTICATION-PROPS-REF DEST="SECURE-COMMUNICATION-AUTHENTICATION-PROPS">/P/Auth</AUTHENTICATION-PROPS-REF>
+  <SECURE-COMMUNICATION-PROPS><DATA-ID>291</DATA-ID><FRESHNESS-VALUE-ID>1</FRESHNESS-VALUE-ID>
+   <SECURED-AREA-OFFSET>64</SECURED-AREA-OFFSET><SECURED-AREA-LENGTH>32</SECURED-AREA-LENGTH>
+  </SECURE-COMMUNICATION-PROPS>
  </SECURED-I-PDU>
+ <SECURE-COMMUNICATION-AUTHENTICATION-PROPS><SHORT-NAME>Auth</SHORT-NAME>
+  <AUTH-INFO-TX-LENGTH>4</AUTH-INFO-TX-LENGTH>
+ </SECURE-COMMUNICATION-AUTHENTICATION-PROPS>
 </ELEMENTS></AR-PACKAGE></AR-PACKAGES></AUTOSAR>"#;
 
 #[test]
@@ -332,6 +338,16 @@ fn imports_container_multiplexed_and_secured_pdus() {
     assert_eq!(meta.header, SecuredPduHeader::Header16);
     assert_eq!(meta.data_id, Some(291));
     assert_eq!(meta.freshness_value_id, Some(1));
+    assert_eq!(
+        meta.secured_area,
+        Some((64, 32)),
+        "the secured area is read from SECURE-COMMUNICATION-PROPS"
+    );
+    assert_eq!(
+        meta.auth_info_length,
+        Some(4),
+        "the authenticator length is read from the referenced props object"
+    );
     assert_eq!(meta.verification, SecVerification::Unverified);
     let pdu_a = comm.pdus.values().find(|pdu| pdu.name == "PduA").unwrap();
     assert_eq!(meta.payload, Some(pdu_a.id));

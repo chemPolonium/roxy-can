@@ -162,6 +162,43 @@ pub fn build_decode_plan(comm: &Comm, frame: &Frame, version: u32) -> (DecodePla
                     continue;
                 };
                 let header_bits = secured.header.header_size() * 8;
+                let pdu_bits = u64::from(pdu.length) * 8;
+                let payload_bits = comm
+                    .pdus
+                    .get(&payload)
+                    .map(|pdu| u64::from(pdu.length) * 8)
+                    .unwrap_or(0);
+                if u64::from(header_bits) + payload_bits > pdu_bits {
+                    issues.push(Issue::warning(
+                        IssueKind::LengthConvention,
+                        format!(
+                            "secured PDU {}: header plus payload is longer than the PDU",
+                            pdu.name
+                        ),
+                    ));
+                }
+                if let Some((offset, length)) = secured.secured_area
+                    && u64::from(offset) + u64::from(length) > pdu_bits
+                {
+                    issues.push(Issue::warning(
+                        IssueKind::LengthConvention,
+                        format!(
+                            "secured PDU {}: the secured area runs past the PDU",
+                            pdu.name
+                        ),
+                    ));
+                }
+                if let Some(bytes) = secured.auth_info_length
+                    && u64::from(header_bits) + u64::from(bytes) * 8 > pdu_bits
+                {
+                    issues.push(Issue::warning(
+                        IssueKind::LengthConvention,
+                        format!(
+                            "secured PDU {}: the authenticator does not fit the PDU",
+                            pdu.name
+                        ),
+                    ));
+                }
                 expand_pdu(
                     comm,
                     payload,
