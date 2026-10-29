@@ -492,6 +492,12 @@ function FrameField({
                 value={idDraft}
                 placeholder="0x7DF"
                 spellcheck={false}
+                disabled={source === "catalog"}
+                title={
+                  source === "catalog"
+                    ? "Filled by the selected message"
+                    : undefined
+                }
                 onFocus={() => {
                   onFocus();
                   setEditing("id");
@@ -517,6 +523,12 @@ function FrameField({
               <input
                 type="checkbox"
                 checked={frame?.protocol === "can" && frame.extended}
+                disabled={source === "catalog"}
+                title={
+                  source === "catalog"
+                    ? "Filled by the selected message"
+                    : undefined
+                }
                 onFocus={onFocus}
                 onChange={(event) => {
                   const current = base();
