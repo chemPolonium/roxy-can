@@ -5225,6 +5225,41 @@ fn a_shared_numeric_id_aggregates_as_two_messages() {
     );
 }
 
+#[test]
+fn debug_default_model_availability() {
+    let app = App::headless();
+    let f = rx_frame(0, 0x100, 2, FrameFlags::NONE);
+    let comm = app.model_comms[0].as_ref().unwrap();
+    let frames: Vec<String> = comm
+        .frames
+        .values()
+        .map(|frame| format!("{} {:?}", frame.name, frame.address))
+        .collect();
+    let db_ok = app.model_dbs[0]
+        .as_ref()
+        .zip(app.channels[0].dbc.as_ref())
+        .is_some_and(|(a, b)| std::sync::Arc::ptr_eq(a, b));
+    let frame = comm.frames_in_cluster(app.can_cluster_ids[0]).find(|frame| {
+        matches!(frame.address, crate::model::FrameAddress::Can { id, extended, .. } if id == 0x100 && !extended)
+    });
+    let plan_ok =
+        frame.is_some_and(|frame| app.model_plans[0].as_ref().unwrap().get(frame.id).is_some());
+    let frame = frame.unwrap();
+    let plan = app.model_plans[0]
+        .as_ref()
+        .unwrap()
+        .get(frame.id)
+        .unwrap()
+        .clone();
+    let decoded = crate::model::decode_payload(comm, &plan, &f.data[..f.len as usize]);
+    assert!(
+        app.model_decoded_for_test(&f).is_some(),
+        "model missing: db_ok={db_ok} frames={frames:?} plan_ok={plan_ok} reads={} decoded={decoded:?} signals={}",
+        plan.reads.len(),
+        comm.signals.len()
+    );
+}
+
 fn quiet_app() -> App {
     let mut app = App::headless();
     app.start_virtual();

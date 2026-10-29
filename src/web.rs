@@ -5072,33 +5072,6 @@ fn expanded_signal_dto(rows: &[crate::bus::ExpandedSignal]) -> Vec<WebMessageSig
         .collect()
 }
 
-fn can_message_signals(
-    db: Option<&std::sync::Arc<crate::dbc::SymbolTable>>,
-    m: &crate::aggregate::MessageAgg,
-) -> Vec<WebMessageSignal> {
-    use crate::can::frame::FrameFlags;
-    if m.flags.contains(FrameFlags::ERROR) || m.flags.contains(FrameFlags::RTR) {
-        return Vec::new();
-    }
-    let Some(db) = db else {
-        return Vec::new();
-    };
-    let frame = CanFrame {
-        t_us: m.last_t_us,
-        channel: m.channel,
-        id: m.id,
-        extended: m.extended,
-        len: m.len,
-        data: m.data,
-        dir: m.dir,
-        flags: m.flags,
-    };
-    db.decode_signals(&frame)
-        .into_iter()
-        .map(message_signal_dto)
-        .collect()
-}
-
 fn eth_message_key(key: &crate::aggregate::EthFlowKey) -> String {
     key.message_key()
 }
@@ -5846,7 +5819,7 @@ fn build_state(app: &App, series: &VecDeque<WebSeriesPoint>, fps: f64) -> WebSta
                 snap.expanded_signals
                     .get(&key)
                     .map(|rows| expanded_signal_dto(rows))
-                    .unwrap_or_else(|| can_message_signals(channel_db, m))
+                    .unwrap_or_default()
             } else {
                 Vec::new()
             };

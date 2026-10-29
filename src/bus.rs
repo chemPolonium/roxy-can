@@ -3710,10 +3710,7 @@ impl BusCore {
                 dir: agg.dir,
                 flags: agg.flags,
             };
-            let decoded = self
-                .model_can_decoded(&frame, false)
-                .or_else(|| self.channel_dbc(ch).map(|db| db.decode_signals(&frame)))
-                .unwrap_or_default();
+            let decoded = self.model_can_decoded(&frame, false).unwrap_or_default();
             out.insert(
                 key,
                 decoded
@@ -4854,12 +4851,18 @@ impl BusCore {
         let decoded = crate::model::decode_payload(comm, plan, payload);
         let mut out = Vec::with_capacity(decoded.len());
         for value in decoded {
-            let signal = comm.signals.get(&value.signal)?;
+            let Some(signal) = comm.signals.get(&value.signal) else {
+                continue;
+            };
             let key = SigKey::can(f.channel, f.id, f.extended, signal.name.clone());
             if only_subscribed && !self.subs.contains_key(&key) {
                 continue;
             }
-            out.push(Self::model_signal_decoded(comm, value)?);
+            // A signal past the end of a short frame has no physical value;
+            // it must not hide the signals that do fit.
+            if let Some(decoded) = Self::model_signal_decoded(comm, value) {
+                out.push(decoded);
+            }
         }
         Some(out)
     }
@@ -4928,12 +4931,16 @@ impl BusCore {
         let decoded = crate::model::decode_payload(comm, plan, &row.payload);
         let mut out = Vec::with_capacity(decoded.len());
         for value in decoded {
-            let signal = comm.signals.get(&value.signal)?;
+            let Some(signal) = comm.signals.get(&value.signal) else {
+                continue;
+            };
             let key = SigKey::fr(row.bus, row.slot, signal.name.clone());
             if only_subscribed && !self.subs.contains_key(&key) {
                 continue;
             }
-            out.push(Self::model_signal_decoded(comm, value)?);
+            if let Some(decoded) = Self::model_signal_decoded(comm, value) {
+                out.push(decoded);
+            }
         }
         Some(out)
     }
@@ -4967,12 +4974,16 @@ impl BusCore {
         let decoded = crate::model::decode_payload(comm, plan, payload);
         let mut out = Vec::with_capacity(decoded.len());
         for value in decoded {
-            let signal = comm.signals.get(&value.signal)?;
+            let Some(signal) = comm.signals.get(&value.signal) else {
+                continue;
+            };
             let key = SigKey::eth(bus, frame_name, signal.name.clone());
             if only_subscribed && !self.subs.contains_key(&key) {
                 continue;
             }
-            out.push(Self::model_signal_decoded(comm, value)?);
+            if let Some(decoded) = Self::model_signal_decoded(comm, value) {
+                out.push(decoded);
+            }
         }
         Some(out)
     }
@@ -7735,12 +7746,11 @@ impl BusCore {
                             // Not this message's frame: the level holds.
                             continue;
                         }
-                        let Some(db) = self.channel_dbc(*ch) else {
-                            continue; // no database on the bus, no opinion
+                        // No model on the bus means no opinion, exactly as a
+                        // missing database did: the level holds.
+                        let Some(decoded) = self.model_can_decoded(f, false) else {
+                            continue;
                         };
-                        let decoded = self
-                            .model_can_decoded(f, false)
-                            .unwrap_or_else(|| db.decode_signals(f));
                         match decoded.into_iter().find(|d| d.name == *signal) {
                             Some(d) => {
                                 if *rising {
@@ -7793,10 +7803,7 @@ impl BusCore {
             .iter()
             .any(|(a, _)| matches!(a, TriggerAction::Send { .. }))
         {
-            let decoded = self
-                .model_can_decoded(f, false)
-                .or_else(|| self.channel_dbc(f.channel).map(|db| db.decode_signals(f)));
-            for d in decoded.unwrap_or_default() {
+            for d in self.model_can_decoded(f, false).unwrap_or_default() {
                 mirror.insert(d.name, d.phys);
             }
         }
