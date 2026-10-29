@@ -845,6 +845,17 @@ pub struct MuxCondition {
     pub ranges: Vec<(u32, u32)>,
 }
 
+/// The container header that decides whether a contained PDU is present.
+/// `header_id` 0 means the document did not assign one, so the child is read
+/// wherever it sits (the pre-header behaviour).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContainerGate {
+    pub header_start_bit: u32,
+    pub header_type: ContainerHeaderType,
+    pub header_id: u32,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct SignalRead {
     pub signal: SignalId,
@@ -857,6 +868,8 @@ pub struct SignalRead {
     pub offset: f64,
     #[serde(default)]
     pub mux: Vec<MuxCondition>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub container: Option<ContainerGate>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -869,6 +882,8 @@ pub struct SignalWrite {
     pub float: bool,
     pub factor: f64,
     pub offset: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub container: Option<ContainerGate>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]

@@ -6716,6 +6716,91 @@ fn a_step_message_stays_in_the_write_window() {
 /// half that failed used to be written to the bar and then overwritten by the
 /// "project loaded" line two statements later, so the user never saw it at all.
 /// Each problem now stays in the Write ring, and the bar carries the count.
+/// A v1 project has no cluster ids; opening it migrates the buses, and the
+/// v2 file written afterwards must reopen with the same ids, generator rows
+/// and trigger rules. This is the migration exit criterion for Phase 7, so it
+/// pins the second round trip too -- a migration that only works once would
+/// still be a broken project.
+#[test]
+fn a_v1_project_migrates_to_v2_and_round_trips() {
+    let dir = std::env::temp_dir().join("roxy_can_v1_migration");
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut source = App::headless();
+    source.send(crate::bus::BusCommand::AddChannel);
+    source.settle();
+    source.add_tx(1, 0x321);
+    source.settle();
+    let row = source
+        .snap
+        .tx
+        .iter()
+        .position(|t| t.channel == 1 && t.id == 0x321)
+        .expect("the generator row");
+    assert!(source.set_tx_hex(row, "11 22 33"));
+    source.triggers.push(crate::trigger::Trigger::new(
+        crate::trigger::TriggerCond::IdPresent { ch: 1, id: 0x321 },
+        crate::trigger::TriggerAction::InsertMarker,
+    ));
+    source.refresh_snapshot();
+
+    let v1_path = dir.join("v1.rxproj");
+    let config = crate::config::Config::from_app(&source, None);
+    let v1 = serde_json::to_string_pretty(&crate::config::ProjectFile { config }).unwrap();
+    std::fs::write(&v1_path, &v1).unwrap();
+    assert!(!v1.contains("\"version\": 2"), "fixture is a v1 file");
+
+    let mut migrated = App::headless();
+    migrated.open_project_path(&v1_path);
+    migrated.settle();
+    assert_eq!(migrated.snap.channel_count, source.snap.channel_count);
+    assert!(
+        !migrated.snap.cluster_ids.can.is_empty(),
+        "the migrated workspace has cluster ids"
+    );
+    assert_eq!(
+        migrated.snap.tx.len(),
+        source.snap.tx.len(),
+        "generator rows survive the migration"
+    );
+    assert_eq!(migrated.snap.triggers.len(), 1);
+
+    let v2_path = dir.join("v2.rxproj");
+    assert!(migrated.save_project(Some(v2_path.clone())));
+    let value: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&v2_path).unwrap()).unwrap();
+    assert_eq!(value["version"], 2);
+    assert!(
+        value["generators"]
+            .as_array()
+            .is_some_and(|rows| rows.iter().any(|row| row["id"] == 0x321)),
+        "the migrated generator row is written as a v2 row: {}",
+        value["generators"]
+    );
+
+    let mut reopened = App::headless();
+    reopened.open_project_path(&v2_path);
+    reopened.settle();
+    assert_eq!(
+        reopened.snap.cluster_ids, migrated.snap.cluster_ids,
+        "the second open restores the same cluster ids"
+    );
+    assert_eq!(reopened.snap.channel_count, migrated.snap.channel_count);
+    let row = reopened
+        .snap
+        .tx
+        .iter()
+        .find(|t| t.channel == 1 && t.id == 0x321)
+        .expect("the migrated generator row reopens");
+    assert_eq!(row.data_text, "11 22 33");
+    assert!(
+        reopened.snap.triggers.iter().any(|t| matches!(
+            &t.cond,
+            crate::trigger::TriggerCond::IdPresent { ch: 1, id: 0x321 }
+        )),
+        "the migrated trigger reopens on its bus"
+    );
+}
+
 /// FlexRay and Ethernet ARXML go through FIBEX/EthDb-shaped tables for legacy
 /// decoding, but the core must also hold the document's own model -- and keep
 /// holding it after a reopen, where `SetClusterIds` rebuilds the adapter

@@ -294,3 +294,82 @@ fn mux_selector_gates_the_dynamic_part() {
     let other = decode_payload(&comm, &plan, &[1, 0x55, 0, 0, 0, 0, 0, 0]);
     assert!(other.iter().all(|value| value.signal != SignalId(100)));
 }
+
+#[test]
+fn a_container_child_is_gated_by_the_header_id() {
+    let mut comm = base_comm();
+    add_signal(&mut comm, signal(100, 0, 16));
+    comm.pdus.insert(
+        PduId(20),
+        Pdu {
+            id: PduId(20),
+            name: "Container".to_string(),
+            length: 8,
+            kind: PduKind::Container,
+            header_type: ContainerHeaderType::Short,
+            cycle_us: None,
+            selector: None,
+            secured: None,
+            transformation: None,
+            e2e: None,
+        },
+    );
+    comm.contained_pdu_mappings.insert(
+        MappingId(20),
+        ContainedPduMapping {
+            id: MappingId(20),
+            container: PduId(20),
+            pdu: PduId(10),
+            header_id: 1,
+            offset: 4,
+        },
+    );
+    comm.frame_pdu_mappings.insert(
+        MappingId(1),
+        FramePduMapping {
+            id: MappingId(1),
+            frame: FrameId(1),
+            pdu: PduId(20),
+            start_bit: 0,
+            byte_order: ByteOrder::LittleEndian,
+        },
+    );
+    let plan = plan(&comm);
+    let matching = decode_payload(&comm, &plan, &[0, 0, 1, 4, 0x34, 0x12, 0, 0]);
+    assert_eq!(
+        matching
+            .iter()
+            .find(|value| value.signal == SignalId(100))
+            .unwrap()
+            .raw,
+        0x1234
+    );
+    let other = decode_payload(&comm, &plan, &[0, 0, 2, 4, 0x34, 0x12, 0, 0]);
+    assert!(
+        other.iter().all(|value| value.signal != SignalId(100)),
+        "a header naming another contained PDU hides this one"
+    );
+
+    let mut payload = [0, 0, 2, 4, 0, 0, 0, 0];
+    assert_eq!(
+        encode_payload(
+            &comm,
+            &plan,
+            &[(SignalId(100), 0x1234u16 as f64)],
+            &mut payload
+        ),
+        0,
+        "writing a child the frame does not carry is not an error, it is nothing"
+    );
+    let mut payload = [0, 0, 1, 4, 0, 0, 0, 0];
+    assert_eq!(
+        encode_payload(
+            &comm,
+            &plan,
+            &[(SignalId(100), 0x1234u16 as f64)],
+            &mut payload
+        ),
+        1
+    );
+    assert_eq!(&payload[4..6], &[0x34, 0x12]);
+}

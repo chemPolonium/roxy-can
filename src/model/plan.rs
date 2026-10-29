@@ -72,7 +72,7 @@ pub fn build_decode_plan(comm: &Comm, frame: &Frame, version: u32) -> (DecodePla
         let base = mapping.start_bit.saturating_sub(frame_base);
         match pdu.kind {
             PduKind::Signal => {
-                expand_pdu(comm, pdu.id, base, None, &mut reads);
+                expand_pdu(comm, pdu.id, base, None, None, &mut reads);
             }
             PduKind::Container => {
                 for contained in comm
@@ -80,14 +80,24 @@ pub fn build_decode_plan(comm: &Comm, frame: &Frame, version: u32) -> (DecodePla
                     .values()
                     .filter(|m| m.container == pdu.id)
                 {
+                    // The header names which contained PDU travels in this
+                    // frame; an unassigned id keeps the old "read wherever it
+                    // sits" behaviour rather than guessing.
+                    let gate = (pdu.header_type != ContainerHeaderType::None
+                        && contained.header_id != 0)
+                        .then_some(ContainerGate {
+                            header_start_bit: base,
+                            header_type: pdu.header_type,
+                            header_id: contained.header_id,
+                        });
                     let offset = base + contained.offset.saturating_mul(8);
-                    expand_pdu(comm, contained.pdu, offset, None, &mut reads);
+                    expand_pdu(comm, contained.pdu, offset, None, gate, &mut reads);
                 }
             }
             PduKind::Multiplexed => {
                 // The selector (and any static signal on the mux PDU) is
                 // always decoded; dynamic parts are gated below.
-                expand_pdu(comm, pdu.id, base, None, &mut reads);
+                expand_pdu(comm, pdu.id, base, None, None, &mut reads);
                 let selector = pdu.selector.as_ref().map(|field| {
                     if let Some(signal) = field.signal {
                         MuxSelector::Signal { signal }
@@ -102,7 +112,7 @@ pub fn build_decode_plan(comm: &Comm, frame: &Frame, version: u32) -> (DecodePla
                 for part in comm.multiplexed_parts.values().filter(|p| p.mux == pdu.id) {
                     let Some(code) = part.selector_code else {
                         // Static part: always present.
-                        expand_pdu(comm, part.part, base, None, &mut reads);
+                        expand_pdu(comm, part.part, base, None, None, &mut reads);
                         continue;
                     };
                     let Some(selector) = selector.clone() else {
@@ -123,6 +133,7 @@ pub fn build_decode_plan(comm: &Comm, frame: &Frame, version: u32) -> (DecodePla
                             selector,
                             ranges: vec![(code, code)],
                         }),
+                        None,
                         &mut reads,
                     );
                 }
@@ -142,7 +153,7 @@ pub fn build_decode_plan(comm: &Comm, frame: &Frame, version: u32) -> (DecodePla
                     continue;
                 };
                 let header_bits = secured.header.header_size() * 8;
-                expand_pdu(comm, payload, base + header_bits, None, &mut reads);
+                expand_pdu(comm, payload, base + header_bits, None, None, &mut reads);
             }
         }
     }
@@ -157,6 +168,7 @@ pub fn build_decode_plan(comm: &Comm, frame: &Frame, version: u32) -> (DecodePla
             float: read.float,
             factor: read.factor,
             offset: read.offset,
+            container: read.container,
         })
         .collect();
     (
@@ -175,6 +187,7 @@ fn expand_pdu(
     pdu: PduId,
     base: u32,
     mux_part: Option<MuxCondition>,
+    container: Option<ContainerGate>,
     reads: &mut Vec<SignalRead>,
 ) {
     for signal in comm.signals_in_pdu(pdu) {
@@ -192,6 +205,7 @@ fn expand_pdu(
             factor: signal.factor,
             offset: signal.offset,
             mux,
+            container,
         });
     }
 }

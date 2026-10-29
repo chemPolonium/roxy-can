@@ -16,11 +16,41 @@ pub struct DecodedSignal {
     pub physical: Option<f64>,
 }
 
+/// Whether the container header names the contained PDU this plan entry was
+/// expanded from. A missing or zero length header is not a reason to hide a
+/// child: the document did not gate it, so neither do we.
+fn container_present(payload: &[u8], gate: &ContainerGate) -> bool {
+    let (id_bytes, len_bytes) = match gate.header_type {
+        ContainerHeaderType::Short => (3usize, 1usize),
+        ContainerHeaderType::Long => (4usize, 4usize),
+        ContainerHeaderType::None => return true,
+    };
+    let start = u64::from(gate.header_start_bit);
+    // The container header is a byte stream field, not a CAN Motorola signal:
+    // its bytes are one after another, most significant first.
+    if !start.is_multiple_of(8) {
+        return false;
+    }
+    let start = (start / 8) as usize;
+    let Some(header) = payload.get(start..start + id_bytes + len_bytes) else {
+        return false;
+    };
+    let id = header[..id_bytes]
+        .iter()
+        .fold(0u64, |acc, byte| (acc << 8) | u64::from(*byte));
+    id == u64::from(gate.header_id)
+}
+
 pub fn decode_payload(_comm: &Comm, plan: &DecodePlan, payload: &[u8]) -> Vec<DecodedSignal> {
     let total_bits = (payload.len() as u64) * 8;
     let mut selector_values: std::collections::BTreeMap<SignalId, u64> =
         std::collections::BTreeMap::new();
     for read in &plan.reads {
+        if let Some(gate) = &read.container
+            && !container_present(payload, gate)
+        {
+            continue;
+        }
         if read.bit_offset as u64 + read.bit_len as u64 > total_bits {
             continue;
         }
@@ -56,6 +86,11 @@ pub fn decode_payload(_comm: &Comm, plan: &DecodePlan, payload: &[u8]) -> Vec<De
     };
     let mut out = Vec::with_capacity(plan.reads.len());
     for read in &plan.reads {
+        if let Some(gate) = &read.container
+            && !container_present(payload, gate)
+        {
+            continue;
+        }
         if !read.mux.is_empty() {
             let mut present = true;
             for condition in &read.mux {
@@ -124,6 +159,11 @@ pub fn encode_payload(
     let total_bits = (payload.len() as u64) * 8;
     let mut written = 0;
     for write in &plan.writes {
+        if let Some(gate) = &write.container
+            && !container_present(payload, gate)
+        {
+            continue;
+        }
         let Some(&(_, physical)) = values.iter().find(|(signal, _)| *signal == write.signal) else {
             continue;
         };

@@ -43,6 +43,9 @@ jobs:
         working-directory: web
         run: npm test
 
+      - name: Formatting
+        run: cargo fmt --check
+
       - name: Build all targets
         run: cargo build --all-targets
 
