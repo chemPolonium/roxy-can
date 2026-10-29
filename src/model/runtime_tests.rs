@@ -349,6 +349,11 @@ fn a_container_child_is_gated_by_the_header_id() {
         other.iter().all(|value| value.signal != SignalId(100)),
         "a header naming another contained PDU hides this one"
     );
+    let truncated = decode_payload(&comm, &plan, &[0, 0, 1, 1, 0x34, 0x12, 0, 0]);
+    assert!(
+        truncated.iter().all(|value| value.signal != SignalId(100)),
+        "a header length that does not reach the signal hides it too"
+    );
 
     let mut payload = [0, 0, 2, 4, 0, 0, 0, 0];
     assert_eq!(

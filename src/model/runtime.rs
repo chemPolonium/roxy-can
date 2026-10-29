@@ -17,9 +17,10 @@ pub struct DecodedSignal {
 }
 
 /// Whether the container header names the contained PDU this plan entry was
-/// expanded from. A missing or zero length header is not a reason to hide a
-/// child: the document did not gate it, so neither do we.
-fn container_present(payload: &[u8], gate: &ContainerGate) -> bool {
+/// expanded from and says its bytes are long enough for the entry that ends
+/// at `end_bit`. A document without a header gate reads the child wherever
+/// it sits, exactly as before the header existed.
+fn container_allows(payload: &[u8], gate: &ContainerGate, end_bit: u64) -> bool {
     let (id_bytes, len_bytes) = match gate.header_type {
         ContainerHeaderType::Short => (3usize, 1usize),
         ContainerHeaderType::Long => (4usize, 4usize),
@@ -38,7 +39,14 @@ fn container_present(payload: &[u8], gate: &ContainerGate) -> bool {
     let id = header[..id_bytes]
         .iter()
         .fold(0u64, |acc, byte| (acc << 8) | u64::from(*byte));
-    id == u64::from(gate.header_id)
+    if id != u64::from(gate.header_id) {
+        return false;
+    }
+    let length = header[id_bytes..]
+        .iter()
+        .fold(0u64, |acc, byte| (acc << 8) | u64::from(*byte));
+    let header_bits = u64::from(gate.header_start_bit) + (id_bytes + len_bytes) as u64 * 8;
+    end_bit <= header_bits + length * 8
 }
 
 pub fn decode_payload(_comm: &Comm, plan: &DecodePlan, payload: &[u8]) -> Vec<DecodedSignal> {
@@ -47,7 +55,7 @@ pub fn decode_payload(_comm: &Comm, plan: &DecodePlan, payload: &[u8]) -> Vec<De
         std::collections::BTreeMap::new();
     for read in &plan.reads {
         if let Some(gate) = &read.container
-            && !container_present(payload, gate)
+            && !container_allows(payload, gate, read.bit_offset as u64 + read.bit_len as u64)
         {
             continue;
         }
@@ -87,7 +95,7 @@ pub fn decode_payload(_comm: &Comm, plan: &DecodePlan, payload: &[u8]) -> Vec<De
     let mut out = Vec::with_capacity(plan.reads.len());
     for read in &plan.reads {
         if let Some(gate) = &read.container
-            && !container_present(payload, gate)
+            && !container_allows(payload, gate, read.bit_offset as u64 + read.bit_len as u64)
         {
             continue;
         }
@@ -164,7 +172,11 @@ pub fn encode_payload(
     let mut written = 0;
     for write in &plan.writes {
         if let Some(gate) = &write.container
-            && !container_present(payload, gate)
+            && !container_allows(
+                payload,
+                gate,
+                write.bit_offset as u64 + write.bit_len as u64,
+            )
         {
             continue;
         }
