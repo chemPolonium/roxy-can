@@ -1494,10 +1494,22 @@ impl App {
                 .filter(|s| !s.is_empty())
                 .collect::<Vec<_>>()
                 .join("  ");
-                let signals = match (db, frame_ix) {
-                    (Some(db), Some(frame_ix)) => db.decode(frame_ix, &agg.payload),
-                    _ => Vec::new(),
-                };
+                let signals = frame_ix
+                    .and_then(|frame_ix| {
+                        let row = crate::trace::FrRow {
+                            bus: agg.bus,
+                            t_us: agg.last_t_us,
+                            ab: agg.ab,
+                            slot: agg.slot,
+                            cycle: 0,
+                            payload: agg.payload.clone(),
+                            header_crc: 0,
+                            flags: 0,
+                            name: agg.name.clone(),
+                        };
+                        self.model_fr_all_values(&row, frame_ix)
+                    })
+                    .unwrap_or_default();
                 // Which of the three reasons it is: no description for this
                 // cluster, a description that does not schedule this slot's
                 // frame, or a frame that declares no signals.
