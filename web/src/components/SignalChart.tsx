@@ -723,9 +723,7 @@ export function SignalChart({
               const [t, value] = points[k];
               const x = GUTTER + ((t - start) / view.windowS) * plotW;
               if (x < GUTTER || x > GUTTER + plotW) continue;
-              ctx.beginPath();
-              ctx.arc(x, y(value), 1.8, 0, Math.PI * 2);
-              ctx.fill();
+              ctx.fillRect(x - 1.5, y(value) - 1.5, 3, 3);
             }
           }
         } else if (bins) {
