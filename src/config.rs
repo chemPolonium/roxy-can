@@ -818,6 +818,42 @@ fn sig_cfgs(app: &App, signals: &[GfxSignal]) -> Vec<SignalCfg> {
         .collect()
 }
 
+/// The v1 compat replay map still counts buses, so the runtime's
+/// cluster-targeted map is written back through `bus_of_cluster` (when the
+/// cluster still has a bus) or as an explicit drop.
+fn legacy_replay_map(app: &App) -> crate::replay_map::ReplayMap {
+    use crate::replay_map::{LogBusKind, ReplayMap};
+    let ids = &app.snap.cluster_ids;
+    let mut out = ReplayMap::default();
+    for kind in [LogBusKind::Can, LogBusKind::Fr, LogBusKind::Eth] {
+        for (raw, target) in app.snap.replay_map.configured(kind) {
+            let bus = target.and_then(|cluster| match kind {
+                LogBusKind::Can => ids
+                    .can
+                    .iter()
+                    .position(|id| *id == cluster.0)
+                    .map(|index| index as u8),
+                LogBusKind::Fr => ids
+                    .fr
+                    .iter()
+                    .find(|(_, id)| **id == cluster.0)
+                    .map(|(bus, _)| *bus),
+                LogBusKind::Eth => ids
+                    .eth
+                    .iter()
+                    .find(|(_, id)| **id == cluster.0)
+                    .map(|(bus, _)| *bus),
+            });
+            out.set(
+                kind,
+                raw,
+                bus.map(|bus| crate::model::ClusterId(u32::from(bus))),
+            );
+        }
+    }
+    out
+}
+
 fn src_cfg(s: &ValueSrc) -> SrcCfg {
     SrcCfg {
         name: s.name.clone(),
@@ -926,7 +962,7 @@ impl Config {
                 })
                 .collect(),
             eth_frame_length_includes_header: app.eth_length_includes_header,
-            replay_map: app.snap.replay_map.clone(),
+            replay_map: legacy_replay_map(app),
             // ∞ 存不成数，所以那一档走 `replay_fastest`，数本身留一个中性值。
             replay_fastest: !app.replay_speed.is_finite(),
             replay_speed: if app.replay_speed.is_finite() {
@@ -1725,7 +1761,10 @@ impl Config {
         }
         // 回放映射整张交回核心，空表也交——工程文件没写这一项就该把上一份工程
         // 留下的映射清掉，和窗口、生成器条目同一条规则：文件说什么就恢复什么。
-        app.set_replay_map(self.replay_map.clone());
+        // A v1 replay map counts buses; the project now names clusters.
+        let mut replay = self.replay_map.clone();
+        replay.rebase_buses(&can_ids, &fr_ids, &eth_ids);
+        app.set_replay_map(replay);
         // The descriptions move to the core with the rest of the restored bus
         // state, so a replay or a watch attach finds them where the user left
         // them -- no lazy re-push at the moment of use.
@@ -2721,9 +2760,13 @@ mod tests {
         use crate::replay_map::{LogBusKind, ReplayMap};
         let mut app = App::headless();
         let mut map = ReplayMap::default();
-        map.set(LogBusKind::Can, 1, Some(0));
+        map.set(
+            LogBusKind::Can,
+            1,
+            Some(crate::model::ClusterId(app.snap.cluster_ids.can[0])),
+        );
         map.set(LogBusKind::Fr, 2, None);
-        map.set(LogBusKind::Eth, 3, Some(1));
+        map.set(LogBusKind::Eth, 3, None);
         app.set_replay_map(map.clone());
         app.settle();
         assert_eq!(app.snap.replay_map, map);

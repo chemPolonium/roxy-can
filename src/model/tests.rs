@@ -635,6 +635,7 @@ fn schema_validation_flags_bus_identity_problems() {
         kind: "ethernet".to_string(),
         file_channel: 0,
         cluster: 1,
+        disabled: false,
     });
     let problems = project.validate();
     assert!(problems.iter().any(|p| p.contains("duplicate cluster id")));

@@ -176,6 +176,9 @@ pub struct ReplayCfg {
     pub kind: String,
     pub file_channel: u8,
     pub cluster: u32,
+    /// 明确不回放这一路文件通道；`cluster` 此时不参与路由。
+    #[serde(default)]
+    pub disabled: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

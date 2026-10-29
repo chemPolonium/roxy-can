@@ -129,6 +129,7 @@ impl App {
                 "derived",
                 "web",
                 "triggers",
+                "replay_map",
             ] {
                 object.remove(key);
             }
@@ -212,45 +213,36 @@ impl App {
             .replay_map
             .configured(crate::replay_map::LogBusKind::Can)
         {
-            if let Some(bus) = target
-                && let Some(id) = ids.can.get(bus as usize)
-            {
-                project.replay.push(crate::model::ReplayCfg {
-                    kind: "can".to_string(),
-                    file_channel: raw,
-                    cluster: *id,
-                });
-            }
+            project.replay.push(crate::model::ReplayCfg {
+                kind: "can".to_string(),
+                file_channel: raw,
+                cluster: target.map_or(0, |cluster| cluster.0),
+                disabled: target.is_none(),
+            });
         }
         for (raw, target) in self
             .snap
             .replay_map
             .configured(crate::replay_map::LogBusKind::Fr)
         {
-            if let Some(bus) = target
-                && let Some(id) = ids.fr.get(&bus)
-            {
-                project.replay.push(crate::model::ReplayCfg {
-                    kind: "flexray".to_string(),
-                    file_channel: raw,
-                    cluster: *id,
-                });
-            }
+            project.replay.push(crate::model::ReplayCfg {
+                kind: "flexray".to_string(),
+                file_channel: raw,
+                cluster: target.map_or(0, |cluster| cluster.0),
+                disabled: target.is_none(),
+            });
         }
         for (raw, target) in self
             .snap
             .replay_map
             .configured(crate::replay_map::LogBusKind::Eth)
         {
-            if let Some(bus) = target
-                && let Some(id) = ids.eth.get(&bus)
-            {
-                project.replay.push(crate::model::ReplayCfg {
-                    kind: "ethernet".to_string(),
-                    file_channel: raw,
-                    cluster: *id,
-                });
-            }
+            project.replay.push(crate::model::ReplayCfg {
+                kind: "ethernet".to_string(),
+                file_channel: raw,
+                cluster: target.map_or(0, |cluster| cluster.0),
+                disabled: target.is_none(),
+            });
         }
         let mut generators = Vec::new();
         for entry in &config.tx {
@@ -629,26 +621,12 @@ impl App {
                             "ethernet" | "eth" => LogBusKind::Eth,
                             _ => continue,
                         };
-                        let bus = match kind {
-                            LogBusKind::Can => map
-                                .can
-                                .iter()
-                                .position(|id| id.0 == entry.cluster)
-                                .map(|index| index as u8),
-                            LogBusKind::Fr => map
-                                .flexray
-                                .iter()
-                                .position(|id| id.0 == entry.cluster)
-                                .map(|bus| bus as u8),
-                            LogBusKind::Eth => map
-                                .ethernet
-                                .iter()
-                                .position(|id| id.0 == entry.cluster)
-                                .map(|bus| bus as u8),
+                        let target = if entry.disabled {
+                            None
+                        } else {
+                            Some(crate::model::ClusterId(entry.cluster))
                         };
-                        if let Some(bus) = bus {
-                            replay.set(kind, entry.file_channel, Some(bus));
-                        }
+                        replay.set(kind, entry.file_channel, target);
                     }
                     self.send(crate::bus::BusCommand::SetReplayMap(replay));
                 }

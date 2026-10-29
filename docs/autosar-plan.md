@@ -20,7 +20,7 @@ CAN/FlexRay/Ethernet 的首选描述来源，DBC/FIBEX 只作为导入适配器�
 > derived/web 已迁为 typed v2 段，Trace 手选帧也按 cluster id 保存；生产解码路径
 > （含 Reference 与 CLI 导出）已全部走模型；观测键与 CAN 报文聚合都以 cluster 为身份，
 > 键文本一律写 `sig:` 规范形态，旧 `ch:id:name` / `fr:` / `eth:` 文本仍可读入。
-> 硬件/回放 cluster 路由与旧表结构清理仍未完成。逐项状态见 [`docs/autosar-model.md`](autosar-model.md) 第 10 节。
+> 硬件端口的 cluster 路由与旧表结构清理仍未完成。逐项状态见 [`docs/autosar-model.md`](autosar-model.md) 第 10 节。
 
 ## 1. 原则
 

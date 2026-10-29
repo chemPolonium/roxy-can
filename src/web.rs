@@ -2253,6 +2253,9 @@ fn app_loop(
                         continue;
                     };
                     let mut map = app.snap.replay_map.clone();
+                    // The frontend picks a bus; the map stores the cluster it
+                    // names, so the choice survives channel renumbering.
+                    let target = target.and_then(|bus| app.cluster_of_bus(kind, bus));
                     map.set(kind, raw, target);
                     app.send(BusCommand::SetReplayMap(map));
                 }
@@ -5521,18 +5524,30 @@ fn build_state(app: &App, series: &VecDeque<WebSeriesPoint>, fps: f64) -> WebSta
         WebReplayMap {
             can: replay_rows(
                 &snap.replay_census_can,
-                map.configured(LogBusKind::Can),
-                |raw| map.can_channel(raw, snap.channels.len()),
+                map.configured(LogBusKind::Can)
+                    .into_iter()
+                    .map(|(raw, _)| (raw, None))
+                    .collect(),
+                |raw| {
+                    app.replay_bus(LogBusKind::Can, raw)
+                        .filter(|bus| (*bus as usize) < snap.channels.len())
+                },
             ),
             fr: replay_rows(
                 &snap.replay_census_fr,
-                map.configured(LogBusKind::Fr),
-                |raw| map.target(LogBusKind::Fr, raw),
+                map.configured(LogBusKind::Fr)
+                    .into_iter()
+                    .map(|(raw, _)| (raw, None))
+                    .collect(),
+                |raw| app.replay_bus(LogBusKind::Fr, raw),
             ),
             eth: replay_rows(
                 &snap.replay_census_eth,
-                map.configured(LogBusKind::Eth),
-                |raw| map.target(LogBusKind::Eth, raw),
+                map.configured(LogBusKind::Eth)
+                    .into_iter()
+                    .map(|(raw, _)| (raw, None))
+                    .collect(),
+                |raw| app.replay_bus(LogBusKind::Eth, raw),
             ),
         }
     };

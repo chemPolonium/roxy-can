@@ -1448,6 +1448,37 @@ pub struct BusCore {
     pub(crate) marker_cap: usize,
 }
 
+/// The bus a log channel replays on, given the map and the three cluster
+/// tables. A free function so the replay loop can resolve targets while it
+/// holds a mutable borrow of the frame buffer.
+fn replay_bus_in(
+    map: &crate::replay_map::ReplayMap,
+    kind: crate::replay_map::LogBusKind,
+    raw: u8,
+    can: &[crate::model::ClusterId],
+    fr: &std::collections::BTreeMap<u8, crate::model::ClusterId>,
+    eth: &std::collections::BTreeMap<u8, crate::model::ClusterId>,
+) -> Option<u8> {
+    match map.target(kind, raw) {
+        crate::replay_map::ReplayTarget::Same => Some(raw),
+        crate::replay_map::ReplayTarget::Drop => None,
+        crate::replay_map::ReplayTarget::Cluster(cluster) => match kind {
+            crate::replay_map::LogBusKind::Can => can
+                .iter()
+                .position(|id| *id == cluster)
+                .map(|index| index as u8),
+            crate::replay_map::LogBusKind::Fr => fr
+                .iter()
+                .find(|(_, id)| **id == cluster)
+                .map(|(bus, _)| *bus),
+            crate::replay_map::LogBusKind::Eth => eth
+                .iter()
+                .find(|(_, id)| **id == cluster)
+                .map(|(bus, _)| *bus),
+        },
+    }
+}
+
 /// The script node a derived-signal stream key belongs to: `emit_value`
 /// folds `EMITTED_ID_BASE | node_id` into the CAN id field, so the stream's
 /// owner is readable without a second registry. Only a CAN key can name a
@@ -4106,16 +4137,15 @@ impl BusCore {
     /// 只会让一个条目莫名被静音。
     fn remap_log_ids(&mut self) {
         use crate::replay_map::LogBusKind;
-        let map = &self.replay_map;
         let ids: std::collections::HashSet<(u8, u32)> = self
             .log_ids_file
             .iter()
-            .filter_map(|(ch, id)| map.target(LogBusKind::Can, *ch).map(|t| (t, *id)))
+            .filter_map(|(ch, id)| self.replay_bus(LogBusKind::Can, *ch).map(|t| (t, *id)))
             .collect();
         let fr: std::collections::HashSet<(u8, u16)> = self
             .log_fr_ids_file
             .iter()
-            .filter_map(|(bus, slot)| map.target(LogBusKind::Fr, *bus).map(|t| (t, *slot)))
+            .filter_map(|(bus, slot)| self.replay_bus(LogBusKind::Fr, *bus).map(|t| (t, *slot)))
             .collect();
         self.replay_ids = ids;
         self.replay_fr_ids = fr;
@@ -4235,6 +4265,32 @@ impl BusCore {
                 .map(|(bus, _)| *bus),
             SigKey::Derived { .. } => None,
         }
+    }
+
+    /// The cluster the bus at `bus` names in one protocol space.
+    pub(crate) fn cluster_of_bus(
+        &self,
+        kind: crate::replay_map::LogBusKind,
+        bus: u8,
+    ) -> Option<crate::model::ClusterId> {
+        match kind {
+            crate::replay_map::LogBusKind::Can => self.can_cluster_ids.get(bus as usize).copied(),
+            crate::replay_map::LogBusKind::Fr => self.fr_cluster_ids.get(&bus).copied(),
+            crate::replay_map::LogBusKind::Eth => self.eth_cluster_ids.get(&bus).copied(),
+        }
+    }
+
+    /// The bus one log channel replays on, after the cluster-targeted map and
+    /// the live bus list are both consulted. `None` = this channel is dropped.
+    pub(crate) fn replay_bus(&self, kind: crate::replay_map::LogBusKind, raw: u8) -> Option<u8> {
+        replay_bus_in(
+            &self.replay_map,
+            kind,
+            raw,
+            &self.can_cluster_ids,
+            &self.fr_cluster_ids,
+            &self.eth_cluster_ids,
+        )
     }
 
     /// Confirms a key names a live cluster. Canonical keys arrive complete
@@ -5446,6 +5502,7 @@ impl BusCore {
             return;
         }
         let name = self.channels[ch].name.clone();
+        let removed_cluster = self.can_cluster_ids.get(ch).copied();
         self.channels.remove(ch);
         if ch < self.model_comms.len() {
             self.model_comms.remove(ch);
@@ -5457,15 +5514,6 @@ impl BusCore {
         }
         self.bus_loads.remove(ch);
         self.loads_dirty = true;
-        let remap = |c: u8| -> Option<u8> {
-            if (c as usize) < ch {
-                Some(c)
-            } else if (c as usize) == ch {
-                None
-            } else {
-                Some(c - 1)
-            }
-        };
         self.aggs.retain(|_, agg| agg.channel as usize != ch);
         for agg in self.aggs.values_mut() {
             if agg.channel as usize > ch {
@@ -5490,12 +5538,12 @@ impl BusCore {
                 t.channel -= 1;
             }
         }
-        // 回放映射是"文件编号 → 第几路"，路是这张表里的位置，所以跟着挪：
-        // 指到被删那一路的变成「不回放」，指到它后面的往前一号。留下行而不是
-        // 悄悄取消，映射表就会自己说出这一路现在不回放——被删掉的路不该让
-        // 那些帧回到"原样用"上去猜。
-        self.replay_map
-            .shift_targets(crate::replay_map::LogBusKind::Can, &remap);
+        // 映射表记的是 cluster：指到被删 cluster 的表项变成「不回放」，
+        // 其余表项原样保留，后面的路不需要往前挪。
+        if let Some(cluster) = removed_cluster {
+            self.replay_map
+                .drop_cluster(crate::replay_map::LogBusKind::Can, cluster);
+        }
         self.remap_log_ids();
         // The hardware attachment of the removed bus closes with it; the
         // other buses' attachments shift down with their bus.
@@ -5580,6 +5628,7 @@ impl BusCore {
     /// fills when the user adds the next 路, so indexes stay small without
     /// anyone having to move one.
     fn remove_fr_bus(&mut self, bus: u8, label: &str, status: &mut String) {
+        let removed_cluster = self.fr_cluster_ids.get(&bus).copied();
         // The port closes with the bus it watched.
         self.hw.detach_fr(bus);
         self.fr_dbs.remove(&bus);
@@ -5589,12 +5638,11 @@ impl BusCore {
         // What this 路 was asked to send, and what the loaded log was already
         // sending for it, both go with it.
         self.fr_tx_list.retain(|t| t.bus != bus);
-        // 这路的编号不会有人接替（删一路不把别的前挪），所以指向它的映射
-        // 只是变成「不回放」；静音集合按新映射重算，不留这路的影子。
-        self.replay_map
-            .shift_targets(crate::replay_map::LogBusKind::Fr, |c| {
-                if c == bus { None } else { Some(c) }
-            });
+        // 这路的 cluster 不再存在，映射表里指向它的表项变成「不回放」。
+        if let Some(cluster) = removed_cluster {
+            self.replay_map
+                .drop_cluster(crate::replay_map::LogBusKind::Fr, cluster);
+        }
         self.remap_log_ids();
         // The model rebuild above already dropped this bus's cluster id, so
         // the FlexRay subscriptions left naming a cluster the map no longer
@@ -7167,13 +7215,25 @@ impl BusCore {
         // "这个文件里有这几路、各多少条"，不必把文件再读一遍。
         if matches!(self.mode, Mode::Replay) {
             use crate::replay_map::LogBusKind;
-            let map = &self.replay_map;
+            let map = self.replay_map.clone();
+            let can_ids = self.can_cluster_ids.clone();
+            let fr_ids = self.fr_cluster_ids.clone();
+            let eth_ids = self.eth_cluster_ids.clone();
             let census = &mut self.log_census;
             let buses = self.channels.len();
             let mut unaimed: Vec<u8> = Vec::new();
             self.buf.retain_mut(|f| {
                 census.bump(LogBusKind::Can, f.channel);
-                match map.can_channel(f.channel, buses) {
+                match replay_bus_in(
+                    &map,
+                    LogBusKind::Can,
+                    f.channel,
+                    &can_ids,
+                    &fr_ids,
+                    &eth_ids,
+                )
+                .filter(|t| (*t as usize) < buses)
+                {
                     Some(t) => {
                         f.channel = t;
                         true
@@ -7191,7 +7251,7 @@ impl BusCore {
             // 不是错位的编号。
             fr_replay.retain_mut(|r| {
                 census.bump(LogBusKind::Fr, r.bus);
-                match map.target(LogBusKind::Fr, r.bus) {
+                match replay_bus_in(&map, LogBusKind::Fr, r.bus, &can_ids, &fr_ids, &eth_ids) {
                     Some(t) => {
                         r.bus = t;
                         true
@@ -7206,7 +7266,7 @@ impl BusCore {
             // is the only thing that drops it.
             eth_replay.retain_mut(|f| {
                 census.bump(LogBusKind::Eth, f.bus);
-                match map.target(LogBusKind::Eth, f.bus) {
+                match replay_bus_in(&map, LogBusKind::Eth, f.bus, &can_ids, &fr_ids, &eth_ids) {
                     Some(t) => {
                         f.bus = t;
                         true
@@ -9442,7 +9502,7 @@ mod tests {
         use crate::replay_map::LogBusKind;
         let mut core = replay_core(vec![frame_on(0, 0x100), frame_on(1, 0x200)], Vec::new());
         let mut map = crate::replay_map::ReplayMap::default();
-        map.set(LogBusKind::Can, 1, Some(0));
+        map.set(LogBusKind::Can, 1, core.cluster_of_bus(LogBusKind::Can, 0));
         core.replay_map = map;
         let mut status = String::new();
         core.step_to(0, 0, 1, 1, &mut status);
@@ -9464,9 +9524,14 @@ mod tests {
         let mut core = replay_core(Vec::new(), Vec::new());
         let mut status = String::new();
         let mut map = crate::replay_map::ReplayMap::default();
-        map.set(LogBusKind::Can, 1, Some(0));
+        map.set(LogBusKind::Can, 1, core.cluster_of_bus(LogBusKind::Can, 0));
         core.handle(BusCommand::SetReplayMap(map), &mut status);
-        assert_eq!(core.replay_map.target(LogBusKind::Can, 1), Some(0));
+        assert_eq!(
+            core.replay_map.target(LogBusKind::Can, 1),
+            crate::replay_map::ReplayTarget::Cluster(
+                core.cluster_of_bus(LogBusKind::Can, 0).unwrap()
+            )
+        );
     }
 
     /// 日志静音集合存的是文件编号，喂给生成器的那两份按映射推。改了映射
@@ -9475,10 +9540,13 @@ mod tests {
     fn the_generator_mute_set_follows_the_map() {
         use crate::replay_map::LogBusKind;
         let mut core = BusCore::new(Vec::new());
+        let mut status = String::new();
+        core.add_channel(&mut status);
+        core.add_channel(&mut status);
         core.log_ids_file = [(1u8, 0x100u32)].into_iter().collect();
         core.log_fr_ids_file = [(2u8, 10u16)].into_iter().collect();
         let mut map = crate::replay_map::ReplayMap::default();
-        map.set(LogBusKind::Can, 1, Some(0));
+        map.set(LogBusKind::Can, 1, core.cluster_of_bus(LogBusKind::Can, 0));
         map.set(LogBusKind::Fr, 2, None);
         core.replay_map = map;
         core.remap_log_ids();
@@ -9497,8 +9565,9 @@ mod tests {
         let mut row = fr_row(0, 10);
         row.bus = 1;
         let mut core = replay_core(Vec::new(), vec![row]);
+        core.fr_cluster_ids.insert(0, core.cluster_ids.allocate());
         let mut map = crate::replay_map::ReplayMap::default();
-        map.set(LogBusKind::Fr, 1, Some(0));
+        map.set(LogBusKind::Fr, 1, core.cluster_of_bus(LogBusKind::Fr, 0));
         core.replay_map = map;
         let mut status = String::new();
         core.step_to(0, 0, 1, 1, &mut status);
@@ -9539,11 +9608,19 @@ mod tests {
         let run = |mapping: Option<u8>| {
             let mut core = BusCore::new(Vec::new());
             core.mode = Mode::Replay;
+            // The targets are clusters; give the project an Ethernet bus 2 so
+            // the chosen cluster has somewhere to resolve to.
+            core.eth_cluster_ids.insert(1, crate::model::ClusterId(1));
+            core.eth_cluster_ids.insert(2, crate::model::ClusterId(2));
             core.source = Box::new(crate::source::replay::ReplaySource::new(Box::new(
                 crate::log::vec_stream::VecStream::with_all(Vec::new(), Vec::new(), vec![frame(1)]),
             )));
             let mut map = crate::replay_map::ReplayMap::default();
-            map.set(LogBusKind::Eth, 1, mapping);
+            map.set(
+                LogBusKind::Eth,
+                1,
+                mapping.map(|bus| crate::model::ClusterId(u32::from(bus))),
+            );
             core.replay_map = map;
             let mut status = String::new();
             core.step_to(0, 0, 1, 1, &mut status);
@@ -9583,13 +9660,23 @@ mod tests {
         core.add_channel(&mut status);
         core.add_channel(&mut status);
         let mut map = crate::replay_map::ReplayMap::default();
-        map.set(LogBusKind::Can, 4, Some(1));
-        map.set(LogBusKind::Can, 5, Some(2));
+        let middle = core.cluster_of_bus(LogBusKind::Can, 1).unwrap();
+        let last = core.cluster_of_bus(LogBusKind::Can, 2).unwrap();
+        map.set(LogBusKind::Can, 4, Some(middle));
+        map.set(LogBusKind::Can, 5, Some(last));
         core.replay_map = map;
-        // 删掉中间那一路（下标 1），第 3 路变成第 2 路。
+        // 删掉中间那一路（下标 1）：指向它的通道变成不回放，指向最后一
+        // 路的表项仍然指着同一个 cluster，只是那个 cluster 现在排在前一格。
         core.remove_channel(1, &mut status);
-        assert_eq!(core.replay_map.target(LogBusKind::Can, 4), None);
-        assert_eq!(core.replay_map.target(LogBusKind::Can, 5), Some(1));
+        assert_eq!(
+            core.replay_map.target(LogBusKind::Can, 4),
+            crate::replay_map::ReplayTarget::Drop
+        );
+        assert_eq!(
+            core.replay_map.target(LogBusKind::Can, 5),
+            crate::replay_map::ReplayTarget::Cluster(last)
+        );
+        assert_eq!(core.replay_bus(LogBusKind::Can, 5), Some(1));
     }
 
     /// A `frame(...)` send fills unwritten signals from the database's

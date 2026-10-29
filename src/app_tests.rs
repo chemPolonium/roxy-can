@@ -294,7 +294,11 @@ fn a_project_saves_schema_v2_and_reopens_the_same_cluster_ids() {
         "the default workspace has a CAN cluster"
     );
     let mut map = crate::replay_map::ReplayMap::default();
-    map.set(crate::replay_map::LogBusKind::Can, 3, Some(1));
+    map.set(
+        crate::replay_map::LogBusKind::Can,
+        3,
+        Some(crate::model::ClusterId(ids.can[1])),
+    );
     app.send(crate::bus::BusCommand::SetReplayMap(map));
     app.add_tx(1, 0x321);
     app.settle();
@@ -442,7 +446,7 @@ fn a_project_saves_schema_v2_and_reopens_the_same_cluster_ids() {
             .snap
             .replay_map
             .target(crate::replay_map::LogBusKind::Can, 3),
-        Some(1),
+        crate::replay_map::ReplayTarget::Cluster(crate::model::ClusterId(ids.can[1])),
         "the v2 replay mapping survives a reopen"
     );
 }

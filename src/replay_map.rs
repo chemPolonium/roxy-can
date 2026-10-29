@@ -13,6 +13,8 @@
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
+use crate::model::ClusterId;
+
 /// 映射属于哪一类总线。FlexRay 的一路和 CAN 的一路是两套编号，
 /// 命令、映射表与计数都按这里的顺序区分它们。以太网又是第三套编号：
 /// BLF 的以太网对象带的是抓包工具里的 channel，不是 CAN 通道。
@@ -34,59 +36,77 @@ impl LogBusKind {
     }
 }
 
-/// 文件通道 → 工程里的一路。值 `None` 表示这一路文件通道不回放。
-/// `#[serde(default)]`：工程文件里没有这一项时读成"没配过映射"，
-/// 而不是解析失败——缺省就是空表。
+/// 文件通道的落点。没有表项时按文件编号落回本工程的同一路；表项可以
+/// 改指一个 cluster，或明确不回放。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReplayTarget {
+    Same,
+    Drop,
+    Cluster(ClusterId),
+}
+
+/// 文件通道 → 工程里的 cluster（不是路号）。cluster 才是工程身份，
+/// 运行时由核心解析成具体总线；删/加路不会改写这张表。
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ReplayMap {
-    can: BTreeMap<u8, Option<u8>>,
-    fr: BTreeMap<u8, Option<u8>>,
-    eth: BTreeMap<u8, Option<u8>>,
+    can: BTreeMap<u8, Option<ClusterId>>,
+    fr: BTreeMap<u8, Option<ClusterId>>,
+    eth: BTreeMap<u8, Option<ClusterId>>,
 }
 
 impl ReplayMap {
-    /// 文件里的通道 `raw` 落到工程里的哪一路；`None` = 丢掉。
-    pub fn target(&self, kind: LogBusKind, raw: u8) -> Option<u8> {
-        self.table(kind).get(&raw).copied().unwrap_or(Some(raw))
-    }
-
-    /// 日志里第 `raw` 号 CAN 通道回放成本工程的第几路；`None` = 不回放。
-    ///
-    /// 没配过映射时按编号原样用，但编号在这里必须真对应一条总线：只有两路
-    /// 的工程里"第 3 路"什么都不是，那种帧以前以 `CAN3` 的名义进 Trace 又解
-    /// 不了码，看着就像总线对上了。挡掉，让映射表把条数说清楚。
-    /// 回放和映射表都走这一个函数，两边不会有第二种说法。
-    pub fn can_channel(&self, raw: u8, bus_count: usize) -> Option<u8> {
-        self.target(LogBusKind::Can, raw)
-            .filter(|t| (*t as usize) < bus_count)
-    }
-
-    /// 记下一条选择。指回通道自己的编号等于取消这条映射，表里不留着——
-    /// 这样以后加了总线，原样用的默认值还能自动生效。
-    pub fn set(&mut self, kind: LogBusKind, raw: u8, to: Option<u8>) {
-        let table = self.table_mut(kind);
-        if to == Some(raw) {
-            table.remove(&raw);
-        } else {
-            table.insert(raw, to);
+    /// 文件里的通道 `raw` 落到哪个 cluster；`Same` 表示原编号本路，
+    /// `Drop` 表示不回放。
+    pub fn target(&self, kind: LogBusKind, raw: u8) -> ReplayTarget {
+        match self.table(kind).get(&raw) {
+            None => ReplayTarget::Same,
+            Some(None) => ReplayTarget::Drop,
+            Some(Some(cluster)) => ReplayTarget::Cluster(*cluster),
         }
     }
 
-    /// 工程里的一路没了之后，指到它的那些映射按 `move_target` 改道：新的
-    /// 编号，或者 `None`（这一路文件通道不再回放）。留着行而不是悄悄取消，
-    /// 是因为映射表会明明白白写出"不回放"，用户看得见自己少了哪几路。
-    pub fn shift_targets(
-        &mut self,
-        kind: LogBusKind,
-        mut move_target: impl FnMut(u8) -> Option<u8>,
-    ) {
+    /// 记下一条选择；`None` 是明确不回放。
+    pub fn set(&mut self, kind: LogBusKind, raw: u8, to: Option<ClusterId>) {
+        self.table_mut(kind).insert(raw, to);
+    }
+
+    /// 删掉一个 cluster 之后，指向它的表项变成"不回放"；别的表项不动。
+    pub fn drop_cluster(&mut self, kind: LogBusKind, cluster: ClusterId) {
         let table = self.table_mut(kind);
-        let moved: BTreeMap<u8, Option<u8>> = table
-            .iter()
-            .map(|(raw, to)| (*raw, (*to).and_then(&mut move_target)))
-            .collect();
-        *table = moved;
+        for target in table.values_mut() {
+            if *target == Some(cluster) {
+                *target = None;
+            }
+        }
+    }
+
+    /// Rebases a v1 map, whose targets are bus indexes, onto the cluster ids
+    /// the project now uses. Called only while opening an old project file;
+    /// a bus that no longer exists becomes an explicit "don't replay".
+    pub fn rebase_buses(&mut self, can: &[u32], fr: &BTreeMap<u8, u32>, eth: &BTreeMap<u8, u32>) {
+        let to_cluster = |bus: u8, from_can: bool, from_fr: bool| -> Option<ClusterId> {
+            let id = if from_can {
+                can.get(bus as usize).copied()
+            } else if from_fr {
+                fr.get(&bus).copied()
+            } else {
+                eth.get(&bus).copied()
+            };
+            id.map(ClusterId)
+        };
+        for (kind, from_can, from_fr) in [
+            (LogBusKind::Can, true, false),
+            (LogBusKind::Fr, false, true),
+            (LogBusKind::Eth, false, false),
+        ] {
+            let table = self.table_mut(kind);
+            for target in table.values_mut() {
+                if let Some(ClusterId(bus)) = *target {
+                    *target = to_cluster(bus as u8, from_can, from_fr);
+                }
+            }
+        }
     }
 
     /// 一条都没配过。工程文件用它决定要不要写这一项。
@@ -94,15 +114,15 @@ impl ReplayMap {
         self.can.is_empty() && self.fr.is_empty() && self.eth.is_empty()
     }
 
-    /// 配过的通道（编号升序）。文件还没回放时，映射表靠它列出已有的选择。
-    pub fn configured(&self, kind: LogBusKind) -> Vec<(u8, Option<u8>)> {
+    /// 配过的通道（编号升序），目标为 cluster 或 `None`（不回放）。
+    pub fn configured(&self, kind: LogBusKind) -> Vec<(u8, Option<ClusterId>)> {
         self.table(kind)
             .iter()
             .map(|(raw, to)| (*raw, *to))
             .collect()
     }
 
-    fn table(&self, kind: LogBusKind) -> &BTreeMap<u8, Option<u8>> {
+    fn table(&self, kind: LogBusKind) -> &BTreeMap<u8, Option<ClusterId>> {
         match kind {
             LogBusKind::Can => &self.can,
             LogBusKind::Fr => &self.fr,
@@ -110,7 +130,7 @@ impl ReplayMap {
         }
     }
 
-    fn table_mut(&mut self, kind: LogBusKind) -> &mut BTreeMap<u8, Option<u8>> {
+    fn table_mut(&mut self, kind: LogBusKind) -> &mut BTreeMap<u8, Option<ClusterId>> {
         match kind {
             LogBusKind::Can => &mut self.can,
             LogBusKind::Fr => &mut self.fr,
@@ -176,77 +196,76 @@ mod tests {
     #[test]
     fn an_unlisted_channel_keeps_its_own_number() {
         let map = ReplayMap::default();
-        assert_eq!(map.target(LogBusKind::Can, 2), Some(2));
-        assert_eq!(map.target(LogBusKind::Fr, 1), Some(1));
+        assert_eq!(map.target(LogBusKind::Can, 2), ReplayTarget::Same);
+        assert_eq!(map.target(LogBusKind::Fr, 1), ReplayTarget::Same);
     }
 
     #[test]
     fn a_choice_retargets_and_drops() {
         let mut map = ReplayMap::default();
-        map.set(LogBusKind::Can, 3, Some(0));
+        map.set(LogBusKind::Can, 3, Some(ClusterId(7)));
         map.set(LogBusKind::Fr, 2, None);
-        map.set(LogBusKind::Eth, 1, Some(2));
-        assert_eq!(map.target(LogBusKind::Can, 3), Some(0));
-        assert_eq!(map.target(LogBusKind::Can, 0), Some(0), "untouched");
-        assert_eq!(map.target(LogBusKind::Fr, 2), None);
+        map.set(LogBusKind::Eth, 1, Some(ClusterId(9)));
+        assert_eq!(
+            map.target(LogBusKind::Can, 3),
+            ReplayTarget::Cluster(ClusterId(7))
+        );
+        assert_eq!(map.target(LogBusKind::Can, 0), ReplayTarget::Same);
+        assert_eq!(map.target(LogBusKind::Fr, 2), ReplayTarget::Drop);
         assert_eq!(
             map.target(LogBusKind::Eth, 1),
-            Some(2),
-            "a capture channel lands on the project's Ethernet bus"
+            ReplayTarget::Cluster(ClusterId(9))
         );
-        assert_eq!(map.configured(LogBusKind::Can), vec![(3, Some(0))]);
-        assert_eq!(map.configured(LogBusKind::Fr), vec![(2, None)]);
-        assert_eq!(map.configured(LogBusKind::Eth), vec![(1, Some(2))]);
-    }
-
-    #[test]
-    fn pointing_a_channel_at_itself_forgets_the_row() {
-        let mut map = ReplayMap::default();
-        map.set(LogBusKind::Can, 1, Some(2));
-        map.set(LogBusKind::Can, 1, Some(1));
-        assert!(map.configured(LogBusKind::Can).is_empty());
-        assert_eq!(map.target(LogBusKind::Can, 1), Some(1));
-    }
-
-    #[test]
-    fn deleting_a_bus_moves_the_rows_that_pointed_at_it() {
-        let mut map = ReplayMap::default();
-        map.set(LogBusKind::Can, 4, Some(1));
-        map.set(LogBusKind::Can, 5, Some(2));
-        map.set(LogBusKind::Fr, 0, Some(1));
-        // CAN 删一条，后面的往前挪；被删的那条留下"不回放"，不悄悄取消。
-        map.shift_targets(LogBusKind::Can, |c| match c {
-            1 => None,
-            c if c > 1 => Some(c - 1),
-            c => Some(c),
-        });
         assert_eq!(
             map.configured(LogBusKind::Can),
-            vec![(4, None), (5, Some(1))]
+            vec![(3, Some(ClusterId(7)))]
         );
-        // FlexRay 的编号不跟着 CAN 挪，各自的表各管自己。
-        assert_eq!(map.configured(LogBusKind::Fr), vec![(0, Some(1))]);
-        assert_eq!(map.target(LogBusKind::Can, 4), None);
+        assert_eq!(map.configured(LogBusKind::Fr), vec![(2, None)]);
+        assert_eq!(
+            map.configured(LogBusKind::Eth),
+            vec![(1, Some(ClusterId(9)))]
+        );
     }
 
     #[test]
-    fn a_channel_with_no_bus_here_has_nowhere_to_go() {
-        let map = ReplayMap::default();
-        assert_eq!(map.can_channel(0, 2), Some(0));
-        assert_eq!(map.can_channel(2, 2), None, "两路的工程里没有第 3 路");
-        let mut moved = ReplayMap::default();
-        moved.set(LogBusKind::Can, 5, Some(1));
+    fn deleting_a_cluster_drops_the_rows_that_pointed_at_it() {
+        let mut map = ReplayMap::default();
+        map.set(LogBusKind::Can, 4, Some(ClusterId(11)));
+        map.set(LogBusKind::Can, 5, Some(ClusterId(12)));
+        map.set(LogBusKind::Fr, 0, Some(ClusterId(13)));
+        map.drop_cluster(LogBusKind::Can, ClusterId(11));
         assert_eq!(
-            moved.can_channel(5, 2),
-            Some(1),
-            "指过来的也过同一道范围检查"
+            map.configured(LogBusKind::Can),
+            vec![(4, None), (5, Some(ClusterId(12)))]
         );
-        assert_eq!(moved.can_channel(0, 2), Some(0), "没配的通道不受这条影响");
-        moved.set(LogBusKind::Can, 3, None);
         assert_eq!(
-            moved.can_channel(3, 8),
-            None,
-            "选了不回放就是 None，与范围无关"
+            map.configured(LogBusKind::Fr),
+            vec![(0, Some(ClusterId(13)))]
+        );
+        assert_eq!(map.target(LogBusKind::Can, 4), ReplayTarget::Drop);
+    }
+
+    #[test]
+    fn a_v1_map_rebases_bus_numbers_onto_clusters() {
+        let mut map = ReplayMap::default();
+        map.set(LogBusKind::Can, 1, Some(ClusterId(1)));
+        map.set(LogBusKind::Fr, 0, Some(ClusterId(0)));
+        map.set(LogBusKind::Eth, 3, Some(ClusterId(3)));
+        let fr = [(0u8, 9u32)].into_iter().collect();
+        let eth = [(1u8, 5u32)].into_iter().collect();
+        map.rebase_buses(&[7, 8], &fr, &eth);
+        assert_eq!(
+            map.target(LogBusKind::Can, 1),
+            ReplayTarget::Cluster(ClusterId(8))
+        );
+        assert_eq!(
+            map.target(LogBusKind::Fr, 0),
+            ReplayTarget::Cluster(ClusterId(9))
+        );
+        assert_eq!(
+            map.target(LogBusKind::Eth, 3),
+            ReplayTarget::Drop,
+            "a bus the project no longer has becomes an explicit drop"
         );
     }
 
@@ -273,7 +292,7 @@ mod tests {
     #[test]
     fn the_map_survives_a_round_trip_through_json() {
         let mut map = ReplayMap::default();
-        map.set(LogBusKind::Can, 2, Some(0));
+        map.set(LogBusKind::Can, 2, Some(ClusterId(0)));
         map.set(LogBusKind::Fr, 1, None);
         let text = serde_json::to_string(&map).unwrap();
         let back: ReplayMap = serde_json::from_str(&text).unwrap();
