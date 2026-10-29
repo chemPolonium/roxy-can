@@ -664,3 +664,35 @@ impl Hardware {
         tags
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::can::frame::{CanFrame, Direction, FrameFlags, MAX_CAN_FD_LEN};
+
+    /// Hardware follows the bus index the channel list uses; removing a lower
+    /// channel shifts the attachment with its own channel, so the adapter that
+    /// was on CAN2 keeps carrying CAN2's cluster after renumbering.
+    #[test]
+    fn an_attachment_follows_its_channel_when_a_lower_one_is_removed() {
+        let mut hw = Hardware::new();
+        let (written, _incoming) = hw.attach_mock(1);
+        hw.remove_bus(0);
+        assert!(!hw.is_attached(1), "the old index is gone");
+        assert!(hw.is_attached(0), "the attachment moved with its bus");
+        hw.write_if_live(
+            0,
+            &CanFrame {
+                t_us: 0,
+                channel: 0,
+                id: 0x100,
+                extended: false,
+                len: 1,
+                data: [0; MAX_CAN_FD_LEN],
+                dir: Direction::Tx,
+                flags: FrameFlags::NONE,
+            },
+        );
+        assert_eq!(written.lock().unwrap().len(), 1);
+    }
+}
