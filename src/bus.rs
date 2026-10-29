@@ -7711,9 +7711,11 @@ impl BusCore {
         if fired
             .iter()
             .any(|(a, _)| matches!(a, TriggerAction::Send { .. }))
-            && let Some(db) = self.channel_dbc(f.channel)
         {
-            for d in db.decode_signals(f) {
+            let decoded = self
+                .model_can_decoded(f, false)
+                .or_else(|| self.channel_dbc(f.channel).map(|db| db.decode_signals(f)));
+            for d in decoded.unwrap_or_default() {
                 mirror.insert(d.name, d.phys);
             }
         }
@@ -7911,20 +7913,67 @@ impl BusCore {
         else {
             return; // the generator row is gone: the rule idles
         };
-        let (mut data, mut len, mut flags) =
-            crate::generator::tx_payload(&self.channels, &self.tx_list[i], at_us);
         let (tch, tid, ext) = (
             self.tx_list[i].channel,
             self.tx_list[i].id,
             self.tx_list[i].extended,
         );
-        if !mirror.is_empty()
-            && let Some(table) = self.channels.get(tch as usize).and_then(|c| c.dbc.as_ref())
-        {
-            for (name, value) in mirror {
-                crate::generator::encode_mirror(
-                    table, tid, name, *value, &mut data, &mut len, &mut flags,
-                );
+        // The reaction send goes through the same model encoder as the
+        // periodic generator; the legacy table is only the no-model fallback.
+        let model = self
+            .can_cluster_ids
+            .get(tch as usize)
+            .copied()
+            .and_then(|cluster| {
+                let comm = self.model_comms.get(tch as usize)?.as_ref()?.clone();
+                let plans = self.model_plans.get(tch as usize)?.as_ref()?.clone();
+                Some((cluster, comm, plans))
+            });
+        let (mut data, mut len, mut flags) = model
+            .as_ref()
+            .and_then(|(cluster, comm, plans)| {
+                crate::generator::tx_payload_with_model(
+                    *cluster,
+                    comm,
+                    plans,
+                    &self.tx_list[i],
+                    at_us,
+                )
+            })
+            .unwrap_or_else(|| {
+                crate::generator::tx_payload(&self.channels, &self.tx_list[i], at_us)
+            });
+        if !mirror.is_empty() {
+            if let Some((cluster, comm, plans)) = &model {
+                let frame = comm.frames_in_cluster(*cluster).find(|frame| {
+                    matches!(
+                        frame.address,
+                        crate::model::FrameAddress::Can {
+                            id,
+                            extended,
+                            ..
+                        } if id == tid && extended == ext
+                    )
+                });
+                if let Some(frame) = frame
+                    && let Some(plan) = plans.get(frame.id)
+                {
+                    let values: Vec<_> = comm
+                        .signals_in_frame(frame)
+                        .into_iter()
+                        .filter_map(|signal| {
+                            mirror.get(&signal.name).map(|value| (signal.id, *value))
+                        })
+                        .collect();
+                    crate::model::encode_payload(comm, plan, &values, &mut data[..len as usize]);
+                }
+            } else if let Some(table) = self.channels.get(tch as usize).and_then(|c| c.dbc.as_ref())
+            {
+                for (name, value) in mirror {
+                    crate::generator::encode_mirror(
+                        table, tid, name, *value, &mut data, &mut len, &mut flags,
+                    );
+                }
             }
         }
         // 发送反应帧同样更新条目的最近发送载荷，显示与发送一致。

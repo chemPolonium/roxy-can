@@ -5823,11 +5823,17 @@ BO_ 512 DashMirror: 8 ECU
 #[test]
 fn a_send_action_mirrors_same_named_signals_from_the_trigger_frame() {
     let mut app = App::headless();
-    app.channels[0].dbc = Some(std::sync::Arc::new(
-        crate::dbc::load_dbc_str(MIRROR_DBC).unwrap(),
-    ));
+    app.send(crate::bus::BusCommand::SetChannelDbc {
+        ch: 0,
+        dbc: std::sync::Arc::new(crate::dbc::load_dbc_str(MIRROR_DBC).unwrap()),
+    });
     app.tx_list.retain(|t| t.channel != 0);
     app.start_virtual();
+    assert!(
+        app.model_decoded_for_test(&frame_at(0, 0x200, 8, Direction::Rx))
+            .is_some(),
+        "the reaction target is decoded through the model"
+    );
     // The reaction target, inactive so only the reaction itself emits it;
     // its base payload is all zeroes.
     app.add_tx(0, 0x200);
