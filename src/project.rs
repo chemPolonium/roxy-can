@@ -112,7 +112,27 @@ impl App {
         };
         let base = path.parent().map(|d| d.to_path_buf());
         let config = Config::from_app(self, base.as_deref());
-        let config_value = serde_json::to_value(&config).unwrap_or_default();
+        let mut config_value = serde_json::to_value(&config).unwrap_or_default();
+        // Sections that are now typed v2 fields leave the compat blob.
+        if let Some(object) = config_value.as_object_mut() {
+            for key in [
+                "trace_windows",
+                "msg_windows",
+                "stats_windows",
+                "graphics",
+                "data_windows",
+                "monitor_rows",
+                "state_trackers",
+                "nodes",
+                "blocks",
+                "sysvars",
+                "derived",
+                "web",
+                "triggers",
+            ] {
+                object.remove(key);
+            }
+        }
         let (mut project, _report) = crate::model::migrate_v1_clusters(&config);
         let ids = &self.snap.cluster_ids;
         let mut fr_order: Vec<u8> = config.fr_buses.iter().map(|bus| bus.bus).collect();
@@ -298,6 +318,37 @@ impl App {
             });
         }
         project.triggers = Some(triggers);
+        // Workspace sections move out of the compat blob and into typed v2
+        // fields; their picks still name buses by index for now.
+        project.trace_windows = config.trace_windows.clone();
+        project.msg_windows = config.msg_windows.clone();
+        project.stats_windows = config.stats_windows.clone();
+        project.graphics = config.graphics.clone();
+        project.data_windows = config.data_windows.clone();
+        project.monitor_rows = config.monitor_rows.clone();
+        project.state_trackers = config.state_trackers.clone();
+        project.nodes = config.nodes.clone();
+        project.blocks = config.blocks.clone();
+        project.sysvars = config.sysvars.clone();
+        project.derived = config.derived.clone();
+        project.workspace = config.web.clone();
+        for key in [
+            "trace_windows",
+            "msg_windows",
+            "stats_windows",
+            "graphics",
+            "data_windows",
+            "monitor_rows",
+            "state_trackers",
+            "nodes",
+            "blocks",
+            "sysvars",
+            "derived",
+            "web",
+            "triggers",
+        ] {
+            project.rest.remove(key);
+        }
         let written = serde_json::to_string_pretty(&project)
             .map_err(|e| e.to_string())
             .and_then(|j| std::fs::write(&path, j).map_err(|e| e.to_string()));
@@ -464,6 +515,45 @@ impl App {
                         })
                     })
                     .collect();
+            }
+            // Typed v2 workspace sections win over the compat blob; an empty
+            // section means the project legitimately has none (new saves do
+            // not write those keys into `config` any more).
+            if !project.trace_windows.is_empty() {
+                cfg.trace_windows = project.trace_windows.clone();
+            }
+            if !project.msg_windows.is_empty() {
+                cfg.msg_windows = project.msg_windows.clone();
+            }
+            if !project.stats_windows.is_empty() {
+                cfg.stats_windows = project.stats_windows.clone();
+            }
+            if !project.graphics.is_empty() {
+                cfg.graphics = project.graphics.clone();
+            }
+            if !project.data_windows.is_empty() {
+                cfg.data_windows = project.data_windows.clone();
+            }
+            if !project.monitor_rows.is_empty() {
+                cfg.monitor_rows = project.monitor_rows.clone();
+            }
+            if !project.state_trackers.is_empty() {
+                cfg.state_trackers = project.state_trackers.clone();
+            }
+            if !project.nodes.is_empty() {
+                cfg.nodes = project.nodes.clone();
+            }
+            if !project.blocks.is_empty() {
+                cfg.blocks = project.blocks.clone();
+            }
+            if !project.sysvars.is_empty() {
+                cfg.sysvars = project.sysvars.clone();
+            }
+            if !project.derived.is_empty() {
+                cfg.derived = project.derived.clone();
+            }
+            if let Some(workspace) = &project.workspace {
+                cfg.web = Some(workspace.clone());
             }
             self.reset_to_defaults();
             cfg.resolve_paths(path.parent());

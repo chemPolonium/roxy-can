@@ -1,9 +1,9 @@
 //! Project schema v2.
 //!
 //! The imported communication model is not persisted: sources, overrides and
-//! id aliases are enough to rebuild it. Everything the workspace needs is
-//! either in `clusters` or in the untouched `rest` sections, which keep the
-//! window/panel shapes until the Phase 7 migration rewrites them.
+//! id aliases are enough to rebuild it. Workspace sections (windows, nodes,
+//! generators, triggers, sysvars, derived, the opaque `workspace`) have typed
+//! fields here; `rest` still carries older v1 keys read-only.
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -274,6 +274,34 @@ pub struct ProjectV2 {
     /// is a project with no rules.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub triggers: Option<Vec<TriggerCfgV2>>,
+    /// Observer windows and their filters. Their picks still name buses by
+    /// index; moving those to cluster ids is the remaining key migration.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub trace_windows: Vec<crate::config::TraceCfg>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub msg_windows: Vec<crate::config::MsgCfg>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub stats_windows: Vec<crate::config::StatsCfg>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub graphics: Vec<crate::config::GfxCfg>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub data_windows: Vec<crate::config::DataCfg>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub monitor_rows: Vec<crate::config::MonitorRowCfg>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub state_trackers: Vec<crate::config::StateCfg>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub nodes: Vec<crate::config::NodeCfg>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub blocks: Vec<crate::config::BlockCfg>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sysvars: Vec<crate::bus::SysVarDef>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub derived: Vec<crate::derived::DerivedDef>,
+    /// Frontend workspace (tabs, cursors, column widths, splitters), opaque
+    /// to the core exactly as before, but now a v2 section of its own.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace: Option<Value>,
     /// Old bus index → cluster id, kept so the frontend can rewrite its
     /// opaque `web` workspace during the v1→v2 migration.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -296,6 +324,18 @@ impl Default for ProjectV2 {
             replay: Vec::new(),
             generators: None,
             triggers: None,
+            trace_windows: Vec::new(),
+            msg_windows: Vec::new(),
+            stats_windows: Vec::new(),
+            graphics: Vec::new(),
+            data_windows: Vec::new(),
+            monitor_rows: Vec::new(),
+            state_trackers: Vec::new(),
+            nodes: Vec::new(),
+            blocks: Vec::new(),
+            sysvars: Vec::new(),
+            derived: Vec::new(),
+            workspace: None,
             legacy_bus_map: None,
             rest: serde_json::Map::new(),
         }

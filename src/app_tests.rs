@@ -324,6 +324,16 @@ fn a_project_saves_schema_v2_and_reopens_the_same_cluster_ids() {
     let text = std::fs::read_to_string(&path).unwrap();
     let value: serde_json::Value = serde_json::from_str(&text).unwrap();
     assert_eq!(value["version"], 2);
+    assert!(!app.trace_windows.is_empty(), "the bootstrap opens windows");
+    assert_eq!(
+        value["traceWindows"].as_array().map(Vec::len),
+        Some(app.trace_windows.len()),
+        "windows are a typed v2 section"
+    );
+    assert!(
+        value["config"].get("trace_windows").is_none(),
+        "windows left the compat blob"
+    );
     assert!(value["clusters"].as_array().unwrap().len() >= ids.can.len());
     assert!(value["legacyBusMap"]["can"].is_array());
     assert!(value["config"]["channels"].is_array());
@@ -367,6 +377,11 @@ fn a_project_saves_schema_v2_and_reopens_the_same_cluster_ids() {
 
     let mut restored = App::headless();
     restored.open_project_path(&path);
+    assert_eq!(
+        restored.trace_windows.len(),
+        app.trace_windows.len(),
+        "windows come back from the typed section"
+    );
     assert_eq!(restored.snap.cluster_ids, ids);
     assert_eq!(
         restored.snap.tx.len(),

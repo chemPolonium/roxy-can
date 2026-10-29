@@ -165,7 +165,7 @@ fn merge_picks(
         .collect()
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct TraceCfg {
     pub name: String,
     pub opened: bool,
@@ -203,7 +203,7 @@ pub struct TraceCfg {
     pub fr_expand: bool,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct MsgCfg {
     pub name: String,
     pub opened: bool,
@@ -220,7 +220,7 @@ pub struct MsgCfg {
     pub dbc_only: bool,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct StatsCfg {
     pub name: String,
     pub opened: bool,
@@ -233,7 +233,7 @@ pub struct StatsCfg {
     pub eth_manual: EthPicks,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct SignalCfg {
     pub ch: u8,
     pub id: u32,
@@ -271,7 +271,7 @@ pub struct SignalCfg {
 
 /// One default-mode color override: the state's physical value and its
 /// pinned color.
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct StateOverrideCfg {
     pub value: f64,
     pub color: [f32; 3],
@@ -279,14 +279,14 @@ pub struct StateOverrideCfg {
 
 /// One signal's custom state bands, CANoe's Value Definition rows. A
 /// `None` color means automatic.
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct RuleCfg {
     pub cuts: Vec<f64>,
     pub names: Vec<String>,
     pub colors: Vec<Option<[f32; 3]>>,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct GfxCfg {
     pub name: String,
     pub opened: bool,
@@ -304,7 +304,7 @@ pub struct GfxCfg {
     pub show_markers: bool,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct DataCfg {
     pub name: String,
     pub opened: bool,
@@ -384,7 +384,7 @@ pub struct BlockCfg {
     pub enabled: bool,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct StateCfg {
     pub name: String,
     pub opened: bool,
