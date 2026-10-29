@@ -3410,15 +3410,18 @@ impl BusCore {
                     continue;
                 };
                 let flow = key.flow();
-                let Some(decoded) = db.decode(&flow, &agg.payload, self.eth_length_includes_header)
+                let frame = match db.match_flow(&flow, self.eth_length_includes_header) {
+                    crate::eth::db::EthMatch::Unique(index) => db.frames[index].name.clone(),
+                    _ => continue,
+                };
+                let Some(decoded) = self.model_eth_decoded(key.bus, &frame, &agg.payload, false)
                 else {
                     continue;
                 };
-                let frame = decoded.frame_name;
-                for d in decoded.signals {
+                for d in decoded {
                     let key = (key.bus, frame.clone(), d.name);
                     for input in inputs.values_mut() {
-                        input.eth_signals.insert(key.clone(), d.physical);
+                        input.eth_signals.insert(key.clone(), d.phys);
                     }
                 }
             }
@@ -3534,25 +3537,8 @@ impl BusCore {
                 db.match_flow(&flow, self.eth_length_includes_header)
             {
                 let frame_name = db.frames[ix].name.clone();
-                if let Some(decoded) =
-                    db.decode(&flow, &frame.payload, self.eth_length_includes_header)
+                if let Some(values) = self.model_eth_values(frame.bus, &frame_name, &frame.payload)
                 {
-                    let values = self
-                        .model_eth_values(frame.bus, &frame_name, &frame.payload)
-                        .unwrap_or_else(|| {
-                            decoded
-                                .signals
-                                .into_iter()
-                                .map(|d| crate::dbc::DecodedSignal {
-                                    name: d.name,
-                                    phys: d.physical,
-                                    raw: d.raw,
-                                    unit: d.unit,
-                                    type_tag: d.type_tag,
-                                    label: d.label,
-                                })
-                                .collect()
-                        });
                     let stride = self.applied_stride_us;
                     let t_us = frame.t_us;
                     for d in values {
@@ -3768,23 +3754,6 @@ impl BusCore {
                 crate::eth::db::EthMatch::Unique(index) => {
                     let name = &db.frames[index].name;
                     self.model_eth_decoded(flow_key.bus, name, &agg.payload, false)
-                        .or_else(|| {
-                            db.decode(&flow, &agg.payload, self.eth_length_includes_header)
-                                .map(|decoded| {
-                                    decoded
-                                        .signals
-                                        .into_iter()
-                                        .map(|signal| crate::dbc::DecodedSignal {
-                                            name: signal.name,
-                                            phys: signal.physical,
-                                            raw: signal.raw,
-                                            unit: signal.unit,
-                                            type_tag: signal.type_tag,
-                                            label: signal.label,
-                                        })
-                                        .collect()
-                                })
-                        })
                         .unwrap_or_default()
                 }
                 _ => Vec::new(),
@@ -8615,6 +8584,7 @@ mod tests {
             }],
         };
         core.eth_dbs.insert(0, std::sync::Arc::new(db));
+        core.rebuild_eth_models();
         let key = crate::observe::SigKey::eth(0, "SpeedFrame", "Speed");
         core.subscribe_signal(key.clone());
 
@@ -8677,6 +8647,7 @@ mod tests {
             let mut core = BusCore::new(Vec::new());
             core.eth_dbs.insert(0, std::sync::Arc::new(db.clone()));
             core.eth_length_includes_header = includes_header;
+            core.rebuild_eth_models();
             core.subscribe_signal(key.clone());
             core.ingest_eth(crate::eth::EthFrame::new(
                 1_000,

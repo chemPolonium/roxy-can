@@ -5050,16 +5050,6 @@ struct WebLine {
     text: String,
 }
 
-fn message_signal_dto(signal: crate::dbc::DecodedSignal) -> WebMessageSignal {
-    WebMessageSignal {
-        value: crate::dbc::fmt_decoded(&signal.type_tag, signal.phys),
-        name: signal.name,
-        raw: signal.raw,
-        unit: signal.unit,
-        label: signal.label,
-    }
-}
-
 fn expanded_signal_dto(rows: &[crate::bus::ExpandedSignal]) -> Vec<WebMessageSignal> {
     rows.iter()
         .map(|row| WebMessageSignal {
@@ -5883,14 +5873,7 @@ fn build_state(app: &App, series: &VecDeque<WebSeriesPoint>, fps: f64) -> WebSta
             snap.expanded_signals
                 .get(&key)
                 .map(|rows| expanded_signal_dto(rows))
-                .unwrap_or_else(|| {
-                    frame_ix
-                        .and_then(|ix| frame_db.map(|db| db.decode_signals(ix, &m.payload)))
-                        .unwrap_or_default()
-                        .into_iter()
-                        .map(message_signal_dto)
-                        .collect()
-                })
+                .unwrap_or_default()
         } else {
             Vec::new()
         };
@@ -5948,28 +5931,7 @@ fn build_state(app: &App, series: &VecDeque<WebSeriesPoint>, fps: f64) -> WebSta
                     snap.expanded_signals
                         .get(&key)
                         .map(|rows| expanded_signal_dto(rows))
-                        .unwrap_or_else(|| {
-                            config
-                                .db
-                                .decode(&flow, &a.payload, app.eth_length_includes_header)
-                                .map(|decoded| {
-                                    decoded
-                                        .signals
-                                        .into_iter()
-                                        .map(|signal| {
-                                            message_signal_dto(crate::dbc::DecodedSignal {
-                                                name: signal.name,
-                                                phys: signal.physical,
-                                                raw: signal.raw,
-                                                unit: signal.unit,
-                                                type_tag: signal.type_tag,
-                                                label: signal.label,
-                                            })
-                                        })
-                                        .collect()
-                                })
-                                .unwrap_or_default()
-                        })
+                        .unwrap_or_default()
                 } else {
                     Vec::new()
                 };
