@@ -1843,16 +1843,17 @@ body.col-resizing {
 
 .page-inspector .page-frame-ext {
   flex: 0 0 auto;
+  height: 24px;
   flex-direction: row;
   align-items: center;
   gap: 4px;
-  padding-bottom: 4px;
   color: var(--muted);
   font-size: 10px;
 }
 
 .page-inspector .page-frame-ext input {
   width: auto;
+  height: auto;
 }
 
 .page-frame-error {
@@ -1866,9 +1867,12 @@ body.col-resizing {
 }
 
 .page-frame-values {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 64px auto;
+  column-gap: 6px;
+  row-gap: 4px;
+  align-items: center;
+  color: var(--muted);
   max-height: 180px;
   overflow: auto;
   padding: 4px;
@@ -1877,10 +1881,7 @@ body.col-resizing {
 }
 
 .page-frame-values label {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 64px auto;
-  align-items: center;
-  gap: 6px;
+  display: contents;
 }
 
 .page-frame-values label > span {
@@ -1891,13 +1892,17 @@ body.col-resizing {
 }
 
 .page-frame-values input {
-  width: 64px;
+  width: 100%;
 }
 
 .page-frame-values em {
   color: var(--muted);
   font-size: 9px;
   font-style: normal;
+}
+
+.page-frame-values .page-frame-hint {
+  grid-column: 1 / -1;
 }
 
 .trace-body {
