@@ -4758,7 +4758,7 @@ impl BusCore {
     /// Model-side signal values for a CAN frame, in the same shape the
     /// legacy decoder returns. `None` means "use the legacy path": the
     /// channel has no model or the model does not know the frame.
-    fn model_can_values(&self, f: &CanFrame) -> Option<Vec<crate::dbc::DecodedSignal>> {
+    pub(crate) fn model_can_values(&self, f: &CanFrame) -> Option<Vec<crate::dbc::DecodedSignal>> {
         self.model_can_decoded(f, true)
     }
 
@@ -4898,7 +4898,7 @@ impl BusCore {
         Some(out)
     }
 
-    fn model_eth_values(
+    pub(crate) fn model_eth_values(
         &self,
         bus: u8,
         frame_name: &str,
@@ -7566,30 +7566,15 @@ impl BusCore {
         self.trace.enforce_limit(self.trace_limit);
     }
 
-    /// The frames a frame carries for signals this run subscribes to, looked
-    /// up in the sending bus's database.
+    /// The frames a frame carries for signals this run subscribes to, from
+    /// the model's plan for the channel.
     pub(crate) fn subscribed_values(&self, f: &CanFrame) -> Vec<(SigKey, DecodedSignal)> {
-        if let Some(decoded) = self.model_can_values(f) {
-            return decoded
-                .into_iter()
-                .map(|d| {
-                    let key = SigKey::can(f.channel, f.id, f.extended, d.name.clone());
-                    (key, d)
-                })
-                .collect();
-        }
-        let Some(db) = self
-            .channels
-            .get(f.channel as usize)
-            .and_then(|c| c.dbc.as_ref())
-        else {
-            return Vec::new();
-        };
-        db.decode_signals(f)
+        self.model_can_values(f)
+            .unwrap_or_default()
             .into_iter()
-            .filter_map(|d| {
+            .map(|d| {
                 let key = SigKey::can(f.channel, f.id, f.extended, d.name.clone());
-                self.subs.contains_key(&key).then_some((key, d))
+                (key, d)
             })
             .collect()
     }

@@ -4359,9 +4359,10 @@ BO_ 400 Muxed: 8 ECU
 
 fn mux_app() -> App {
     let mut app = App::headless();
-    app.channels[0].dbc = Some(std::sync::Arc::new(
-        crate::dbc::load_dbc_str(MUX_SAMPLE_DBC).unwrap(),
-    ));
+    app.send(crate::bus::BusCommand::SetChannelDbc {
+        ch: 0,
+        dbc: std::sync::Arc::new(crate::dbc::load_dbc_str(MUX_SAMPLE_DBC).unwrap()),
+    });
     app.tx_list.retain(|t| t.channel != 0);
     app.start_virtual();
     app

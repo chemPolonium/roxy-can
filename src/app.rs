@@ -1410,8 +1410,7 @@ impl App {
                 flags: agg.flags,
             };
             let signals: Vec<(String, String)> = self
-                .channel_dbc(agg.channel)
-                .map(|db| db.decode_signals(&frame))
+                .model_can_values(&frame)
                 .unwrap_or_default()
                 .into_iter()
                 .map(|d| {
@@ -1577,16 +1576,16 @@ impl App {
                     continue;
                 }
             }
-            let decoded =
-                db.and_then(|db| db.decode(&flow, &agg.payload, self.eth_length_includes_header));
-            let signals: Vec<(String, String)> = decoded
-                .map(|d| {
-                    d.signals
+            let signals: Vec<(String, String)> = matched
+                .as_deref()
+                .and_then(|name| self.model_eth_values(agg.key.bus, name, &agg.payload))
+                .map(|decoded| {
+                    decoded
                         .into_iter()
                         .map(|s| {
                             let text = match &s.label {
-                                Some(label) => format!("{} {} ({})", s.physical, s.unit, label),
-                                None => format!("{} {}", s.physical, s.unit),
+                                Some(label) => format!("{} {} ({})", s.phys, s.unit, label),
+                                None => format!("{} {}", s.phys, s.unit),
                             };
                             (s.name, text.trim().to_string())
                         })
