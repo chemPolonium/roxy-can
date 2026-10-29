@@ -5,6 +5,8 @@
 
 这份报告只回答“通信层面缺什么、哪些是以太网解码必需的”。编辑/写回能力不在本次范围内；除以太网必需项外，缺口记录到 `TODO.md`。
 
+> 状态说明（2026-10-29）：本文是初次审计的历史快照，许多“缺口”已经在统一模型中实现（ECU/PDU 端口、I-SIGNAL-GROUP、min/max、Container/Multiplexed/Secured PDU、update bit、E2E 结构等）。当前逐项状态以 [`docs/autosar-model.md`](autosar-model.md) 第 10 节为准。
+
 ## 1. 现有 roxy-can 的 ARXML 覆盖
 
 唯一入口是 `src/fr_db.rs::parse`，按根节点 `FIBEX`/`AUTOSAR` 或标签启发式选择解析器；ARXML 分支只认 FlexRay。
