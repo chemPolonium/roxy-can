@@ -1328,7 +1328,7 @@ pub struct BusCore {
     /// Frames received this run, for the run-total counter in the status bar.
     pub(crate) frame_counter: u64,
     /// Per-(bus, id) aggregates behind the Messages / Statistics views.
-    pub(crate) aggs: HashMap<(u8, u32, bool), MessageAgg>,
+    pub(crate) aggs: HashMap<(crate::model::ClusterId, u32, bool), MessageAgg>,
     /// Messages rows whose signal children the frontend has open.
     pub(crate) expanded_messages: std::collections::HashSet<String>,
     /// Per-bus load / frame-rate / error rolling state, one entry per channel.
@@ -3387,15 +3387,15 @@ impl BusCore {
         for input in inputs.values_mut() {
             input.sysvars = sysmap.clone();
         }
-        for (&(ch, id, extended), agg) in &self.aggs {
-            let Some(input) = inputs.get_mut(&ch) else {
+        for agg in self.aggs.values() {
+            let Some(input) = inputs.get_mut(&agg.channel) else {
                 continue;
             };
             let f = CanFrame {
                 t_us: agg.last_t_us,
-                channel: ch,
-                id,
-                extended,
+                channel: agg.channel,
+                id: agg.id,
+                extended: agg.extended,
                 len: agg.len,
                 data: agg.data,
                 dir: agg.dir,
@@ -3403,7 +3403,7 @@ impl BusCore {
             };
             let decoded = self.model_can_decoded(&f, false).unwrap_or_default();
             for d in decoded {
-                input.signals.insert((id, d.name), d.phys);
+                input.signals.insert((agg.id, d.name), d.phys);
             }
         }
         // The FlexRay half of the same read. `fr_sig` addresses a signal by
@@ -3725,8 +3725,8 @@ impl BusCore {
         if self.expanded_messages.is_empty() {
             return out;
         }
-        for (&(ch, id, extended), agg) in &self.aggs {
-            let key = format!("can:{ch}:{id}:{extended}");
+        for agg in self.aggs.values() {
+            let key = format!("can:{}:{}:{}", agg.channel, agg.id, agg.extended);
             if !self.expanded_messages.contains(&key) {
                 continue;
             }
@@ -3737,9 +3737,9 @@ impl BusCore {
             }
             let frame = CanFrame {
                 t_us: agg.last_t_us,
-                channel: ch,
-                id,
-                extended,
+                channel: agg.channel,
+                id: agg.id,
+                extended: agg.extended,
                 len: agg.len,
                 data: agg.data,
                 dir: agg.dir,
@@ -5449,16 +5449,12 @@ impl BusCore {
                 Some(c - 1)
             }
         };
-        self.aggs = self
-            .aggs
-            .drain()
-            .filter_map(|((c, id, ext), mut a)| {
-                remap(c).map(|nc| {
-                    a.channel = nc;
-                    ((nc, id, ext), a)
-                })
-            })
-            .collect();
+        self.aggs.retain(|_, agg| agg.channel as usize != ch);
+        for agg in self.aggs.values_mut() {
+            if agg.channel as usize > ch {
+                agg.channel -= 1;
+            }
+        }
         self.subs = self
             .subs
             .drain()
@@ -7598,9 +7594,9 @@ impl BusCore {
         type Hit = ((u8, u32, bool, Kind), f64, f64);
         let mut hits: Vec<Hit> = Vec::new();
         let mut seen: Vec<((u8, u32, bool), u64)> = Vec::with_capacity(self.aggs.len());
-        for (&key, agg) in &self.aggs {
-            let (ch, id, ext) = key;
-            seen.push((key, agg.last_t_us));
+        for agg in self.aggs.values() {
+            let (ch, id, ext) = (agg.channel, agg.id, agg.extended);
+            seen.push(((ch, id, ext), agg.last_t_us));
             // No database on this bus means no opinion, not a clean bill.
             let Some(db) = self.channel_dbc(ch) else {
                 continue;
@@ -7632,7 +7628,7 @@ impl BusCore {
                 // no new frame, has no interval to judge yet.
                 let elapsed = self
                     .spec
-                    .previous(key)
+                    .previous((ch, id, ext))
                     .and_then(|from| agg.last_t_us.checked_sub(from))
                     .filter(|i| *i > 0);
                 if let (Some(d), Some(interval)) = (declared, elapsed)
@@ -7789,7 +7785,14 @@ impl BusCore {
         self.track_e2e(&f);
         let agg = self
             .aggs
-            .entry((f.channel, f.id, f.extended))
+            .entry((
+                self.can_cluster_ids
+                    .get(f.channel as usize)
+                    .copied()
+                    .unwrap_or(crate::model::ClusterId(f.channel as u32 + 1)),
+                f.id,
+                f.extended,
+            ))
             .or_insert(MessageAgg {
                 id: f.id,
                 extended: f.extended,

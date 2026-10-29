@@ -699,7 +699,11 @@ fn aggregates_frames_per_message_id() {
     }
     let agg = app
         .aggs
-        .get(&(0, 0x100, false))
+        .get(&(
+            crate::model::ClusterId(app.snap.cluster_ids.can[0]),
+            0x100,
+            false,
+        ))
         .expect("EngineStatus aggregated on CAN1");
     assert!(agg.count >= 5, "expected several frames, got {}", agg.count);
     assert!(
@@ -728,7 +732,11 @@ fn clearing_the_trace_and_message_counters_empties_the_views() {
     run_sim(&mut app, 5, 10_000);
     assert!(app.trace.len() > 0, "frames on the trace before the clear");
     assert!(
-        app.aggs.contains_key(&(0, 0x777, false)),
+        app.aggs.contains_key(&(
+            crate::model::ClusterId(app.snap.cluster_ids.can[0]),
+            0x777,
+            false
+        )),
         "a counter exists before the clear"
     );
 
@@ -745,7 +753,11 @@ fn clearing_the_trace_and_message_counters_empties_the_views() {
     }
     assert!(app.trace.len() > 0, "frames arrive after the clear");
     assert!(
-        app.aggs.contains_key(&(0, 0x777, false)),
+        app.aggs.contains_key(&(
+            crate::model::ClusterId(app.snap.cluster_ids.can[0]),
+            0x777,
+            false
+        )),
         "counters resume after the clear"
     );
     app.stop();
@@ -783,7 +795,14 @@ fn generator_frames_are_spaced_exactly_one_cycle() {
         slots_of(&app, 0x777),
         vec![0, 20_000, 40_000, 60_000, 80_000]
     );
-    let agg = app.aggs.get(&(0, 0x777, false)).expect("aggregate");
+    let agg = app
+        .aggs
+        .get(&(
+            crate::model::ClusterId(app.snap.cluster_ids.can[0]),
+            0x777,
+            false,
+        ))
+        .expect("aggregate");
     assert_eq!((agg.min_us, agg.max_us), (20_000.0, 20_000.0));
     app.stop();
 }
@@ -1772,7 +1791,11 @@ fn tx_generator_emits_frames() {
         "expected a Tx frame from the generator"
     );
     assert!(
-        app.aggs.contains_key(&(0, 0x777, false)),
+        app.aggs.contains_key(&(
+            crate::model::ClusterId(app.snap.cluster_ids.can[0]),
+            0x777,
+            false
+        )),
         "generator frames aggregate"
     );
     app.stop();
@@ -2522,8 +2545,22 @@ fn two_channels_aggregate_separately() {
         std::thread::sleep(std::time::Duration::from_millis(11));
         app.update();
     }
-    let a = app.aggs.get(&(0, 0x100, false)).expect("CAN1 aggregate");
-    let b = app.aggs.get(&(1, 0xC8, false)).expect("CAN2 aggregate");
+    let a = app
+        .aggs
+        .get(&(
+            crate::model::ClusterId(app.snap.cluster_ids.can[0]),
+            0x100,
+            false,
+        ))
+        .expect("CAN1 aggregate");
+    let b = app
+        .aggs
+        .get(&(
+            crate::model::ClusterId(app.snap.cluster_ids.can[1]),
+            0xC8,
+            false,
+        ))
+        .expect("CAN2 aggregate");
     assert!(a.count >= 3, "CAN1 frames: {}", a.count);
     assert!(b.count >= 3, "CAN2 frames: {}", b.count);
     assert!(app.trace.iter().any(|f| f.channel == 1 && f.id == 0xC8));
@@ -2880,8 +2917,9 @@ fn channels_can_be_added_removed_and_renamed() {
     assert_eq!(app.channels.len(), 3);
     assert_eq!(app.channel_name(2), "CAN3");
 
+    let cluster = crate::model::ClusterId(app.snap.cluster_ids.can[1]);
     app.aggs.insert(
-        (1, 0x100, false),
+        (cluster, 0x100, false),
         MessageAgg {
             id: 0x100,
             channel: 1,
@@ -2919,7 +2957,11 @@ fn channels_can_be_added_removed_and_renamed() {
     assert_eq!(app.channels.len(), 2);
     assert_eq!(app.channel_name(0), "CAN2", "remaining buses shift down");
     assert!(
-        app.aggs.contains_key(&(0, 0x100, false)),
+        app.aggs.contains_key(&(
+            crate::model::ClusterId(app.snap.cluster_ids.can[0]),
+            0x100,
+            false
+        )),
         "agg remapped 1 -> 0"
     );
     assert!(
@@ -3494,7 +3536,11 @@ fn replay_injection_lands_on_the_log_timeline() {
     );
     let agg = app
         .aggs
-        .get(&(tx_ch, tx_id, false))
+        .get(&(
+            crate::model::ClusterId(app.snap.cluster_ids.can[tx_ch as usize]),
+            tx_id,
+            false,
+        ))
         .expect("injected frames aggregate");
     assert_eq!(agg.count, injected.len() as u64);
     assert!(
@@ -4243,7 +4289,12 @@ fn the_first_sample_of_a_message_is_never_a_cycle_violation() {
         vec![frame_at(500_000, 100, 8, Direction::Rx)],
     );
     assert_eq!(
-        app.aggs[&(0, 100, false)].count,
+        app.aggs[&(
+            crate::model::ClusterId(app.snap.cluster_ids.can[0]),
+            100,
+            false
+        )]
+            .count,
         1,
         "test setup: one frame, no interval yet"
     );
@@ -5221,11 +5272,19 @@ fn a_shared_numeric_id_aggregates_as_two_messages() {
         ],
     );
     assert!(
-        app.aggs.contains_key(&(0, std_id, false)),
+        app.aggs.contains_key(&(
+            crate::model::ClusterId(app.snap.cluster_ids.can[0]),
+            std_id,
+            false
+        )),
         "the standard class aggregates"
     );
     assert!(
-        app.aggs.contains_key(&(0, std_id, true)),
+        app.aggs.contains_key(&(
+            crate::model::ClusterId(app.snap.cluster_ids.can[0]),
+            std_id,
+            true
+        )),
         "the extended class aggregates separately"
     );
     // The standard id is declared, so no verdict; the extended one is
@@ -5599,7 +5658,11 @@ fn a_clear_trace_trigger_empties_the_ring_and_nothing_else() {
     assert_eq!(app.trace.len(), 1, "cleared, then the trigger frame lands");
     assert_eq!(app.trace.iter().next().map(|f| f.id), Some(0x777));
     assert!(
-        app.aggs.contains_key(&(0, 0x100, false)),
+        app.aggs.contains_key(&(
+            crate::model::ClusterId(app.snap.cluster_ids.can[0]),
+            0x100,
+            false
+        )),
         "aggregates survive the clear"
     );
     assert!(app.recorder.recording, "still recording after the clear");
@@ -5858,7 +5921,11 @@ fn a_send_action_transmits_one_generator_frame() {
         "the entry's payload goes out"
     );
     assert!(
-        app.aggs.contains_key(&(0, 0x777, false)),
+        app.aggs.contains_key(&(
+            crate::model::ClusterId(app.snap.cluster_ids.can[0]),
+            0x777,
+            false
+        )),
         "the reaction aggregates like any real traffic"
     );
 
@@ -9254,7 +9321,11 @@ fn a_flexray_arrival_drives_a_script_reaction() {
     );
     let agg = app
         .aggs
-        .get(&(0, 0x320, false))
+        .get(&(
+            crate::model::ClusterId(app.snap.cluster_ids.can[0]),
+            0x320,
+            false,
+        ))
         .expect("the reaction frame reached the CAN bus");
     assert_eq!(
         agg.data[0], 42,
@@ -9697,7 +9768,11 @@ fn replaying_a_flexray_log_drives_the_slot_handlers() {
     );
     let agg = app
         .aggs
-        .get(&(0, 0x320, false))
+        .get(&(
+            crate::model::ClusterId(app.snap.cluster_ids.can[0]),
+            0x320,
+            false,
+        ))
         .expect("the reactions reached the CAN bus");
     assert_eq!(agg.count, 4, "one CAN frame per FlexRay arrival");
     assert_eq!(agg.data[0], 3, "the last one carried the last cycle");
@@ -10581,8 +10656,9 @@ fn an_analysis_window_can_be_scoped_to_one_flexray_cluster() {
             },
         );
     }
+    let cluster = crate::model::ClusterId(app.snap.cluster_ids.can[0]);
     app.aggs.insert(
-        (0, 0x100, false),
+        (cluster, 0x100, false),
         MessageAgg {
             id: 0x100,
             channel: 0,

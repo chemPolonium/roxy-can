@@ -717,7 +717,11 @@ fn a_script_node_prints_sends_and_keeps_time() {
         .filter(|f| f.id == 0x123 && matches!(f.dir, Direction::Tx))
         .count();
     assert!(sent >= 2, "timer frames hit the bus: {sent}");
-    assert!(app.aggs.contains_key(&(0, 0x123, false)));
+    assert!(app.aggs.contains_key(&(
+        crate::model::ClusterId(app.snap.cluster_ids.can[0]),
+        0x123,
+        false
+    )));
 
     // Disabling silences the node without removing it.
     app.send(crate::bus::BusCommand::SetNodeEnabled { id, on: false });
