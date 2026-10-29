@@ -5,7 +5,9 @@ use can_dbc::{
     MultiplexIndicator, NumericValue, SignalExtendedValueType, ValueDescription, ValueType,
 };
 
+#[cfg(test)]
 use crate::can::frame::CanFrame;
+#[cfg(test)]
 use crate::decode;
 
 /// Reads a DBC file's text. Vector-era tooling exports DBCs in the
@@ -207,6 +209,7 @@ pub struct MessageInfo {
     pub signals: Vec<SignalInfo>,
     /// Names of the signals some condition gates on, deduped, so a decode
     /// reads each switch's bits exactly once.
+    #[cfg(test)]
     pub switch_names: Vec<String>,
     /// `CM_ BO_` text, empty when the database has none.
     pub comment: String,
@@ -451,12 +454,16 @@ impl SymbolTable {
                     .map(|(switch, ranges)| MuxCondition { switch, ranges })
                     .collect();
             }
-            let mut switch_names: Vec<String> = signals
-                .iter()
-                .flat_map(|s| s.mux_when.iter().map(|c| c.switch.clone()))
-                .collect();
-            switch_names.sort_unstable();
-            switch_names.dedup();
+            #[cfg(test)]
+            let switch_names: Vec<String> = {
+                let mut names: Vec<String> = signals
+                    .iter()
+                    .flat_map(|s| s.mux_when.iter().map(|c| c.switch.clone()))
+                    .collect();
+                names.sort_unstable();
+                names.dedup();
+                names
+            };
             let transmitter = msg
                 .transmitter
                 .clone()
@@ -470,6 +477,7 @@ impl SymbolTable {
                     transmitter,
                     cycle_us: cycles.get(&(id, extended)).copied(),
                     signals,
+                    #[cfg(test)]
                     switch_names,
                     comment: message_comments
                         .get(&(id, extended))
@@ -579,6 +587,7 @@ impl SymbolTable {
     /// Returns false if the message or signal is unknown. The id picks the
     /// frame class like `send` does: up to 0x7FF standard (with the extended
     /// declaration as fallback), above it extended only.
+    #[cfg(test)]
     pub fn encode_signal(&self, id: u32, name: &str, phys: f64, data: &mut [u8]) -> bool {
         let key = if id <= 0x7FF {
             if self.messages.contains_key(&(id, false)) {
@@ -594,6 +603,7 @@ impl SymbolTable {
 
     /// Encodes into one exact message key, so an extended frame whose numeric
     /// id sits in the standard range never picks the wrong table.
+    #[cfg(test)]
     pub fn encode_signal_in(&self, key: MsgKey, name: &str, phys: f64, data: &mut [u8]) -> bool {
         let Some(msg) = self.messages.get(&key) else {
             return false;
@@ -610,6 +620,7 @@ impl SymbolTable {
         true
     }
 
+    #[cfg(test)]
     pub fn decode_signals(&self, frame: &CanFrame) -> Vec<DecodedSignal> {
         let Some(msg) = self.messages.get(&(frame.id, frame.extended)) else {
             return Vec::new();
@@ -677,6 +688,7 @@ impl SymbolTable {
     /// The `VAL_` label for a signal's extracted bits, if one names this raw
     /// value. Comparing on the sign-extended integer means a `VAL_` entry with
     /// a negative id can label a signed signal.
+    #[cfg(test)]
     fn val_label(
         &self,
         msg: MsgKey,

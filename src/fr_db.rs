@@ -658,49 +658,6 @@ impl FrDb {
         out
     }
 
-    /// Encodes `phys` into a zero-filled payload for the occupant of `slot`
-    /// that carries `name`, sized to that frame's declared length. The cycle
-    /// names the moment of the write: an occupant the schedule does not fire
-    /// at `cycle` is sent on its base cycle instead, so the arrival resolves
-    /// back to this frame and its signals decode. `None` when no occupant has
-    /// the signal or its bytes do not fit.
-    pub fn encode_slot_signal(
-        &self,
-        slot: u16,
-        name: &str,
-        phys: f64,
-        cycle: u8,
-    ) -> Option<(Vec<u8>, u8)> {
-        let cands = self.slot_ix.get(&(slot as u32))?;
-        // The occupant the schedule fires at the write moment wins; frames
-        // sharing the slot out of phase are only a fallback.
-        for active in [true, false] {
-            for &ix in cands {
-                let Some(frame) = self.frames.get(ix) else {
-                    continue;
-                };
-                let fires = frame.triggering.is_active_at_cycle(u32::from(cycle));
-                if fires != active {
-                    continue;
-                }
-                let len = frame.length as usize;
-                if len == 0 || len > crate::generator::MAX_FR_PAYLOAD_LEN {
-                    continue;
-                }
-                let mut payload = vec![0u8; len];
-                if self.encode_signal(ix, name, phys, &mut payload) {
-                    let at = if fires {
-                        cycle
-                    } else {
-                        frame.triggering.base_cycle as u8
-                    };
-                    return Some((payload, at));
-                }
-            }
-        }
-        None
-    }
-
     /// The frame a slot holds as its first occupant. The generator edits one
     /// slot's payload against this frame's signals; which occupant is actually
     /// there at a given cycle is resolved again when the frame goes out.

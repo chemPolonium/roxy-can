@@ -443,7 +443,7 @@ impl ScriptNode {
         vm.eth_bus_named_ids = eth_bus_named_ids;
         vm.node_channel = self.channel;
         vm.host_extern = Some(Box::new(move |name, args| {
-            node_extern(dbc.as_deref(), can_codec.as_ref(), name, args)
+            node_extern(can_codec.as_ref(), name, args)
         }));
         if let Err(e) = vm.run() {
             let message = e.to_string();
@@ -1843,18 +1843,17 @@ pub fn dbc_checks(
 /// builtin table lands here.
 ///
 /// - `set_sig(buf, id, "Name", value)`: encodes one physical value into
-///   the buffer through the channel database (buffer pads to 8 bytes).
+///   the buffer through the channel's CAN model (buffer pads to 8 bytes).
 /// - `get_sig(buf, id, "Name")`: decodes one physical value out of the
-///   buffer, erroring when the database lacks the signal or no value is
+///   buffer, erroring when the model lacks the signal or no value is
 ///   representable.
 fn node_extern(
-    dbc: Option<&crate::dbc::SymbolTable>,
     can_codec: Option<&CanCodec>,
     name: &str,
     args: &[Value],
 ) -> Result<Option<Value>, String> {
-    if dbc.is_none() && can_codec.is_none() {
-        return Err("no database on this channel: signal builtins unavailable".to_string());
+    if can_codec.is_none() && matches!(name, "set_sig" | "get_sig") {
+        return Err("no CAN model on this channel: signal builtins unavailable".to_string());
     }
     match name {
         "set_sig" => {
@@ -1875,54 +1874,43 @@ fn node_extern(
                 Value::Float(f) => *f,
                 _ => return Err("set_sig: value must be a number".into()),
             };
-            if let Some((comm, plans, cluster)) = can_codec {
-                let Some(frame) = comm.frames_in_cluster(*cluster).find(|frame| {
-                    matches!(
-                        frame.address,
-                        crate::model::FrameAddress::Can {
-                            id: frame_id,
-                            extended: false,
-                            ..
-                        } if frame_id == id as u32
-                    )
-                }) else {
-                    return Err(format!("set_sig: unknown message {id:#x}"));
-                };
-                let Some(plan) = plans.get(frame.id) else {
-                    return Err(format!("set_sig: unknown message {id:#x}"));
-                };
-                let Some(signal) = comm
-                    .signals_in_frame(frame)
-                    .into_iter()
-                    .find(|signal| signal.name == *sig)
-                else {
-                    return Err(format!("set_sig: unknown message/signal {id:#x} {sig}"));
-                };
-                let mut data = buf.lock().expect("buffer poisoned");
-                if data.len() < 8 {
-                    data.resize(8, 0);
-                }
-                let written =
-                    crate::model::encode_payload(comm, plan, &[(signal.id, value)], &mut data[..]);
-                return if written == 1 {
-                    Ok(Some(Value::Nil))
-                } else {
-                    Err(format!(
-                        "set_sig: signal \"{sig}\" does not fit the payload"
-                    ))
-                };
-            }
-            let db = dbc.ok_or_else(|| {
-                "no database on this channel: signal builtins unavailable".to_string()
-            })?;
+            let Some((comm, plans, cluster)) = can_codec else {
+                return Err("no CAN model on this channel: signal builtins unavailable".to_string());
+            };
+            let Some(frame) = comm.frames_in_cluster(*cluster).find(|frame| {
+                matches!(
+                    frame.address,
+                    crate::model::FrameAddress::Can {
+                        id: frame_id,
+                        extended: false,
+                        ..
+                    } if frame_id == id as u32
+                )
+            }) else {
+                return Err(format!("set_sig: unknown message {id:#x}"));
+            };
+            let Some(plan) = plans.get(frame.id) else {
+                return Err(format!("set_sig: unknown message {id:#x}"));
+            };
+            let Some(signal) = comm
+                .signals_in_frame(frame)
+                .into_iter()
+                .find(|signal| signal.name == *sig)
+            else {
+                return Err(format!("set_sig: unknown message/signal {id:#x} {sig}"));
+            };
             let mut data = buf.lock().expect("buffer poisoned");
             if data.len() < 8 {
                 data.resize(8, 0);
             }
-            if db.encode_signal(id as u32, sig, value, &mut data) {
+            let written =
+                crate::model::encode_payload(comm, plan, &[(signal.id, value)], &mut data[..]);
+            if written == 1 {
                 Ok(Some(Value::Nil))
             } else {
-                Err(format!("set_sig: unknown message/signal {id:#x} {sig}"))
+                Err(format!(
+                    "set_sig: signal \"{sig}\" does not fit the payload"
+                ))
             }
         }
         "get_sig" => {
@@ -1939,60 +1927,37 @@ fn node_extern(
                 return Err("get_sig: signal name must be a string".into());
             };
             let data = buf.lock().expect("buffer poisoned");
-            if let Some((comm, plans, cluster)) = can_codec {
-                let Some(frame) = comm.frames_in_cluster(*cluster).find(|frame| {
-                    matches!(
-                        frame.address,
-                        crate::model::FrameAddress::Can {
-                            id: frame_id,
-                            extended: false,
-                            ..
-                        } if frame_id == id as u32
-                    )
-                }) else {
-                    return Err(format!("get_sig: unknown message {id:#x}"));
-                };
-                let Some(plan) = plans.get(frame.id) else {
-                    return Err(format!("get_sig: unknown message {id:#x}"));
-                };
-                for value in crate::model::decode_payload(comm, plan, &data) {
-                    let Some(signal) = comm.signals.get(&value.signal) else {
-                        continue;
-                    };
-                    if signal.name != *sig {
-                        continue;
-                    }
-                    return match value.physical {
-                        Some(phys) => Ok(Some(Value::Float(phys))),
-                        None => Err(format!("get_sig: signal \"{sig}\" is outside the buffer")),
-                    };
-                }
-                return Err(format!("get_sig: unknown message/signal {id:#x} {sig}"));
-            }
-            let db = dbc.ok_or_else(|| {
-                "no database on this channel: signal builtins unavailable".to_string()
-            })?;
-            let frame = crate::can::frame::CanFrame {
-                t_us: 0,
-                channel: 0,
-                id: id as u32,
-                extended: false,
-                len: data.len() as u8,
-                data: {
-                    let mut d = [0u8; crate::can::frame::MAX_CAN_FD_LEN];
-                    let n = data.len().min(d.len());
-                    d[..n].copy_from_slice(&data[..n]);
-                    d
-                },
-                dir: crate::can::frame::Direction::Rx,
-                flags: crate::can::frame::FrameFlags::NONE,
+            let Some((comm, plans, cluster)) = can_codec else {
+                return Err("no CAN model on this channel: signal builtins unavailable".to_string());
             };
-            let decoded = db
-                .decode_signals(&frame)
-                .into_iter()
-                .find(|s| s.name == *sig)
-                .ok_or_else(|| format!("get_sig: unknown message/signal {id:#x} {sig}"))?;
-            Ok(Some(Value::Float(decoded.phys)))
+            let Some(frame) = comm.frames_in_cluster(*cluster).find(|frame| {
+                matches!(
+                    frame.address,
+                    crate::model::FrameAddress::Can {
+                        id: frame_id,
+                        extended: false,
+                        ..
+                    } if frame_id == id as u32
+                )
+            }) else {
+                return Err(format!("get_sig: unknown message {id:#x}"));
+            };
+            let Some(plan) = plans.get(frame.id) else {
+                return Err(format!("get_sig: unknown message {id:#x}"));
+            };
+            for value in crate::model::decode_payload(comm, plan, &data) {
+                let Some(signal) = comm.signals.get(&value.signal) else {
+                    continue;
+                };
+                if signal.name != *sig {
+                    continue;
+                }
+                return match value.physical {
+                    Some(phys) => Ok(Some(Value::Float(phys))),
+                    None => Err(format!("get_sig: signal \"{sig}\" is outside the buffer")),
+                };
+            }
+            Err(format!("get_sig: unknown message/signal {id:#x} {sig}"))
         }
         _ => Ok(None),
     }
@@ -3479,33 +3444,20 @@ BO_ 512 Status: 8 ECU
 "#;
 
     #[test]
-    fn set_sig_and_get_sig_encode_through_the_channel_database() {
-        let dbc = std::sync::Arc::new(crate::dbc::load_dbc_str(SIG_DBC).unwrap());
+    fn set_sig_without_a_can_model_is_refused() {
         let mut n = node(
             r#"
                 let buf = bytes(8);
-                on start {
-                    set_sig(buf, 0x200, "RPM", 1000);
-                    print(get_sig(buf, 0x200, "RPM"));
-                }
-                on message 0x1 { send(0x200, buf); }
+                on start { set_sig(buf, 0x200, "RPM", 1000); }
             "#,
         );
-        n.start(Some(dbc));
-        assert!(n.running(), "log: {:?}", n.log_snapshot());
-        assert_eq!(
-            n.log_snapshot(),
-            ["1000.0"],
-            "get_sig reads back what set_sig encoded"
-        );
-
-        // A later frame flushes the on-start send: the composed buffer
-        // leaves as the payload, little-endian raw 4000 (1000 / 0.25) in
-        // bytes 0-1.
-        let out = n.dispatch_frame(0, 0x1, false, false, &[], &HostInput::default());
-        assert_eq!(
-            out,
-            vec![(0x200, false, vec![0xA0, 0x0F, 0, 0, 0, 0, 0, 0])]
+        n.start(None);
+        assert!(
+            n.log_snapshot()
+                .iter()
+                .any(|line| line.contains("no CAN model")),
+            "a channel without a model cannot encode: {:?}",
+            n.log_snapshot()
         );
     }
 

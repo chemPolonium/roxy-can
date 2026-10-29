@@ -3317,10 +3317,9 @@ impl BusCore {
                 (Some(_), None) => Some(format!(
                     "FR{bus} slot {slot} has no transmit entry: set_fr_sig edits the entry this bus sends"
                 )),
-                (Some(db), Some(ix)) => {
-                    // The model owns the signal's place in the frame; the
-                    // description table is only the fallback for a bus whose
-                    // model could not be built.
+                (Some(_), Some(ix)) => {
+                    // The model owns the signal's place in the frame; a bus
+                    // without one cannot encode a named signal.
                     let model = self.fr_models.get(&bus).cloned().and_then(|comm| {
                         let plans = self.fr_model_plans.get(&bus).cloned()?;
                         let cluster = self.fr_cluster_ids.get(&bus).copied()?;
@@ -3338,13 +3337,9 @@ impl BusCore {
                             )
                             .err()
                         }
-                        None => crate::generator::fr_tx_set_signal(
-                            &mut self.fr_tx_list[ix],
-                            &db,
-                            &name,
-                            v,
-                        )
-                        .err(),
+                        None => Some(format!(
+                            "FR{bus} has no model: the signal cannot be placed in the payload"
+                        )),
                     }
                 }
             };
@@ -5962,42 +5957,10 @@ impl BusCore {
         if let Some(result) = self.model_can_signal_payload(channel, id, extended, signals) {
             return result;
         }
-        let Some(table) = self.channel_dbc(channel) else {
-            return Err(format!("CAN{} has no database", channel + 1));
-        };
-        let key = (id, extended);
-        let Some(message) = table.messages.get(&key) else {
-            return Err(format!(
-                "CAN{} has no message {id:#X}{}",
-                channel + 1,
-                if extended { "x" } else { "" }
-            ));
-        };
-        let len = message.dlc.min(crate::can::frame::MAX_CAN_FD_LEN as u64) as usize;
-        let mut data = [0u8; crate::can::frame::MAX_CAN_FD_LEN];
-        for signal in &message.signals {
-            table.encode_signal_in(key, &signal.name, signal.initial.unwrap_or(0.0), &mut data);
-        }
-        for (name, value) in signals {
-            let Some(signal) = message.signals.iter().find(|signal| &signal.name == name) else {
-                return Err(format!(
-                    "message \"{}\" has no signal \"{name}\"",
-                    message.name
-                ));
-            };
-            let value = if signal.max > signal.min {
-                value.clamp(signal.min, signal.max)
-            } else {
-                *value
-            };
-            if !table.encode_signal_in(key, name, value, &mut data) {
-                return Err(format!(
-                    "signal \"{name}\" does not fit \"{}\"",
-                    message.name
-                ));
-            }
-        }
-        Ok(data[..len].to_vec())
+        Err(format!(
+            "CAN{} has no model: the frame cannot be encoded",
+            channel + 1
+        ))
     }
 
     /// Encodes a Button's physical FlexRay frame from catalog signal values,
@@ -6065,21 +6028,7 @@ impl BusCore {
         {
             result?
         } else {
-            let mut payload = vec![0u8; frame.length as usize];
-            for (name, value) in signals {
-                let Some(signal) = db.slot_signal(slot, name) else {
-                    return Err(format!("slot {slot} has no signal \"{name}\""));
-                };
-                let value = if signal.max > signal.min {
-                    value.clamp(signal.min, signal.max)
-                } else {
-                    *value
-                };
-                if !db.encode_signal(ix, name, value, &mut payload) {
-                    return Err(format!("signal \"{name}\" does not fit slot {slot}"));
-                }
-            }
-            payload
+            return Err(format!("FR{bus} has no model: the frame cannot be encoded"));
         };
         let cycle = if db.frame_ix_at(slot, now_cycle, 2).is_some() {
             now_cycle
@@ -6132,29 +6081,16 @@ impl BusCore {
     fn panel_eth_signal_payload(
         &self,
         bus: u8,
-        db: &crate::eth::db::EthDb,
+        _db: &crate::eth::db::EthDb,
         frame: &str,
         signals: &std::collections::BTreeMap<String, f64>,
     ) -> Result<Vec<u8>, String> {
         if let Some(result) = self.model_eth_signal_payload(bus, frame, signals) {
             return result;
         }
-        let Some(ix) = db.frames.iter().position(|entry| entry.name == frame) else {
-            return Err(format!("unknown Ethernet frame \"{frame}\""));
-        };
-        let def = &db.frames[ix];
-        let width = if self.eth_length_includes_header {
-            def.length.saturating_sub(14)
-        } else {
-            def.length
-        };
-        let mut payload = vec![0u8; width];
-        for (name, value) in signals {
-            if !db.encode_signal(ix, name, *value, &mut payload) {
-                return Err(format!("frame \"{frame}\" has no signal \"{name}\""));
-            }
-        }
-        Ok(payload)
+        Err(format!(
+            "ETH{bus} has no model: the frame cannot be encoded"
+        ))
     }
 
     fn panel_write_signal(
@@ -6202,39 +6138,9 @@ impl BusCore {
             let size = frame.length.min(crate::can::frame::MAX_CAN_FD_LEN as u32) as u8;
             (data, size)
         } else {
-            let (min, max, msg_size) = {
-                let Some(table) = self.channels.get(ch as usize).and_then(|c| c.dbc.as_ref())
-                else {
-                    return Err(format!("bus {ch} has no database"));
-                };
-                let Some(message) = table.message_of(id) else {
-                    return Err(format!("unknown message {id:#x}"));
-                };
-                let Some(signal) = message.signals.iter().find(|s| s.name == name) else {
-                    return Err(format!("unknown signal \"{name}\""));
-                };
-                (
-                    signal.min,
-                    signal.max,
-                    message.dlc.min(crate::can::frame::MAX_CAN_FD_LEN as u64) as u8,
-                )
-            };
-            let value = if max > min {
-                phys.clamp(min, max)
-            } else {
-                phys
-            };
-            let mut data = self
-                .entry_mut(ch, id)
-                .map(|tx| tx.data)
-                .unwrap_or([0; crate::can::frame::MAX_CAN_FD_LEN]);
-            let Some(table) = self.channels.get(ch as usize).and_then(|c| c.dbc.as_ref()) else {
-                return Err(format!("bus {ch} has no database"));
-            };
-            if !table.encode_signal_in((id, ext), name, value, &mut data) {
-                return Err(format!("cannot encode \"{name}\""));
-            }
-            (data, msg_size)
+            return Err(format!(
+                "bus {ch} has no CAN model: the signal cannot be written"
+            ));
         };
         if self.entry_mut(ch, id).is_none() {
             self.add_entry(ch, id);
@@ -6316,60 +6222,24 @@ impl BusCore {
                 frame.path
             ));
         }
-        let key = {
-            let Some(table) = self.channel_dbc(channel) else {
-                return Err(format!("CAN{} has no database", channel + 1));
-            };
-            table
-                .order
-                .iter()
-                .copied()
-                .find(|key| {
-                    table
-                        .messages
-                        .get(key)
-                        .is_some_and(|message| message.name == name)
-                })
-                .ok_or_else(|| format!("unknown CAN message \"{name}\""))?
+        let Some((comm, _, cluster)) = self.can_codec(channel) else {
+            return Err(format!(
+                "CAN{} has no model: the frame cannot be encoded",
+                channel + 1
+            ));
         };
-        if let Some(result) = self.model_can_signal_payload(channel, key.0, key.1, &frame.values) {
-            let payload = result?;
-            let mut data = [0u8; crate::can::frame::MAX_CAN_FD_LEN];
-            data[..payload.len()].copy_from_slice(&payload);
-            return self.emit_script_can(channel, allowed, key.0, key.1, data, payload.len() as u8);
-        }
-        let Some(table) = self.channel_dbc(channel) else {
-            return Err(format!("CAN{} has no database", channel + 1));
+        let Some(frame_model) = comm.frame_by_name(cluster, name) else {
+            return Err(format!("unknown CAN message \"{name}\""));
         };
-        let message = table.messages.get(&key).expect("key from order");
-        let len = message.dlc.min(crate::can::frame::MAX_CAN_FD_LEN as u64) as usize;
+        let crate::model::FrameAddress::Can { id, extended, .. } = frame_model.address else {
+            return Err(format!("unknown CAN message \"{name}\""));
+        };
+        let payload = self
+            .model_can_signal_payload(channel, id, extended, &frame.values)
+            .unwrap_or_else(|| Err(format!("CAN{} has no model", channel + 1)))?;
         let mut data = [0u8; crate::can::frame::MAX_CAN_FD_LEN];
-        // Unwritten signals carry the database's declared start value in
-        // physical units (or 0 when it declares none); explicit fields are
-        // encoded on top.
-        for signal in &message.signals {
-            table.encode_signal_in(key, &signal.name, signal.initial.unwrap_or(0.0), &mut data);
-        }
-        for (signal_name, value) in &frame.values {
-            let Some(signal) = message
-                .signals
-                .iter()
-                .find(|signal| &signal.name == signal_name)
-            else {
-                return Err(format!(
-                    "message \"{name}\" has no signal \"{signal_name}\""
-                ));
-            };
-            let value = if signal.max > signal.min {
-                value.clamp(signal.min, signal.max)
-            } else {
-                *value
-            };
-            if !table.encode_signal_in(key, signal_name, value, &mut data) {
-                return Err(format!("signal \"{signal_name}\" does not fit \"{name}\""));
-            }
-        }
-        self.emit_script_can(channel, allowed, key.0, key.1, data, len as u8)
+        data[..payload.len()].copy_from_slice(&payload);
+        self.emit_script_can(channel, allowed, id, extended, data, payload.len() as u8)
     }
 
     fn emit_script_can(
@@ -6587,18 +6457,9 @@ impl BusCore {
             crate::model::encode_payload(&comm, plan, &[(signal_id, value)], &mut payload);
             payload
         } else {
-            let Some(signal) = db.slot_signal(slot, name) else {
-                return Err(format!("unknown FlexRay signal \"{name}\" in slot {slot}"));
-            };
-            let value = if signal.max > signal.min {
-                phys.clamp(signal.min, signal.max)
-            } else {
-                phys
-            };
-            let (payload, cycle) = db
-                .encode_slot_signal(slot, name, value, cycle)
-                .ok_or_else(|| format!("cannot encode \"{name}\" in slot {slot}"))?;
-            return Ok((payload, cycle));
+            return Err(format!(
+                "FR{bus} has no model: the signal cannot be written"
+            ));
         };
         Ok((payload, cycle))
     }
@@ -6660,9 +6521,9 @@ impl BusCore {
             };
             let signal_id = signal.id;
             crate::model::encode_payload(&comm, plan, &[(signal_id, value)], &mut payload);
-        } else if !db.encode_signal(ix, name, phys, &mut payload) {
+        } else {
             return Err(format!(
-                "cannot encode \"{name}\" in frame \"{frame_name}\""
+                "ETH{bus} has no model: \"{name}\" cannot be written"
             ));
         }
         let ethertype = def

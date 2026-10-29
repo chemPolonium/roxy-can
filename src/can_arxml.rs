@@ -395,6 +395,7 @@ pub fn parse_cluster(text: &str, cluster: &str) -> Result<CanArxmlDb, String> {
                 transmitter,
                 cycle_us,
                 signals,
+                #[cfg(test)]
                 switch_names: Vec::new(),
                 comment: String::new(),
                 fd: false,

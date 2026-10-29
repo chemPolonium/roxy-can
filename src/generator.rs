@@ -634,40 +634,9 @@ pub(crate) fn set_fr_tx_base(tx: &mut FrTxMsg, mut data: Vec<u8>, len: usize) {
     tx.data = data;
 }
 
-/// Writes one signal's physical value into a FlexRay entry's base payload,
-/// encoded through the cluster description that owns the slot -- the script's
-/// version of typing a value into the Network ECU panel. The entry keeps the
-/// width it carries, so a signal write can neither grow a slot nor leave a short
-/// frame behind. `Err` names the missing fact (this slot schedules no frame, the
-/// frame declares no such signal, or the payload does not reach it); nothing is
-/// written when it fails.
-pub(crate) fn fr_tx_set_signal(
-    tx: &mut FrTxMsg,
-    db: &crate::fr_db::FrDb,
-    name: &str,
-    phys: f64,
-) -> Result<(), String> {
-    let ix = db.frame_ix_of_slot(tx.slot).ok_or_else(|| {
-        format!(
-            "This bus's description schedules no frame in slot {}: no signal to write",
-            tx.slot
-        )
-    })?;
-    let mut data = tx.data.clone();
-    if !db.encode_signal(ix, name, phys, &mut data) {
-        return Err(format!(
-            "The frame in slot {} does not declare signal {name:?} (or its payload is too short)",
-            tx.slot
-        ));
-    }
-    let len = tx.len;
-    set_fr_tx_base(tx, data, len);
-    Ok(())
-}
-
-/// Model-backed [`fr_tx_set_signal`]: the slot's frame and the signal's place
-/// in it come from the unified model, and the write goes through the same
-/// encode plan the bus decodes with.
+/// Writes one signal's physical value into a FlexRay entry's base payload.
+/// The slot's frame and the signal's place in it come from the unified model,
+/// and the write goes through the same encode plan the bus decodes with.
 pub(crate) fn fr_tx_set_signal_with_model(
     tx: &mut FrTxMsg,
     cluster: crate::model::ClusterId,
