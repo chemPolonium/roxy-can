@@ -167,15 +167,10 @@ fn handle_can(targets: &mut [Target], frame: &CanFrame, app: &App) {
     if matching.is_empty() {
         return;
     }
-    let Some(db) = app
-        .snap
-        .channels
-        .get(frame.channel as usize)
-        .and_then(|channel| channel.dbc.as_ref())
-    else {
+    let Some(decoded) = app.model_can_all_values(frame) else {
         return;
     };
-    for decoded in db.decode_signals(frame) {
+    for decoded in decoded {
         for &index in &matching {
             accept(&mut targets[index], &decoded.name, decoded.phys, frame.t_us);
         }
@@ -203,7 +198,10 @@ fn handle_fr(targets: &mut [Target], row: &FrRow, app: &App) {
     let Some(frame_ix) = db.frame_ix_at(row.slot, row.cycle, row.ab) else {
         return;
     };
-    for decoded in db.decode_signals(frame_ix, &row.payload) {
+    let Some(decoded) = app.model_fr_all_values(row, frame_ix) else {
+        return;
+    };
+    for decoded in decoded {
         for &index in &matching {
             accept(&mut targets[index], &decoded.name, decoded.phys, row.t_us);
         }
@@ -232,24 +230,23 @@ fn handle_eth(targets: &mut [Target], frame: &EthFrame, app: &App) {
         ethertype: frame.ethertype,
         payload_len: frame.len(),
     };
-    let Some(decoded) = db.decode(&flow, &frame.payload, app.eth_length_includes_header) else {
+    let frame_name = match db.match_flow(&flow, app.eth_length_includes_header) {
+        crate::eth::db::EthMatch::Unique(index) => db.frames[index].name.clone(),
+        _ => return,
+    };
+    let Some(decoded) = app.model_eth_all_values(frame.bus, &frame_name, &frame.payload) else {
         return;
     };
     for &index in &matching {
         let wanted = matches!(
             &targets[index].kind,
-            TargetKind::Eth { frame: wanted, .. } if wanted == &decoded.frame_name
+            TargetKind::Eth { frame: wanted, .. } if wanted == &frame_name
         );
         if !wanted {
             continue;
         }
-        for signal in &decoded.signals {
-            accept(
-                &mut targets[index],
-                &signal.name,
-                signal.physical,
-                frame.t_us,
-            );
+        for signal in &decoded {
+            accept(&mut targets[index], &signal.name, signal.phys, frame.t_us);
         }
     }
 }
@@ -361,6 +358,7 @@ mod tests {
                 db: Arc::new(db),
             },
         );
+        app.push_fr_db_to_core();
         let db = app.fr_db(0).expect("bus 0 has a description");
         let log =
             std::env::temp_dir().join(format!("roxy_reference_fr_{}.asc", std::process::id()));
@@ -413,6 +411,7 @@ mod tests {
                 db: Arc::new(db),
             },
         );
+        app.push_eth_db_to_core();
         let key = SigKey::eth(0, "EthFrame", "Sig");
         let mut targets = build_targets(&app, std::slice::from_ref(&key));
         assert_eq!(targets.len(), 1, "the selected frame and signal resolve");

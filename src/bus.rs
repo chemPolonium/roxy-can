@@ -4762,6 +4762,15 @@ impl BusCore {
         self.model_can_decoded(f, true)
     }
 
+    /// Every signal the plan decodes, regardless of subscriptions: used by
+    /// status listings and reference logs, which are not observers.
+    pub(crate) fn model_can_all_values(
+        &self,
+        f: &CanFrame,
+    ) -> Option<Vec<crate::dbc::DecodedSignal>> {
+        self.model_can_decoded(f, false)
+    }
+
     fn model_can_decoded(
         &self,
         f: &CanFrame,
@@ -4856,12 +4865,20 @@ impl BusCore {
         })
     }
 
-    fn model_fr_values(
+    pub(crate) fn model_fr_values(
         &self,
         row: &crate::trace::FrRow,
         frame_ix: usize,
     ) -> Option<Vec<crate::dbc::DecodedSignal>> {
         self.model_fr_decoded(row, frame_ix, true)
+    }
+
+    pub(crate) fn model_fr_all_values(
+        &self,
+        row: &crate::trace::FrRow,
+        frame_ix: usize,
+    ) -> Option<Vec<crate::dbc::DecodedSignal>> {
+        self.model_fr_decoded(row, frame_ix, false)
     }
 
     fn model_fr_decoded(
@@ -4905,6 +4922,15 @@ impl BusCore {
         payload: &[u8],
     ) -> Option<Vec<crate::dbc::DecodedSignal>> {
         self.model_eth_decoded(bus, frame_name, payload, true)
+    }
+
+    pub(crate) fn model_eth_all_values(
+        &self,
+        bus: u8,
+        frame_name: &str,
+        payload: &[u8],
+    ) -> Option<Vec<crate::dbc::DecodedSignal>> {
+        self.model_eth_decoded(bus, frame_name, payload, false)
     }
 
     fn model_eth_decoded(

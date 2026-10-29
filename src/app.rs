@@ -1410,7 +1410,7 @@ impl App {
                 flags: agg.flags,
             };
             let signals: Vec<(String, String)> = self
-                .model_can_values(&frame)
+                .model_can_all_values(&frame)
                 .unwrap_or_default()
                 .into_iter()
                 .map(|d| {
@@ -1578,7 +1578,7 @@ impl App {
             }
             let signals: Vec<(String, String)> = matched
                 .as_deref()
-                .and_then(|name| self.model_eth_values(agg.key.bus, name, &agg.payload))
+                .and_then(|name| self.model_eth_all_values(agg.key.bus, name, &agg.payload))
                 .map(|decoded| {
                     decoded
                         .into_iter()
