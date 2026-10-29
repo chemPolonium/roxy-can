@@ -30,7 +30,6 @@ export function DerivedPanel({
       : validateDerivedExpression(expression, references);
   const [busKey, setBusKey] = useState("");
   const [frameKey, setFrameKey] = useState("");
-  const counts = new Map<string, number>();
   const busCounts = new Map<string, number>();
   const frameCounts = new Map<string, number>();
   const busMap = new Map<
@@ -41,7 +40,6 @@ export function DerivedPanel({
     }
   >();
   for (const reference of references) {
-    counts.set(reference.name, (counts.get(reference.name) ?? 0) + 1);
     const busName = `${reference.bus}:${reference.name}`;
     busCounts.set(busName, (busCounts.get(busName) ?? 0) + 1);
     if (reference.frame) {
@@ -87,17 +85,14 @@ export function DerivedPanel({
     activeBus?.frames.find((frame) => frame.key === frameKey) ??
     activeBus?.frames[0];
 
-  /// The reference text to insert: bare when unique, otherwise qualified by
-  /// bus, frame name or frame id in that order of precision.
+  /// Always insert the full path of what the three columns show: computed
+  /// channels stay `derived:Name`, catalog signals are `Bus:Frame:Signal`
+  /// even when a shorter form would already be unique.
   const insertToken = (reference: DerivedReference): string => {
-    if ((counts.get(reference.name) ?? 0) <= 1) return reference.name;
     if (reference.bus === "derived") {
       return (busCounts.get(`derived:${reference.name}`) ?? 0) <= 1
         ? `derived:${reference.name}`
         : reference.key;
-    }
-    if ((busCounts.get(`${reference.bus}:${reference.name}`) ?? 0) <= 1) {
-      return `${reference.bus}:${reference.name}`;
     }
     const token = reference.frame ?? reference.frameId;
     if (!token) return `${reference.bus}:${reference.name}`;
@@ -201,7 +196,7 @@ export function DerivedPanel({
         </label>
         <p class={`hint ${error ? "derived-error" : ""}`}>
           {error ??
-            "Use [signal], [CAN1:signal] or [CAN2:Message:signal] (id also works) when one bus repeats a name; supports + - * /, abs(), sqrt(), min(), max()."}
+            "Picking inserts the full path, e.g. [CAN1:EngineStatus:EngineSpeed] (frame name or id); computed channels use [derived:Name]. Supports + - * /, abs(), sqrt(), min(), max()."}
         </p>
         {references.length === 0 ? (
           <span class="hint">
