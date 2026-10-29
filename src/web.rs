@@ -2585,9 +2585,16 @@ fn app_loop(
                     if app.snap.measuring {
                         app.stop();
                     }
+                    let removed = app
+                        .snap
+                        .cluster_ids
+                        .can
+                        .get(ch as usize)
+                        .copied()
+                        .map(crate::model::ClusterId);
                     app.remove_channel(ch as usize);
                     if let Ok(mut store) = signals.lock() {
-                        store.remap_after_remove(ch);
+                        store.remap_after_remove(removed);
                     }
                     if let Ok(mut store) = trace.lock() {
                         store.reset();
@@ -2752,7 +2759,7 @@ fn app_loop(
                     frame,
                     name,
                 } => {
-                    let Some(key) = command_key(&kind, ch, id, ext, frame, name) else {
+                    let Some(key) = command_key(&app, &kind, ch, id, ext, frame, name) else {
                         app.status = format!("unknown signal kind: {kind}");
                         continue;
                     };
@@ -2766,7 +2773,7 @@ fn app_loop(
                     frame,
                     name,
                 } => {
-                    let Some(key) = command_key(&kind, ch, id, ext, frame, name) else {
+                    let Some(key) = command_key(&app, &kind, ch, id, ext, frame, name) else {
                         app.status = format!("unknown signal kind: {kind}");
                         continue;
                     };
@@ -2798,7 +2805,7 @@ fn app_loop(
                     threshold,
                     color,
                 } => {
-                    let Some(key) = command_key(&kind, ch, id, ext, frame, name) else {
+                    let Some(key) = command_key(&app, &kind, ch, id, ext, frame, name) else {
                         app.status = format!("unknown signal kind: {kind}");
                         continue;
                     };
@@ -2812,7 +2819,7 @@ fn app_loop(
                     frame,
                     name,
                 } => {
-                    let Some(key) = command_key(&kind, ch, id, ext, frame, name) else {
+                    let Some(key) = command_key(&app, &kind, ch, id, ext, frame, name) else {
                         app.status = format!("unknown signal kind: {kind}");
                         continue;
                     };
@@ -2829,7 +2836,7 @@ fn app_loop(
                     frame,
                     name,
                 } => {
-                    let Some(key) = command_key(&kind, ch, id, ext, frame, name) else {
+                    let Some(key) = command_key(&app, &kind, ch, id, ext, frame, name) else {
                         app.status = format!("unknown signal kind: {kind}");
                         continue;
                     };
@@ -2862,7 +2869,7 @@ fn app_loop(
                     name,
                     visible,
                 } => {
-                    let Some(key) = command_key(&kind, ch, id, ext, frame, name) else {
+                    let Some(key) = command_key(&app, &kind, ch, id, ext, frame, name) else {
                         app.status = format!("unknown signal kind: {kind}");
                         continue;
                     };
@@ -2882,7 +2889,7 @@ fn app_loop(
                     frame,
                     name,
                 } => {
-                    let Some(key) = command_key(&kind, ch, id, ext, frame, name) else {
+                    let Some(key) = command_key(&app, &kind, ch, id, ext, frame, name) else {
                         app.status = format!("unknown signal kind: {kind}");
                         continue;
                     };
@@ -2899,7 +2906,7 @@ fn app_loop(
                     frame,
                     name,
                 } => {
-                    let Some(key) = command_key(&kind, ch, id, ext, frame, name) else {
+                    let Some(key) = command_key(&app, &kind, ch, id, ext, frame, name) else {
                         app.status = format!("unknown signal kind: {kind}");
                         continue;
                     };
@@ -2938,7 +2945,7 @@ fn app_loop(
                     cuts,
                     names,
                 } => {
-                    let Some(key) = command_key(&kind, ch, id, ext, frame, name) else {
+                    let Some(key) = command_key(&app, &kind, ch, id, ext, frame, name) else {
                         app.status = format!("unknown signal kind: {kind}");
                         continue;
                     };
@@ -2952,7 +2959,7 @@ fn app_loop(
                     frame,
                     name,
                 } => {
-                    let Some(key) = command_key(&kind, ch, id, ext, frame, name) else {
+                    let Some(key) = command_key(&app, &kind, ch, id, ext, frame, name) else {
                         app.status = format!("unknown signal kind: {kind}");
                         continue;
                     };
@@ -3404,7 +3411,7 @@ fn seed_demo(app: &mut App) {
             id: spec.id,
             src,
         });
-        app.subscribe(SigKey::can(spec.ch, spec.id, false, spec.name));
+        app.subscribe(app.can_key(spec.ch, spec.id, false, spec.name.to_string()));
     }
     app.start_virtual();
 }
@@ -3761,9 +3768,10 @@ impl SignalStore {
         };
         let bus = signal_bus(app, &key);
         let unit = match &key {
-            SigKey::Can {
-                ch, id, ext, name, ..
-            } => signal_unit(app, *ch, *id, *ext, name),
+            SigKey::Can { id, ext, name, .. } => app
+                .key_bus(&key)
+                .map(|ch| signal_unit(app, ch, *id, *ext, name))
+                .unwrap_or_default(),
             SigKey::Derived { id, .. } => app
                 .derived_defs
                 .iter()
@@ -3834,20 +3842,12 @@ impl SignalStore {
         true
     }
 
-    /// CAN channel indices shift down when a bus is removed. Drop signals on
-    /// the removed bus and renumber the rest to match the core's remap.
-    fn remap_after_remove(&mut self, removed: u8) {
-        self.selected.retain_mut(|signal| {
-            if let SigKey::Can { ch, .. } = &mut signal.key {
-                if *ch == removed {
-                    return false;
-                }
-                if *ch > removed {
-                    *ch -= 1;
-                }
-            }
-            true
-        });
+    /// The removed channel's cluster takes its selections with it; the
+    /// channels that stay keep their keys, so nothing is renumbered here.
+    fn remap_after_remove(&mut self, removed: Option<crate::model::ClusterId>) {
+        self.selected.retain(
+            |signal| !matches!(removed, Some(cluster) if signal.key.cluster() == Some(cluster)),
+        );
         self.primed = false;
     }
 
@@ -3857,12 +3857,9 @@ impl SignalStore {
         let mut dropped = Vec::new();
         self.selected.retain(|signal| {
             let exists = match &signal.key {
-                SigKey::Can {
-                    ch, id, ext, name, ..
-                } => app
-                    .snap
-                    .channels
-                    .get(*ch as usize)
+                SigKey::Can { id, ext, name, .. } => app
+                    .key_bus(&signal.key)
+                    .and_then(|ch| app.snap.channels.get(ch as usize))
                     .and_then(|channel| channel.dbc.as_ref())
                     .and_then(|db| db.messages.get(&(*id, *ext)))
                     .is_some_and(|message| {
@@ -4033,15 +4030,6 @@ impl SignalStore {
 }
 
 #[cfg(test)]
-fn key_channel(key: &SigKey) -> u8 {
-    match key {
-        SigKey::Can { ch, .. } => *ch,
-        SigKey::Fr { bus, .. } | SigKey::Eth { bus, .. } => *bus,
-        SigKey::Derived { .. } => 0,
-    }
-}
-
-#[cfg(test)]
 fn key_id(key: &SigKey) -> u32 {
     match key {
         SigKey::Can { id, .. } => *id,
@@ -4078,6 +4066,7 @@ fn signal_sub<'a>(app: &'a App, key: &SigKey) -> Option<&'a SubView> {
 /// cluster in `ch`; Ethernet names its frame. One command shape covers the
 /// three bus kinds.
 fn command_key(
+    app: &crate::bus::BusCore,
     kind: &str,
     ch: u8,
     id: u32,
@@ -4086,11 +4075,11 @@ fn command_key(
     name: String,
 ) -> Option<SigKey> {
     match kind {
-        "can" => Some(SigKey::can(ch, id, ext, name)),
+        "can" => Some(app.can_key(ch, id, ext, name)),
         "fr" => u16::try_from(id)
             .ok()
-            .map(|slot| SigKey::fr(ch, slot, name)),
-        "eth" => frame.map(|frame| SigKey::eth(ch, frame, name)),
+            .map(|slot| app.fr_key(ch, slot, name)),
+        "eth" => frame.map(|frame| app.eth_key(ch, frame, name)),
         "derived" => frame.map(|id| SigKey::derived(id, name)),
         _ => None,
     }
@@ -4107,25 +4096,25 @@ struct RowAddress {
 /// Observer rows carry one address shape for every bus kind. FlexRay puts
 /// its cluster in `ch` and its slot in `id`; Ethernet keeps `ch` and names
 /// its frame.
-fn row_address(key: &SigKey) -> RowAddress {
+fn row_address(app: &crate::bus::BusCore, key: &SigKey) -> RowAddress {
     match key {
-        SigKey::Can { ch, id, ext, .. } => RowAddress {
+        SigKey::Can { id, ext, .. } => RowAddress {
             kind: "can",
-            ch: *ch,
+            ch: app.key_bus(key).unwrap_or(0),
             id: *id,
             ext: *ext,
             frame: None,
         },
-        SigKey::Fr { bus, slot, .. } => RowAddress {
+        SigKey::Fr { slot, .. } => RowAddress {
             kind: "fr",
-            ch: *bus,
+            ch: app.key_bus(key).unwrap_or(0),
             id: u32::from(*slot),
             ext: false,
             frame: None,
         },
-        SigKey::Eth { bus, frame, .. } => RowAddress {
+        SigKey::Eth { frame, .. } => RowAddress {
             kind: "eth",
-            ch: *bus,
+            ch: app.key_bus(key).unwrap_or(0),
             id: 0,
             ext: false,
             frame: Some(frame.clone()),
@@ -4146,9 +4135,18 @@ pub(crate) fn series_key(key: &SigKey) -> String {
 
 fn signal_bus(app: &App, key: &SigKey) -> String {
     match key {
-        SigKey::Can { ch, .. } => bus_name(app, *ch),
-        SigKey::Fr { bus, .. } => app.fr_bus_name(*bus),
-        SigKey::Eth { bus, .. } => app.eth_bus_label(*bus),
+        SigKey::Can { .. } => app
+            .key_bus(key)
+            .map(|ch| bus_name(app, ch))
+            .unwrap_or_default(),
+        SigKey::Fr { .. } => app
+            .key_bus(key)
+            .map(|bus| app.fr_bus_name(bus))
+            .unwrap_or_default(),
+        SigKey::Eth { .. } => app
+            .key_bus(key)
+            .map(|bus| app.eth_bus_label(bus))
+            .unwrap_or_default(),
         SigKey::Derived { .. } => "Derived".to_string(),
     }
 }
@@ -4284,7 +4282,6 @@ fn catalog_signal(key: String, signal: &crate::model::Signal) -> WebCatalogSigna
 /// names, signals and ranges are the model's.
 fn can_catalog_messages(
     comm: &crate::model::Comm,
-    ch: u8,
     db: Option<&std::sync::Arc<crate::dbc::SymbolTable>>,
 ) -> Vec<WebCatalogMessage> {
     let cluster = comm
@@ -4316,7 +4313,7 @@ fn can_catalog_messages(
                     .into_iter()
                     .map(|signal| {
                         catalog_signal(
-                            series_key(&SigKey::can_in(cluster, ch, id, extended, &signal.name)),
+                            series_key(&SigKey::can_in(cluster, id, extended, &signal.name)),
                             signal,
                         )
                     })
@@ -4328,7 +4325,7 @@ fn can_catalog_messages(
     out
 }
 
-fn fr_catalog_messages(comm: &crate::model::Comm, bus: u8) -> Vec<WebCatalogMessage> {
+fn fr_catalog_messages(comm: &crate::model::Comm) -> Vec<WebCatalogMessage> {
     let cluster = comm
         .clusters
         .keys()
@@ -4355,7 +4352,7 @@ fn fr_catalog_messages(comm: &crate::model::Comm, bus: u8) -> Vec<WebCatalogMess
                     .into_iter()
                     .map(|signal| {
                         catalog_signal(
-                            series_key(&SigKey::fr_in(cluster, bus, slot, &signal.name)),
+                            series_key(&SigKey::fr_in(cluster, slot, &signal.name)),
                             signal,
                         )
                     })
@@ -4369,7 +4366,6 @@ fn fr_catalog_messages(comm: &crate::model::Comm, bus: u8) -> Vec<WebCatalogMess
 
 fn eth_catalog_messages(
     comm: &crate::model::Comm,
-    bus: u8,
     length_includes_header: bool,
 ) -> Vec<WebCatalogMessage> {
     let cluster = comm
@@ -4399,7 +4395,7 @@ fn eth_catalog_messages(
                 .into_iter()
                 .map(|signal| {
                     catalog_signal(
-                        series_key(&SigKey::eth_in(cluster, bus, &frame.name, &signal.name)),
+                        series_key(&SigKey::eth_in(cluster, &frame.name, &signal.name)),
                         signal,
                     )
                 })
@@ -4434,7 +4430,7 @@ fn build_catalog(app: &App) -> WebCatalog {
                 .model_comms
                 .get(ch)
                 .and_then(Option::as_ref)
-                .map(|comm| can_catalog_messages(comm, ch as u8, channel.dbc.as_ref()))
+                .map(|comm| can_catalog_messages(comm, channel.dbc.as_ref()))
                 .unwrap_or_default(),
         })
         .collect();
@@ -4442,7 +4438,7 @@ fn build_catalog(app: &App) -> WebCatalog {
         let messages = app
             .fr_models
             .get(bus)
-            .map(|comm| fr_catalog_messages(comm, *bus))
+            .map(|comm| fr_catalog_messages(comm))
             .unwrap_or_default();
         let aliases = app
             .fr_models
@@ -4461,7 +4457,7 @@ fn build_catalog(app: &App) -> WebCatalog {
         let messages = app
             .eth_models
             .get(bus)
-            .map(|comm| eth_catalog_messages(comm, *bus, app.eth_length_includes_header))
+            .map(|comm| eth_catalog_messages(comm, app.eth_length_includes_header))
             .unwrap_or_default();
         let aliases = app
             .eth_models
@@ -5616,7 +5612,7 @@ fn build_state(app: &App, series: &VecDeque<WebSeriesPoint>, fps: f64) -> WebSta
                         id,
                         ext,
                         frame,
-                    } = row_address(&signal.key);
+                    } = row_address(app, &signal.key);
                     let name = signal.key.name().to_string();
                     let sub = signal_sub(app, &signal.key);
                     let (value, unit, raw, min, avg, max, frac) = match sub {
@@ -5704,7 +5700,7 @@ fn build_state(app: &App, series: &VecDeque<WebSeriesPoint>, fps: f64) -> WebSta
                         id,
                         ext,
                         frame,
-                    } = row_address(&signal.key);
+                    } = row_address(app, &signal.key);
                     let name = signal.key.name().to_string();
                     // A derived channel carries its bands on the definition
                     // (that is what the editor persists), not per window.
@@ -5795,7 +5791,7 @@ fn build_state(app: &App, series: &VecDeque<WebSeriesPoint>, fps: f64) -> WebSta
                 id,
                 ext,
                 frame,
-            } = row_address(&row.key);
+            } = row_address(app, &row.key);
             let (value, has_value, unit) = signal_sub(app, &row.key)
                 .map(|sub| (sub.latest, sub.min <= sub.max, sub.unit.clone()))
                 .unwrap_or((0.0, false, String::new()));
@@ -6410,7 +6406,7 @@ mod tests {
     /// the web; edits stay in row state and removal unsubscribes the signal.
     #[test]
     fn the_state_lists_monitor_rows_and_edits_them() {
-        let key = SigKey::can(0, 0x100, false, "EngineSpeed");
+        let key = SigKey::can_in(crate::model::ClusterId(1), 0x100, false, "EngineSpeed");
         let mut app = App::headless();
         app.set_win_signal(crate::workspace::PopupTarget::Monitor, key.clone(), true);
         app.settle();
@@ -6447,7 +6443,7 @@ mod tests {
     /// live strings and the visibility toggle all reach the web state.
     #[test]
     fn the_state_lists_data_rows_and_visibility() {
-        let key = SigKey::can(0, 0x100, false, "EngineSpeed");
+        let key = SigKey::can_in(crate::model::ClusterId(1), 0x100, false, "EngineSpeed");
         let mut app = App::headless();
         app.new_data_window();
         app.set_win_signal(crate::workspace::PopupTarget::Data(0), key.clone(), true);
@@ -6514,7 +6510,7 @@ mod tests {
     /// window length reach the state, so the tab can draw and resize it.
     #[test]
     fn the_state_lists_state_tracker_rows_and_window() {
-        let key = SigKey::can(0, 0x100, false, "EngineSpeed");
+        let key = SigKey::can_in(crate::model::ClusterId(1), 0x100, false, "EngineSpeed");
         let mut app = App::headless();
         app.new_state_window();
         app.set_win_signal(crate::workspace::PopupTarget::State(0), key.clone(), true);
@@ -6672,7 +6668,7 @@ mod tests {
     fn chart_selection_round_trips_through_the_graphics_window() {
         let mut app = App::headless();
         chart_select(&mut app, 0, 0x100, false, "EngineSpeed");
-        let key = SigKey::can(0, 0x100, false, "EngineSpeed");
+        let key = SigKey::can_in(crate::model::ClusterId(1), 0x100, false, "EngineSpeed");
         assert!(
             app.graphics
                 .first()
@@ -6697,8 +6693,14 @@ mod tests {
     #[test]
     fn a_load_restores_flexray_and_ethernet_chart_lanes() {
         let mut app = App::headless();
-        let fr = SigKey::fr(0, 13, "CarSpeed");
-        let eth = SigKey::eth(0, "SpeedFrame", "Speed");
+        // A lane names its cluster, so the test has to mint the two clusters a
+        // loaded project would have carried.
+        let fr_cluster = app.cluster_ids.allocate();
+        app.fr_cluster_ids.insert(0, fr_cluster);
+        let eth_cluster = app.cluster_ids.allocate();
+        app.eth_cluster_ids.insert(0, eth_cluster);
+        let fr = app.fr_key(0, 13, "CarSpeed".to_string());
+        let eth = app.eth_key(0, "SpeedFrame".to_string(), "Speed".to_string());
         chart_select_key(&mut app, fr.clone());
         chart_select_key(&mut app, eth.clone());
 
@@ -6714,9 +6716,9 @@ mod tests {
     fn moving_a_chart_lane_updates_store_and_graphics_order() {
         let mut app = App::headless();
         let keys = [
-            SigKey::can(0, 0x100, false, "EngineSpeed"),
-            SigKey::can(0, 0x200, false, "VehicleSpeed"),
-            SigKey::can(0, 0x320, false, "BrakePressure"),
+            SigKey::can_in(crate::model::ClusterId(1), 0x100, false, "EngineSpeed"),
+            SigKey::can_in(crate::model::ClusterId(1), 0x200, false, "VehicleSpeed"),
+            SigKey::can_in(crate::model::ClusterId(1), 0x320, false, "BrakePressure"),
         ];
         let mut store = SignalStore::default();
         for key in &keys {
@@ -6743,7 +6745,7 @@ mod tests {
     #[test]
     fn chart_signal_actions_reach_observers_and_remove_only_the_lane() {
         let mut app = App::headless();
-        let key = SigKey::can(0, 0x100, false, "EngineSpeed");
+        let key = SigKey::can_in(crate::model::ClusterId(1), 0x100, false, "EngineSpeed");
         let mut store = SignalStore::default();
         chart_select_key(&mut app, key.clone());
         store.select_key(&app, key.clone());
@@ -6839,7 +6841,7 @@ mod tests {
     /// A saved custom rule reaches the state and can be removed again.
     #[test]
     fn state_rules_reach_the_web_and_clear() {
-        let key = SigKey::can(0, 0x100, false, "EngineSpeed");
+        let key = SigKey::can_in(crate::model::ClusterId(1), 0x100, false, "EngineSpeed");
         let mut app = App::headless();
         app.new_state_window();
         app.set_win_signal(crate::workspace::PopupTarget::State(0), key.clone(), true);
@@ -6979,7 +6981,7 @@ mod tests {
         assert!(signal.key.starts_with("sig:fr:"));
 
         let mut store = SignalStore::default();
-        let key = SigKey::fr(bus, 13, &signal.name);
+        let key = app.fr_key(bus, 13, signal.name.clone());
         app.subscribe(key.clone());
         store.select_key(&app, key);
         store.sync(&app);
@@ -7014,7 +7016,7 @@ mod tests {
             format!("sig:eth:{}:EthFrame:Sig", app.snap.cluster_ids.eth[&bus])
         );
 
-        let key = SigKey::eth(bus, "EthFrame", "Sig");
+        let key = app.eth_key(bus, "EthFrame".to_string(), "Sig".to_string());
         app.set_win_signal(PopupTarget::Monitor, key.clone(), true);
         app.new_data_window();
         app.set_win_signal(PopupTarget::Data(0), key.clone(), true);
@@ -7051,7 +7053,7 @@ mod tests {
         let bus = app
             .load_cluster_description(crate::test_assets::path("PowerTrain.arxml"), Some(0))
             .expect("cluster loads");
-        let key = SigKey::fr(bus, 13, "CarSpeed");
+        let key = app.fr_key(bus, 13, "CarSpeed".to_string());
         app.set_win_signal(PopupTarget::Monitor, key.clone(), true);
         app.new_data_window();
         app.set_win_signal(PopupTarget::Data(0), key.clone(), true);
@@ -7134,16 +7136,25 @@ mod tests {
 
     #[test]
     fn observer_commands_resolve_can_and_flexray_addresses() {
+        let app = App::headless();
+        let core = &*app;
         assert_eq!(
-            command_key("can", 1, 0x100, true, None, "EngineSpeed".to_string()),
-            Some(SigKey::can(1, 0x100, true, "EngineSpeed"))
+            command_key(core, "can", 1, 0x100, true, None, "EngineSpeed".to_string()),
+            Some(SigKey::can_in(
+                crate::model::ClusterId(2),
+                0x100,
+                true,
+                "EngineSpeed"
+            ))
         );
         assert_eq!(
-            command_key("fr", 2, 13, false, None, "CarSpeed".to_string()),
-            Some(SigKey::fr(2, 13, "CarSpeed"))
+            command_key(core, "fr", 2, 13, false, None, "CarSpeed".to_string()),
+            Some(SigKey::fr_in(crate::model::ClusterId(0), 13, "CarSpeed")),
+            "no FlexRay cluster is loaded, so the key has no cluster yet"
         );
         assert_eq!(
             command_key(
+                core,
                 "eth",
                 0,
                 0,
@@ -7151,14 +7162,19 @@ mod tests {
                 Some("EthFrame".to_string()),
                 "Sig".to_string()
             ),
-            Some(SigKey::eth(0, "EthFrame", "Sig"))
+            Some(SigKey::eth_in(
+                crate::model::ClusterId(0),
+                "EthFrame",
+                "Sig"
+            ))
         );
         assert!(
-            command_key("eth", 0, 0, false, None, "x".to_string()).is_none(),
+            command_key(core, "eth", 0, 0, false, None, "x".to_string()).is_none(),
             "an Ethernet address without a frame name is incomplete"
         );
         assert_eq!(
             command_key(
+                core,
                 "derived",
                 0,
                 0,
@@ -7169,7 +7185,7 @@ mod tests {
             Some(SigKey::derived("d1", "Double")),
             "observer rows can address a computed channel by definition id"
         );
-        assert!(command_key("fr", 0, 70_000, false, None, "x".to_string()).is_none());
+        assert!(command_key(core, "fr", 0, 70_000, false, None, "x".to_string()).is_none());
     }
 
     /// A replay path must open the log and start playback in Replay mode,
@@ -7198,7 +7214,7 @@ mod tests {
     #[test]
     fn the_store_tracks_the_selected_signals() {
         let app = App::headless();
-        let key = SigKey::can(0, 0x100, false, "EngineSpeed");
+        let key = SigKey::can_in(crate::model::ClusterId(1), 0x100, false, "EngineSpeed");
         let mut store = SignalStore::default();
         store.select(&app, 0, 0x100, false, "EngineSpeed");
         assert!(store.is_selected(&key));
@@ -7217,7 +7233,7 @@ mod tests {
     #[test]
     fn read_signals_subscribe_without_a_lane() {
         let mut app = App::headless();
-        let key = SigKey::can(0, 0x100, false, "EngineSpeed");
+        let key = SigKey::can_in(crate::model::ClusterId(1), 0x100, false, "EngineSpeed");
         let mut store = SignalStore::default();
         set_signal_mode(&mut app, &mut store, key.clone(), true);
         app.settle();
@@ -7322,8 +7338,8 @@ mod tests {
         assert!(store.selected.is_empty());
     }
 
-    /// Removing a CAN bus shifts every higher channel down; selected signal
-    /// keys must follow or their curves point at the wrong bus.
+    /// Removing a CAN bus drops the selections on its cluster; the ones on
+    /// the surviving buses keep their keys untouched.
     #[test]
     fn removing_a_bus_remaps_the_selection() {
         let app = App::headless();
@@ -7331,10 +7347,14 @@ mod tests {
         store.select(&app, 0, 0x100, false, "EngineSpeed");
         store.select(&app, 1, 0x64, false, "EngSpeed");
         assert_eq!(store.selected.len(), 2);
-        store.remap_after_remove(0);
+        store.remap_after_remove(Some(crate::model::ClusterId(1)));
         assert_eq!(store.selected.len(), 1);
         assert_eq!(store.selected[0].name, "EngSpeed");
-        assert_eq!(key_channel(&store.selected[0].key), 0);
+        assert_eq!(
+            store.selected[0].key.cluster(),
+            Some(crate::model::ClusterId(2)),
+            "the survivor keeps its cluster identity"
+        );
         assert_eq!(key_id(&store.selected[0].key), 0x64);
     }
 

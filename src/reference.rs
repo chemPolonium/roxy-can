@@ -56,10 +56,11 @@ fn build_targets(app: &App, keys: &[SigKey]) -> Vec<Target> {
     let mut targets = Vec::new();
     for key in keys {
         match key {
-            SigKey::Can {
-                ch, id, ext, name, ..
-            } => {
-                let Some(channel) = app.snap.channels.get(*ch as usize) else {
+            SigKey::Can { id, ext, name, .. } => {
+                let Some(ch) = app.key_bus(key) else {
+                    continue;
+                };
+                let Some(channel) = app.snap.channels.get(ch as usize) else {
                     continue;
                 };
                 let Some(db) = channel.dbc.as_ref() else {
@@ -77,7 +78,7 @@ fn build_targets(app: &App, keys: &[SigKey]) -> Vec<Target> {
                     bus: channel.name.clone(),
                     unit,
                     kind: TargetKind::Can {
-                        ch: *ch,
+                        ch,
                         id: *id,
                         ext: *ext,
                     },
@@ -85,10 +86,11 @@ fn build_targets(app: &App, keys: &[SigKey]) -> Vec<Target> {
                     last_us: None,
                 });
             }
-            SigKey::Fr {
-                bus, slot, name, ..
-            } => {
-                let Some(cfg) = app.fr_buses.get(bus) else {
+            SigKey::Fr { slot, name, .. } => {
+                let Some(bus) = app.key_bus(key) else {
+                    continue;
+                };
+                let Some(cfg) = app.fr_buses.get(&bus) else {
                     continue;
                 };
                 let Some(signal) = cfg.db.slot_signal(*slot, name) else {
@@ -97,20 +99,18 @@ fn build_targets(app: &App, keys: &[SigKey]) -> Vec<Target> {
                 targets.push(Target {
                     key: key.clone(),
                     name: name.clone(),
-                    bus: app.fr_bus_name(*bus),
+                    bus: app.fr_bus_name(bus),
                     unit: signal.unit.clone(),
-                    kind: TargetKind::Fr {
-                        bus: *bus,
-                        slot: *slot,
-                    },
+                    kind: TargetKind::Fr { bus, slot: *slot },
                     points: Vec::new(),
                     last_us: None,
                 });
             }
-            SigKey::Eth {
-                bus, frame, name, ..
-            } => {
-                let Some(db) = app.eth_db(*bus) else {
+            SigKey::Eth { frame, name, .. } => {
+                let Some(bus) = app.key_bus(key) else {
+                    continue;
+                };
+                let Some(db) = app.eth_db(bus) else {
                     continue;
                 };
                 let Some(def) = db.frames.iter().find(|def| def.name == *frame) else {
@@ -126,10 +126,10 @@ fn build_targets(app: &App, keys: &[SigKey]) -> Vec<Target> {
                 targets.push(Target {
                     key: key.clone(),
                     name: name.clone(),
-                    bus: app.eth_bus_label(*bus),
+                    bus: app.eth_bus_label(bus),
                     unit,
                     kind: TargetKind::Eth {
-                        bus: *bus,
+                        bus,
                         frame: frame.clone(),
                     },
                     points: Vec::new(),
@@ -388,7 +388,7 @@ mod tests {
         }
         writer.finish().ok();
 
-        let key = SigKey::fr(0, slot, &signal.name);
+        let key = app.fr_key(0, slot, signal.name.clone());
         let run = load(&log.to_string_lossy(), std::slice::from_ref(&key), &app)
             .expect("reference decodes FlexRay");
         assert_eq!(run.signals.len(), 1);
@@ -418,7 +418,7 @@ mod tests {
             },
         );
         app.push_eth_db_to_core();
-        let key = SigKey::eth(0, "EthFrame", "Sig");
+        let key = app.eth_key(0, "EthFrame".to_string(), "Sig".to_string());
         let mut targets = build_targets(&app, std::slice::from_ref(&key));
         assert_eq!(targets.len(), 1, "the selected frame and signal resolve");
         let mut payload = vec![0u8; 22];

@@ -32,13 +32,6 @@ pub(crate) const MAX_CACHED_ROWS: usize = 200_000;
 /// can never collide with a frame's own signals.
 pub const EMITTED_ID_BASE: u32 = 0x8000_0000;
 
-/// The subscription key for a FlexRay signal named `name` in `slot` on `bus`.
-/// Both the selection tree and the live decode build it from the resolved
-/// frame's slot, so a curve and its decoded values share one identity.
-pub fn fr_signal_key(bus: u8, slot: u16, name: &str) -> crate::observe::SigKey {
-    crate::observe::SigKey::fr(bus, slot, name)
-}
-
 /// One FlexRay bus the tool knows about: the cluster description file it was
 /// configured from and the database parsed out of it. Kept together so a bus
 /// can never end up displaying one file's frames and configuring the port from
@@ -154,7 +147,12 @@ pub struct MonitorView {
 impl Default for MonitorRow {
     fn default() -> Self {
         Self {
-            key: crate::observe::SigKey::can(0, 0, false, String::new()),
+            key: crate::observe::SigKey::can_in(
+                crate::model::ClusterId(0),
+                0,
+                false,
+                String::new(),
+            ),
             label: String::new(),
             digits: 1,
             rule_on: false,

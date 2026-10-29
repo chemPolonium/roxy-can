@@ -192,9 +192,18 @@ impl App {
     /// looked up in the channel list.
     pub fn sig_bus_label(&self, key: &SigKey) -> String {
         match key {
-            SigKey::Can { ch, .. } => self.channel_name(*ch),
-            SigKey::Fr { bus, .. } => self.fr_bus_name(*bus),
-            SigKey::Eth { bus, .. } => self.eth_bus_label(*bus),
+            SigKey::Can { .. } => self
+                .key_bus(key)
+                .map(|ch| self.channel_name(ch))
+                .unwrap_or_else(|| "CAN".to_string()),
+            SigKey::Fr { .. } => self
+                .key_bus(key)
+                .map(|bus| self.fr_bus_name(bus))
+                .unwrap_or_else(|| "FR".to_string()),
+            SigKey::Eth { .. } => self
+                .key_bus(key)
+                .map(|bus| self.eth_bus_label(bus))
+                .unwrap_or_else(|| "ETH".to_string()),
             SigKey::Derived { .. } => "Derived".to_string(),
         }
     }
@@ -219,7 +228,19 @@ impl App {
         if ch >= self.snap.channel_count {
             return;
         }
+        // The key names the cluster, so the removed channel is identified once
+        // and every window drops exactly those rows; survivors keep their keys
+        // and there is no renumbering to rewrite.
+        let removed = self
+            .snap
+            .cluster_ids
+            .can
+            .get(ch)
+            .copied()
+            .map(crate::model::ClusterId);
         self.send(crate::bus::BusCommand::RemoveChannel { ch });
+        // Window state that stores a bus index (hardware picks, replay maps,
+        // Trace picks) still follows the shortened channel list.
         let remap = |c: u8| -> Option<u8> {
             if (c as usize) < ch {
                 Some(c)
@@ -267,19 +288,11 @@ impl App {
         for w in &mut self.stats_windows {
             remap_set(&mut w.manual);
         }
+        let gone = |key: &SigKey| matches!((removed, key.cluster()), (Some(r), Some(c)) if r == c);
         let remap_keys = |signals: &mut Vec<GfxSignal>| {
-            // Only CAN keys carry a CAN channel number. A FlexRay key's bus
-            // index names a cluster, which this CAN-channel removal does not
-            // manage, so such a curve is neither dropped nor shifted.
-            signals.retain(|s| match &s.key {
-                SigKey::Can { ch, .. } => remap(*ch).is_some(),
-                SigKey::Fr { .. } | SigKey::Eth { .. } | SigKey::Derived { .. } => true,
-            });
-            for s in signals.iter_mut() {
-                if let SigKey::Can { ch, .. } = &mut s.key {
-                    *ch = remap(*ch).unwrap();
-                }
-            }
+            // The removed cluster takes its curves; the channels that stay
+            // keep their keys, so no surviving curve moves.
+            signals.retain(|s| !gone(&s.key));
         };
         for g in &mut self.graphics {
             remap_keys(&mut g.signals);
@@ -288,44 +301,21 @@ impl App {
             remap_keys(&mut d.signals);
         }
         // State Tracker rows carry signal keys too -- plus per-key state
-        // maps (color memory, rules, overrides) that shift with them.
-        fn remap_key_map<V>(
+        // maps (color memory, rules, overrides) that drop with the cluster.
+        fn drop_key_map<V>(
             m: std::collections::HashMap<crate::observe::SigKey, V>,
-            remap: &impl Fn(u8) -> Option<u8>,
+            gone: &impl Fn(&crate::observe::SigKey) -> bool,
         ) -> std::collections::HashMap<crate::observe::SigKey, V> {
-            m.into_iter()
-                .filter_map(|(mut k, v)| {
-                    // The map's FlexRay entries are keyed by the FR bus, not
-                    // by a CAN channel, so they neither shift nor drop.
-                    if let SigKey::Can { ch, .. } = &mut k {
-                        let nc = remap(*ch)?;
-                        *ch = nc;
-                    }
-                    Some((k, v))
-                })
-                .collect()
+            m.into_iter().filter(|(k, _)| !gone(k)).collect()
         }
         for w in &mut self.state_trackers {
             remap_keys(&mut w.signals);
-            w.color_slots = remap_key_map(std::mem::take(&mut w.color_slots), &remap);
-            w.rules = remap_key_map(std::mem::take(&mut w.rules), &remap);
-            w.overrides = remap_key_map(std::mem::take(&mut w.overrides), &remap);
+            w.color_slots = drop_key_map(std::mem::take(&mut w.color_slots), &gone);
+            w.rules = drop_key_map(std::mem::take(&mut w.rules), &gone);
+            w.overrides = drop_key_map(std::mem::take(&mut w.overrides), &gone);
         }
         // Monitor rows carry signal keys too.
-        self.monitor_view.rows.retain(|r| match &r.key {
-            // Same rule as the curve lists: the removed CAN channel takes its
-            // CAN rows with it and leaves every FlexRay, Ethernet and derived
-            // row alone.
-            SigKey::Can { ch, .. } => remap(*ch).is_some(),
-            SigKey::Fr { .. } | SigKey::Eth { .. } | SigKey::Derived { .. } => true,
-        });
-        for r in &mut self.monitor_view.rows {
-            if let SigKey::Can { ch, .. } = &mut r.key
-                && let Some(nc) = remap(*ch)
-            {
-                *ch = nc;
-            }
-        }
+        self.monitor_view.rows.retain(|r| !gone(&r.key));
         let fix_scope = |s: &mut SigScope| {
             if let SigScope::Bus(b) = *s {
                 *s = match (b as usize).cmp(&ch) {
@@ -1004,6 +994,13 @@ impl App {
         // Resolved before the maps go, because the status line names the 路 the
         // way the user did.
         let label = self.fr_bus_label(bus);
+        let removed = self
+            .snap
+            .cluster_ids
+            .fr
+            .get(&bus)
+            .copied()
+            .map(crate::model::ClusterId);
         self.fr_buses.remove(&bus);
         self.fr_clusters.remove(&bus);
         self.fr_names.remove(&bus);
@@ -1018,7 +1015,7 @@ impl App {
         // runs on its own thread.
         self.push_fr_db_to_core();
         self.reset_fr_scope(bus);
-        let on_bus = |k: &SigKey| matches!(k, SigKey::Fr { bus: b, .. } if *b == bus);
+        let on_bus = |k: &SigKey| matches!(removed, Some(cluster) if k.cluster() == Some(cluster));
         let on_bus_pick = |p: &crate::workspace::Pick| matches!(p, crate::workspace::Pick::Fr { bus: b, .. } if *b == bus);
         for w in &mut self.trace_windows {
             w.manual.retain(|p| !on_bus_pick(p));

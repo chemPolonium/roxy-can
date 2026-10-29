@@ -1026,8 +1026,8 @@ fn a_ui_stall_never_punches_a_hole_into_the_sample_timeline() {
     let key = {
         let db = app.channel_dbc(0).expect("sample DBC loaded");
         let id = db.order[0].0;
-        SigKey::can(
-            0u8,
+        SigKey::can_in(
+            crate::model::ClusterId(1),
             id,
             false,
             db.messages[&(id, false)].signals[0].name.clone(),
@@ -1807,7 +1807,7 @@ fn a_reference_log_decodes_the_selected_can_signals() {
     let db = app.channels[0].dbc.as_ref().expect("sample DBC loaded");
     let id = db.order[0].0;
     let name = db.messages[&(id, false)].signals[0].name.clone();
-    let key = SigKey::can(0, id, false, name);
+    let key = SigKey::can_in(crate::model::ClusterId(1), id, false, name);
     let path = std::env::temp_dir().join(format!("roxy_reference_{}.asc", std::process::id()));
     let mut writer = AscWriter::new(&path.to_string_lossy()).unwrap();
     for i in 0..6u8 {
@@ -1840,8 +1840,8 @@ fn a_reference_log_decodes_the_selected_can_signals() {
 #[test]
 fn derived_channels_sample_their_subscribed_sources() {
     let mut app = App::headless();
-    let a = SigKey::can(0, 0x100, false, "A");
-    let b = SigKey::can(0, 0x101, false, "B");
+    let a = SigKey::can_in(crate::model::ClusterId(1), 0x100, false, "A");
+    let b = SigKey::can_in(crate::model::ClusterId(1), 0x101, false, "B");
     app.subscribe_signal(a.clone());
     app.subscribe_signal(b.clone());
     for i in 0..5u64 {
@@ -1875,7 +1875,7 @@ fn derived_channels_sample_their_subscribed_sources() {
 #[test]
 fn a_derived_channel_can_use_an_earlier_derived_channel() {
     let mut app = App::headless();
-    let a = SigKey::can(0, 0x100, false, "A");
+    let a = SigKey::can_in(crate::model::ClusterId(1), 0x100, false, "A");
     app.subscribe_signal(a.clone());
     for i in 0..3u64 {
         app.subs
@@ -1921,7 +1921,7 @@ fn a_derived_channel_waits_for_a_source_that_appears_later() {
         app.derived[0].error.is_some(),
         "no subscription can resolve the reference yet"
     );
-    let c = SigKey::can(0, 0x102, false, "C");
+    let c = SigKey::can_in(crate::model::ClusterId(1), 0x102, false, "C");
     app.send(crate::bus::BusCommand::Subscribe { key: c.clone() });
     for i in 0..2u64 {
         app.subs
@@ -1942,7 +1942,7 @@ fn a_derived_channel_waits_for_a_source_that_appears_later() {
 #[test]
 fn a_derived_trigger_follows_the_core_sampled_value() {
     let mut app = App::headless();
-    let a = SigKey::can(0, 0x100, false, "A");
+    let a = SigKey::can_in(crate::model::ClusterId(1), 0x100, false, "A");
     app.subscribe_signal(a.clone());
     app.subs.get_mut(&a).unwrap().push_sample(0, 1.0, 1);
     app.set_derived_defs(vec![crate::derived::DerivedDef {
@@ -1995,7 +1995,7 @@ fn a_derived_trigger_follows_the_core_sampled_value() {
 #[test]
 fn clearing_an_observer_keeps_a_chart_owned_subscription() {
     let mut app = App::headless();
-    let key = SigKey::can(0, 0x100, false, "A");
+    let key = SigKey::can_in(crate::model::ClusterId(1), 0x100, false, "A");
     app.subscribe_signal(key.clone());
     app.set_win_signal(crate::workspace::PopupTarget::Data(0), key.clone(), true);
     app.set_session_chart_keep([key.clone()]);
@@ -2041,7 +2041,7 @@ fn removing_a_derived_observer_row_keeps_its_lane_subscribed() {
 #[test]
 fn pinned_derived_sources_ignore_same_named_observers() {
     let mut app = App::headless();
-    let a = SigKey::can(0, 0x100, false, "A");
+    let a = SigKey::can_in(crate::model::ClusterId(1), 0x100, false, "A");
     app.subscribe_signal(a.clone());
     app.subs.get_mut(&a).unwrap().push_sample(0, 1.0, 1);
     let def = crate::derived::DerivedDef {
@@ -2057,7 +2057,12 @@ fn pinned_derived_sources_ignore_same_named_observers() {
     app.set_derived_defs(vec![def.clone()]);
     // A second subscription with the same signal name, as Monitor/Data can
     // introduce, would make name-only resolution ambiguous.
-    app.subscribe_signal(SigKey::can(1, 0x200, false, "A"));
+    app.subscribe_signal(SigKey::can_in(
+        crate::model::ClusterId(2),
+        0x200,
+        false,
+        "A",
+    ));
     app.subs.get_mut(&a).unwrap().push_sample(100_000, 2.0, 1);
     app.set_derived_defs(vec![def]);
     assert_eq!(app.derived[0].error, None, "the pinned key still resolves");
@@ -2197,7 +2202,7 @@ fn a_script_can_read_derived_at_start() {
 #[test]
 fn a_derived_trigger_fires_inside_a_real_step() {
     let mut app = App::headless();
-    let a = SigKey::can(0, 0x100, false, "A");
+    let a = SigKey::can_in(crate::model::ClusterId(1), 0x100, false, "A");
     app.subscribe_signal(a.clone());
     app.set_derived_defs(vec![crate::derived::DerivedDef {
         id: "d".into(),
@@ -2230,7 +2235,7 @@ fn aligned_signal_csv_writes_one_row_per_time_step() {
     let db = app.channels[0].dbc.as_ref().expect("sample DBC loaded");
     let id = db.order[0].0;
     let name = db.messages[&(id, false)].signals[0].name.clone();
-    let key = SigKey::can(0, id, false, name);
+    let key = SigKey::can_in(crate::model::ClusterId(1), id, false, name);
     app.subscribe(key.clone());
     app.graphics[0].signals.push(GfxSignal {
         key: key.clone(),
@@ -2573,7 +2578,7 @@ fn csv_exports_match_window_state() {
     let db = app.channels[0].dbc.as_ref().expect("sample DBC loaded");
     let id = db.order[0].0;
     let sig = db.messages[&(id, false)].signals[0].name.clone();
-    let key = SigKey::can(0, id, false, sig);
+    let key = SigKey::can_in(crate::model::ClusterId(1), id, false, sig);
     app.subscribe(key.clone());
     app.graphics[0].signals.push(GfxSignal {
         key: key.clone(),
@@ -2836,15 +2841,36 @@ fn a_flexray_row_is_filtered_by_the_value_its_frame_carries() {
             };
             let bytes = vec![0u8; (f.length as usize).max(1)];
             if let Some(sig) = db.decode_signals(ix, &bytes).into_iter().next() {
-                found = Some((
-                    f.triggering.slot_id as u16,
-                    f.triggering.base_cycle as u8,
-                    2u8,
-                    sig.name,
-                    sig.phys,
-                    bytes,
-                ));
-                break;
+                // The filter compares the value the *model* decodes, so a
+                // signal whose model transform disagrees with the legacy
+                // table would make this assertion read the wrong number.
+                // Both decoders must agree before the row becomes the probe.
+                let candidate = crate::trace::FrRow {
+                    bus: 0,
+                    t_us: 1_000,
+                    ab: 2,
+                    slot: f.triggering.slot_id as u16,
+                    cycle: f.triggering.base_cycle as u8,
+                    payload: bytes.clone(),
+                    header_crc: 0,
+                    flags: 0,
+                    name: None,
+                };
+                let agrees = app
+                    .model_fr_all_values(&candidate, ix)
+                    .and_then(|values| values.into_iter().find(|value| value.name == sig.name))
+                    .is_some_and(|value| (value.phys - sig.phys).abs() < 1e-9);
+                if agrees {
+                    found = Some((
+                        f.triggering.slot_id as u16,
+                        f.triggering.base_cycle as u8,
+                        2u8,
+                        sig.name,
+                        sig.phys,
+                        bytes,
+                    ));
+                    break;
+                }
             }
         }
         found.expect("the bundled description decodes at least one signal")
@@ -3299,8 +3325,8 @@ fn app_with_replayable_recording(
     let key = {
         let db = app.channel_dbc(0).expect("sample DBC loaded");
         let id = db.order[0].0;
-        SigKey::can(
-            0u8,
+        SigKey::can_in(
+            crate::model::ClusterId(1),
             id,
             false,
             db.messages[&(id, false)].signals[0].name.clone(),
@@ -3804,8 +3830,8 @@ fn signal_stats_track_min_avg_max() {
     let key = {
         let db = app.channel_dbc(0).expect("sample DBC loaded");
         let id = db.order[0].0;
-        SigKey::can(
-            0,
+        SigKey::can_in(
+            crate::model::ClusterId(1),
             id,
             false,
             db.messages[&(id, false)].signals[0].name.clone(),
@@ -3838,8 +3864,8 @@ fn restored_signals_are_resubscribed() {
     let key = {
         let db = app.channel_dbc(0).expect("sample DBC loaded");
         let id = db.order[0].0;
-        SigKey::can(
-            0,
+        SigKey::can_in(
+            crate::model::ClusterId(1),
             id,
             false,
             db.messages[&(id, false)].signals[0].name.clone(),
@@ -4470,8 +4496,8 @@ BO_ 2147483904 Twin: 2 ECU
     });
     app.tx_list.retain(|t| t.channel != 0);
     app.start_virtual();
-    let std_key = SigKey::can(0, 0x100, false, "StdSig");
-    let ext_key = SigKey::can(0, 0x100, true, "ExtSig");
+    let std_key = SigKey::can_in(crate::model::ClusterId(1), 0x100, false, "StdSig");
+    let ext_key = SigKey::can_in(crate::model::ClusterId(1), 0x100, true, "ExtSig");
     app.subscribe(std_key.clone());
     app.subscribe(ext_key.clone());
     assert!(
@@ -4519,8 +4545,8 @@ BO_ 2147483904 Twin: 2 ECU
 #[test]
 fn a_signal_of_the_inactive_group_is_not_sampled() {
     let mut app = mux_app();
-    let g1 = SigKey::can(0, 400, false, "G1_A");
-    let g2 = SigKey::can(0, 400, false, "G2_C");
+    let g1 = SigKey::can_in(crate::model::ClusterId(1), 400, false, "G1_A");
+    let g2 = SigKey::can_in(crate::model::ClusterId(1), 400, false, "G2_C");
     app.subscribe(g1.clone());
     app.subscribe(g2.clone());
     assert!(app.subs.contains_key(&g1), "both signals are subscribed");
@@ -4541,7 +4567,7 @@ fn a_signal_of_the_inactive_group_is_not_sampled() {
 #[test]
 fn a_group_signal_gains_samples_once_its_group_is_switched_in() {
     let mut app = mux_app();
-    let g2 = SigKey::can(0, 400, false, "G2_C");
+    let g2 = SigKey::can_in(crate::model::ClusterId(1), 400, false, "G2_C");
     app.subscribe(g2.clone());
 
     receive(&mut app, 100_000, vec![mux_frame(100_000, 1)]);
@@ -4813,7 +4839,7 @@ fn the_state_csv_writes_one_row_per_state_segment() {
     let mut app = App::headless();
     app.tx_list.retain(|t| t.channel != 0);
     app.new_state_window();
-    let key = SigKey::can(0, 0x100, false, "EngineSpeed");
+    let key = SigKey::can_in(crate::model::ClusterId(1), 0x100, false, "EngineSpeed");
     app.subscribe(key.clone());
     app.state_trackers[0]
         .signals
@@ -4924,8 +4950,8 @@ BO_ 257 OnlyInB: 1 ECU
     assert_eq!(db.message_name_of((0x101, false)), Some("OnlyInB"));
 
     // Both databases decode live traffic on the same bus.
-    let psig = SigKey::can(0, 0x100, false, "PSig");
-    let bonly = SigKey::can(0, 0x101, false, "BOnly");
+    let psig = SigKey::can_in(crate::model::ClusterId(1), 0x100, false, "PSig");
+    let bonly = SigKey::can_in(crate::model::ClusterId(1), 0x101, false, "BOnly");
     app.subscribe(psig.clone());
     app.subscribe(bonly.clone());
     app.start_virtual();
@@ -5850,7 +5876,7 @@ fn a_plot_stride_override_ignores_the_graphics_windows() {
 #[test]
 fn a_small_graphics_window_pulls_the_sample_stride_down() {
     let mut app = quiet_app();
-    let key = SigKey::can(0, 0x100, false, "EngineSpeed");
+    let key = SigKey::can_in(crate::model::ClusterId(1), 0x100, false, "EngineSpeed");
     app.subscribe(key.clone());
 
     // The default 10 s window keeps the coarse stride: 21 frames at 100 Hz
@@ -5973,7 +5999,7 @@ fn a_send_action_mirrors_same_named_signals_from_the_trigger_frame() {
     // The reaction target, inactive so only the reaction itself emits it;
     // its base payload is all zeroes.
     app.add_tx(0, 0x200);
-    let key = SigKey::can(0, 0x200, false, "EngineSpeed");
+    let key = SigKey::can_in(crate::model::ClusterId(1), 0x200, false, "EngineSpeed");
     app.subscribe(key.clone());
     app.triggers.push(Trigger::new(
         TriggerCond::SignalCross {
@@ -6099,8 +6125,8 @@ fn the_sim_curve_holds_still_at_a_one_second_window() {
     let key = {
         let db = app.channel_dbc(0).expect("sample DBC loaded");
         let id = db.order[0].0;
-        SigKey::can(
-            0,
+        SigKey::can_in(
+            crate::model::ClusterId(1),
             id,
             false,
             db.messages[&(id, false)].signals[0].name.clone(),
@@ -6154,7 +6180,7 @@ fn feed_rpm(app: &mut App, pts: &[(u64, f64)]) {
 /// not the window.
 fn gfx_app(mode: YMode) -> (App, crate::observe::SigKey) {
     let mut app = quiet_app();
-    let key = SigKey::can(0, 0x100, false, "EngineSpeed");
+    let key = SigKey::can_in(crate::model::ClusterId(1), 0x100, false, "EngineSpeed");
     app.subscribe(key.clone());
     app.graphics[0].opened = true;
     app.graphics[0].signals.push(GfxSignal {
@@ -6188,7 +6214,7 @@ fn the_y_mode_round_trips_through_a_project() {
 #[test]
 fn the_state_tracker_round_trips_through_a_project() {
     let mut app = App::headless();
-    let key = SigKey::can(0, 0x100, false, "EngineSpeed");
+    let key = SigKey::can_in(crate::model::ClusterId(1), 0x100, false, "EngineSpeed");
     app.state_trackers[0].signals.push(GfxSignal {
         key: key.clone(),
         visible: true,
@@ -6546,8 +6572,8 @@ fn emit_value_publishes_a_derived_signal_stream() {
         app.tick(t * 1_000);
     }
 
-    let key = SigKey::can(
-        0,
+    let key = SigKey::can_in(
+        crate::model::ClusterId(1),
         crate::app::EMITTED_ID_BASE | id as u32,
         false,
         "SpeedKmh".to_string(),
@@ -6659,7 +6685,7 @@ fn a_sysvar_condition_fires_when_the_operator_raises_it() {
 fn monitor_rows_hold_the_subscription_against_data_removal() {
     let mut app = App::headless();
     app.new_data_window();
-    let key = SigKey::can(0, 0x100, false, "EngineStatus");
+    let key = SigKey::can_in(crate::model::ClusterId(1), 0x100, false, "EngineStatus");
     app.set_win_signal(PopupTarget::Data(0), key.clone(), true);
     app.set_win_signal(PopupTarget::Monitor, key.clone(), true);
     assert_eq!(app.monitor_view.rows.len(), 1, "the Monitor row was added");
@@ -6770,8 +6796,8 @@ fn a_script_sys_set_publishes_the_value_and_the_stream() {
         app.tick(t * 1_000);
     }
     assert_eq!(app.snap.sysvars[0].value, 42.0, "the script write landed");
-    let key = SigKey::can(
-        0,
+    let key = SigKey::can_in(
+        crate::model::ClusterId(1),
         crate::app::EMITTED_ID_BASE | (crate::bus::SYSVAR_STREAM_ID as u32),
         false,
         "Setpoint".to_string(),
@@ -7493,7 +7519,7 @@ fn a_self_echoing_node_cannot_wedge_a_step() {
 #[test]
 fn scripts_read_core_derived_channels_by_name() {
     let mut app = App::headless();
-    let a = SigKey::can(0, 0x100, false, "A");
+    let a = SigKey::can_in(crate::model::ClusterId(1), 0x100, false, "A");
     app.subscribe_signal(a);
     app.set_derived_defs(vec![crate::derived::DerivedDef {
         id: "d".into(),
@@ -7576,8 +7602,8 @@ fn emit_value_works_from_message_handlers() {
     );
     app.settle();
 
-    let key = SigKey::can(
-        0,
+    let key = SigKey::can_in(
+        crate::model::ClusterId(1),
         crate::app::EMITTED_ID_BASE | id as u32,
         false,
         "Seen".to_string(),
@@ -7612,7 +7638,14 @@ fn derived_streams_follow_their_node_across_edits() {
         app.advance_clock(t * 1_000);
         app.tick(t * 1_000);
     }
-    let key = |ch: u8| SigKey::can(ch, crate::app::EMITTED_ID_BASE | id as u32, false, "X");
+    let key = |ch: u8| {
+        crate::observe::SigKey::can_in(
+            crate::model::ClusterId(ch as u32 + 1),
+            crate::app::EMITTED_ID_BASE | id as u32,
+            false,
+            "X",
+        )
+    };
     assert!(
         app.snap.emitted.iter().any(|(k, _)| *k == key(0)),
         "the stream opened on the node's bus"
@@ -7711,10 +7744,13 @@ fn removing_a_bus_remaps_nodes_blocks_and_streams() {
         app.tick(t * 1_000);
     }
     assert!(
-        app.snap
-            .emitted
-            .iter()
-            .any(|(k, _)| matches!(k, SigKey::Can { ch: 1, .. })),
+        app.snap.emitted.iter().any(|(k, _)| matches!(
+            k,
+            SigKey::Can {
+                cluster: crate::model::ClusterId(2),
+                ..
+            }
+        )),
         "the surviving node emitted on bus CAN2"
     );
 
@@ -7730,11 +7766,14 @@ fn removing_a_bus_remaps_nodes_blocks_and_streams() {
     assert_eq!(app.snap.blocks.len(), 1);
     assert_eq!(app.snap.blocks[0].channel, 0, "the block shifted down too");
     assert!(
-        app.snap
-            .emitted
-            .iter()
-            .all(|(k, _)| matches!(k, SigKey::Can { ch: 0, .. })),
-        "derived streams follow their node's bus"
+        app.snap.emitted.iter().all(|(k, _)| matches!(
+            k,
+            SigKey::Can {
+                cluster: crate::model::ClusterId(2),
+                ..
+            }
+        )),
+        "derived streams keep their cluster; the bus index moved under them"
     );
     app.stop();
 }
@@ -8519,7 +8558,7 @@ fn a_wire_that_never_answers_is_told_from_the_events() {
 fn removing_a_bus_remaps_state_trackers() {
     let mut app = App::headless();
     app.new_state_window();
-    let key = SigKey::can(1, 0x200, false, "VehicleSpeed");
+    let key = SigKey::can_in(crate::model::ClusterId(2), 0x200, false, "VehicleSpeed");
     app.set_win_signal(crate::app::PopupTarget::State(0), key.clone(), true);
     assert!(!app.state_trackers[0].signals.is_empty(), "the row landed");
     app.state_trackers[0]
@@ -8531,13 +8570,19 @@ fn removing_a_bus_remaps_state_trackers() {
 
     let sig = &app.state_trackers[0].signals[0];
     assert!(
-        matches!(sig.key, SigKey::Can { ch: 0, .. }),
-        "the row is a CAN key that shifted down with the bus"
+        matches!(
+            sig.key,
+            SigKey::Can {
+                cluster: crate::model::ClusterId(2),
+                ..
+            }
+        ),
+        "the row keeps its cluster identity when the bus index shifts"
     );
-    let shifted = SigKey::can(0, 0x200, false, "VehicleSpeed");
+    let shifted = SigKey::can_in(crate::model::ClusterId(2), 0x200, false, "VehicleSpeed");
     assert!(
         app.state_trackers[0].color_slots.contains_key(&shifted),
-        "the color memory follows the key"
+        "the color memory stays on the same key"
     );
 }
 
@@ -8643,7 +8688,7 @@ fn the_text_gate_fires_on_its_cadence() {
 #[test]
 fn data_values_hold_still_until_the_text_gate_fires() {
     let mut app = quiet_app();
-    let key = SigKey::can(0, 0x100, false, "EngineSpeed");
+    let key = SigKey::can_in(crate::model::ClusterId(1), 0x100, false, "EngineSpeed");
     app.subscribe(key.clone());
     if app.data_windows.is_empty() {
         app.new_data_window();
@@ -9252,8 +9297,8 @@ fn a_node_script_reads_a_flexray_signal() {
         .find(|n| n.id == id)
         .expect("the node");
     assert!(!node.errored, "the read did not fail: {:?}", node.log);
-    let key = SigKey::can(
-        0,
+    let key = SigKey::can_in(
+        crate::model::ClusterId(1),
         crate::app::EMITTED_ID_BASE | id as u32,
         false,
         "FromFr".to_string(),
@@ -11235,12 +11280,7 @@ fn removing_a_flexray_bus_takes_everything_keyed_on_it() {
     let q1 = app.hw.attach_fr_mock(1, 6);
     // One reference of each kind, on each 路.
     for bus in [0u8, 1] {
-        let key = SigKey::Fr {
-            cluster: crate::model::ClusterId(0),
-            bus,
-            slot,
-            name: "CarSpeed".to_string(),
-        };
+        let key = app.fr_key(bus, slot, "CarSpeed".to_string());
         app.subscribe(key.clone());
         app.graphics[0].signals.push(GfxSignal {
             key,
@@ -11315,6 +11355,8 @@ fn removing_a_flexray_bus_takes_everything_keyed_on_it() {
     // The port each row's picker last chose, mirroring the mock watches.
     app.fr_pick.insert(0, 5);
     app.fr_pick.insert(1, 6);
+    let fr0 = app.fr_key(0, slot, "CarSpeed".to_string());
+    let fr1 = app.fr_key(1, slot, "CarSpeed".to_string());
 
     app.remove_fr_bus(0);
     app.refresh_snapshot();
@@ -11353,27 +11395,20 @@ fn removing_a_flexray_bus_takes_everything_keyed_on_it() {
     );
     // No subscription, curve or hand-picked row names the deleted cluster.
     assert!(
-        !app.subs
-            .keys()
-            .any(|k| matches!(k, SigKey::Fr { bus: 0, .. })),
+        !app.subs.keys().any(|k| k.cluster() == fr0.cluster()),
         "FR0's subscription is gone"
     );
-    assert!(app.subs.contains_key(&SigKey::Fr {
-        cluster: crate::model::ClusterId(0),
-        bus: 1,
-        slot,
-        name: "CarSpeed".to_string()
-    }));
+    assert!(app.subs.contains_key(&fr1));
     assert_eq!(
         app.graphics[0]
             .signals
             .iter()
             .map(|s| match &s.key {
-                SigKey::Fr { bus, .. } => *bus,
+                SigKey::Fr { cluster, .. } => cluster.0,
                 _ => 255,
             })
             .collect::<Vec<_>>(),
-        [1],
+        [fr1.cluster().expect("a cluster").0],
         "only FR1's curve is left"
     );
     assert_eq!(

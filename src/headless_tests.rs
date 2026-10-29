@@ -61,7 +61,7 @@ fn a_full_virtual_run_composes_through_commands_and_snapshots() {
         src: ValueSrc::new("EngineSpeed", SrcKind::Sine, 0.0, 8000.0),
     });
     app.send(crate::bus::BusCommand::Subscribe {
-        key: SigKey::can(0, 0x100, false, "EngineSpeed"),
+        key: SigKey::can_in(crate::model::ClusterId(1), 0x100, false, "EngineSpeed"),
     });
 
     // Three simulated seconds at 1 ms. 0x100 has no declared cycle in
@@ -91,7 +91,12 @@ fn a_full_virtual_run_composes_through_commands_and_snapshots() {
         agg.cycle_us
     );
     let sub = app
-        .sub_view(&SigKey::can(0, 0x100, false, "EngineSpeed"))
+        .sub_view(&SigKey::can_in(
+            crate::model::ClusterId(1),
+            0x100,
+            false,
+            "EngineSpeed",
+        ))
         .expect("subscribed");
     assert!(
         sub.history.len() >= 20,
@@ -1121,7 +1126,12 @@ fn perf_snapshot_publish_under_load() {
     for (id, ext) in &db.order {
         let msg = db.messages.get(&(*id, *ext)).expect("message table");
         for s in &msg.signals {
-            keys.push(SigKey::can(0, *id, *ext, s.name.clone()));
+            keys.push(SigKey::can_in(
+                crate::model::ClusterId(1),
+                *id,
+                *ext,
+                s.name.clone(),
+            ));
         }
     }
     assert!(keys.len() >= 4, "need a handful of signals to subscribe");
@@ -1610,7 +1620,12 @@ fn panel_setpoints_write_a_dbc_signal() {
     );
 
     app.send(crate::bus::BusCommand::PanelWriteSignal {
-        key: crate::observe::SigKey::can(0, 0x100, false, "EngineSpeed"),
+        key: crate::observe::SigKey::can_in(
+            crate::model::ClusterId(1),
+            0x100,
+            false,
+            "EngineSpeed",
+        ),
         value: 1234.5,
     });
     laps(&mut app, 1, &mut now);
@@ -1639,7 +1654,12 @@ fn panel_setpoints_write_a_dbc_signal() {
         .dlc
         .min(crate::can::frame::MAX_CAN_FD_LEN as u64) as u8;
     app.send(crate::bus::BusCommand::PanelWriteSignal {
-        key: crate::observe::SigKey::can(0, 0x100, false, "EngineSpeed"),
+        key: crate::observe::SigKey::can_in(
+            crate::model::ClusterId(1),
+            0x100,
+            false,
+            "EngineSpeed",
+        ),
         value: max + 10_000.0,
     });
     laps(&mut app, 1, &mut now);
@@ -1653,7 +1673,12 @@ fn panel_setpoints_write_a_dbc_signal() {
     );
 
     app.send(crate::bus::BusCommand::PanelWriteSignal {
-        key: crate::observe::SigKey::can(0, 0x100, false, "NoSuchSignal"),
+        key: crate::observe::SigKey::can_in(
+            crate::model::ClusterId(1),
+            0x100,
+            false,
+            "NoSuchSignal",
+        ),
         value: 1.0,
     });
     laps(&mut app, 1, &mut now);
@@ -1682,7 +1707,7 @@ fn panel_setpoints_write_a_flexray_signal() {
             app.tick(*now);
         }
     };
-    let key = crate::observe::SigKey::fr(0, 25, "EngSpeed");
+    let key = app.fr_key(0, 25, "EngSpeed".to_string());
     app.subscribe(key.clone());
     laps(&mut app, 1, &mut now);
 
@@ -1712,7 +1737,7 @@ fn panel_setpoints_write_a_flexray_signal() {
     );
 
     app.send(crate::bus::BusCommand::PanelWriteSignal {
-        key: crate::observe::SigKey::fr(0, 25, "NoSuchSignal"),
+        key: app.fr_key(0, 25, "NoSuchSignal".to_string()),
         value: 1.0,
     });
     laps(&mut app, 1, &mut now);
@@ -2112,7 +2137,7 @@ fn panel_setpoints_write_an_ethernet_signal() {
             app.tick(*now);
         }
     };
-    let key = crate::observe::SigKey::eth(0, "EthFrame", "Sig");
+    let key = app.eth_key(0, "EthFrame".to_string(), "Sig".to_string());
     app.subscribe(key.clone());
     laps(&mut app, 1, &mut now);
 
@@ -2157,7 +2182,7 @@ fn panel_setpoints_write_an_ethernet_signal() {
     );
 
     app.send(crate::bus::BusCommand::PanelWriteSignal {
-        key: crate::observe::SigKey::eth(0, "EthFrame", "NoSuchSignal"),
+        key: app.eth_key(0, "EthFrame".to_string(), "NoSuchSignal".to_string()),
         value: 1.0,
     });
     laps(&mut app, 1, &mut now);

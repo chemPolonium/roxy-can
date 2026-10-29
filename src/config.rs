@@ -721,44 +721,86 @@ pub struct Config {
 
 /// The project-file fields a signal key writes: the CAN triple, or the
 /// FlexRay bus in `ch` with its slot in `fr_slot`, or the Ethernet bus in
-/// `ch` with the frame name in `eth_frame`. A FlexRay or Ethernet signal no
-/// longer borrows an arbitration id, so nothing here can be mistaken for one.
-fn sig_cfg_of(key: &SigKey) -> (u8, u32, bool, Option<u16>, Option<String>, Option<String>) {
+/// `ch` with the frame name in `eth_frame`. The bus is resolved from the
+/// key's cluster; these v1 fields keep their old numbering.
+fn sig_cfg_of(
+    app: &App,
+    key: &SigKey,
+) -> (u8, u32, bool, Option<u16>, Option<String>, Option<String>) {
     match key {
-        SigKey::Can { ch, id, ext, .. } => (*ch, *id, *ext, None, None, None),
-        SigKey::Fr { bus, slot, .. } => (*bus, 0, false, Some(*slot), None, None),
-        SigKey::Eth { bus, frame, .. } => (*bus, 0, false, None, Some(frame.clone()), None),
+        SigKey::Can { id, ext, .. } => (app.key_bus(key).unwrap_or(0), *id, *ext, None, None, None),
+        SigKey::Fr { slot, .. } => (
+            app.key_bus(key).unwrap_or(0),
+            0,
+            false,
+            Some(*slot),
+            None,
+            None,
+        ),
+        SigKey::Eth { frame, .. } => (
+            app.key_bus(key).unwrap_or(0),
+            0,
+            false,
+            None,
+            Some(frame.clone()),
+            None,
+        ),
         SigKey::Derived { id, .. } => (0, 0, false, None, None, Some(id.clone())),
     }
 }
 
-/// The key a project-file field set names.
-fn sig_key(
-    ch: u8,
-    id: u32,
-    ext: bool,
+/// The bus-count to cluster map a v1 window field set is rebuilt against.
+struct KeyMaps<'a> {
+    can: &'a [u32],
+    fr: &'a std::collections::BTreeMap<u8, u32>,
+    eth: &'a std::collections::BTreeMap<u8, u32>,
+}
+
+/// The v1 placement fields shared by a curve/row and a Monitor row.
+struct LegacySlot<'a> {
     fr_slot: Option<u16>,
-    eth_frame: Option<String>,
-    derived: Option<String>,
-    signal: String,
-) -> SigKey {
-    if let Some(id) = derived {
-        return SigKey::derived(id, signal);
-    }
-    if let Some(frame) = eth_frame {
-        return SigKey::eth(ch, frame, signal);
-    }
-    match fr_slot {
-        Some(slot) => SigKey::fr(ch, slot, signal),
-        None => SigKey::can(ch, id, ext, signal),
+    eth_frame: Option<&'a str>,
+    derived: Option<&'a str>,
+    signal: &'a str,
+}
+
+impl LegacySlot<'_> {
+    fn key(&self, maps: &KeyMaps<'_>, ch: u8, id: u32, ext: bool) -> SigKey {
+        if let Some(id) = self.derived {
+            return SigKey::derived(id, self.signal);
+        }
+        if let Some(frame) = self.eth_frame {
+            let cluster = maps.eth.get(&ch).copied().unwrap_or(0);
+            return SigKey::eth_in(crate::model::ClusterId(cluster), frame, self.signal);
+        }
+        match self.fr_slot {
+            Some(slot) => {
+                let cluster = maps.fr.get(&ch).copied().unwrap_or(0);
+                SigKey::fr_in(crate::model::ClusterId(cluster), slot, self.signal)
+            }
+            None => {
+                let cluster = maps.can.get(ch as usize).copied().unwrap_or(0);
+                SigKey::can_in(crate::model::ClusterId(cluster), id, ext, self.signal)
+            }
+        }
     }
 }
 
-fn sig_cfgs(signals: &[GfxSignal]) -> Vec<SignalCfg> {
+fn sig_key(maps: &KeyMaps<'_>, s: &SignalCfg) -> SigKey {
+    LegacySlot {
+        fr_slot: s.fr_slot,
+        eth_frame: s.eth_frame.as_deref(),
+        derived: s.derived.as_deref(),
+        signal: &s.signal,
+    }
+    .key(maps, s.ch, s.id, s.ext)
+}
+
+fn sig_cfgs(app: &App, signals: &[GfxSignal]) -> Vec<SignalCfg> {
     signals
         .iter()
         .map(|s| {
-            let (ch, id, ext, fr_slot, eth_frame, derived) = sig_cfg_of(&s.key);
+            let (ch, id, ext, fr_slot, eth_frame, derived) = sig_cfg_of(app, &s.key);
             SignalCfg {
                 ch,
                 id,
@@ -805,19 +847,11 @@ fn value_src(c: SrcCfg) -> Option<ValueSrc> {
     })
 }
 
-fn sig_keys(signals: &[SignalCfg]) -> Vec<GfxSignal> {
+fn sig_keys(maps: &KeyMaps<'_>, signals: &[SignalCfg]) -> Vec<GfxSignal> {
     signals
         .iter()
         .map(|s| GfxSignal {
-            key: sig_key(
-                s.ch,
-                s.id,
-                s.ext,
-                s.fr_slot,
-                s.eth_frame.clone(),
-                s.derived.clone(),
-                s.signal.clone(),
-            ),
+            key: sig_key(maps, s),
             visible: s.visible,
             y_mode: YMode::from_u8(s.y_mode),
         })
@@ -967,7 +1001,7 @@ impl Config {
                 .map(|g| GfxCfg {
                     name: g.name.clone(),
                     opened: g.opened,
-                    signals: sig_cfgs(&g.signals),
+                    signals: sig_cfgs(app, &g.signals),
                     time_window_s: g.time_window_s,
                     stacked: g.stacked,
                     show_cursor: g.show_cursor,
@@ -981,7 +1015,7 @@ impl Config {
                 .map(|d| DataCfg {
                     name: d.name.clone(),
                     opened: d.opened,
-                    signals: sig_cfgs(&d.signals),
+                    signals: sig_cfgs(app, &d.signals),
                 })
                 .collect(),
             monitor_rows: app
@@ -989,7 +1023,7 @@ impl Config {
                 .rows
                 .iter()
                 .map(|r| {
-                    let (ch, id, ext, fr_slot, eth_frame, derived) = sig_cfg_of(&r.key);
+                    let (ch, id, ext, fr_slot, eth_frame, derived) = sig_cfg_of(app, &r.key);
                     MonitorRowCfg {
                         ch,
                         id,
@@ -1019,7 +1053,8 @@ impl Config {
                         .signals
                         .iter()
                         .map(|s| {
-                            let (ch, id, ext, fr_slot, eth_frame, derived) = sig_cfg_of(&s.key);
+                            let (ch, id, ext, fr_slot, eth_frame, derived) =
+                                sig_cfg_of(app, &s.key);
                             SignalCfg {
                                 ch,
                                 id,
@@ -1410,12 +1445,22 @@ impl Config {
                 text_rows: Vec::new(),
             })
             .collect();
+        // The snapshot's cluster ids are the only bus-count-to-cluster map the
+        // v1 window fields can be rebuilt against.
+        let can_ids = app.snap.cluster_ids.can.clone();
+        let fr_ids = app.snap.cluster_ids.fr.clone();
+        let eth_ids = app.snap.cluster_ids.eth.clone();
+        let maps = KeyMaps {
+            can: &can_ids,
+            fr: &fr_ids,
+            eth: &eth_ids,
+        };
         app.graphics = self
             .graphics
             .into_iter()
             .map(|g| GraphicsWindow {
                 name: g.name,
-                signals: sig_keys(&g.signals),
+                signals: sig_keys(&maps, &g.signals),
                 time_window_s: g.time_window_s.clamp(0.1, 3600.0),
                 stacked: g.stacked,
                 opened: g.opened,
@@ -1437,7 +1482,7 @@ impl Config {
             .into_iter()
             .map(|d| DataWindow {
                 name: d.name,
-                signals: sig_keys(&d.signals),
+                signals: sig_keys(&maps, &d.signals),
                 opened: d.opened,
                 #[cfg(test)]
                 text_keys: Vec::new(),
@@ -1450,15 +1495,13 @@ impl Config {
                 .monitor_rows
                 .into_iter()
                 .map(|m| crate::app::MonitorRow {
-                    key: sig_key(
-                        m.ch,
-                        m.id,
-                        m.ext,
-                        m.fr_slot,
-                        m.eth_frame,
-                        m.derived,
-                        m.signal,
-                    ),
+                    key: LegacySlot {
+                        fr_slot: m.fr_slot,
+                        eth_frame: m.eth_frame.as_deref(),
+                        derived: m.derived.as_deref(),
+                        signal: &m.signal,
+                    }
+                    .key(&maps, m.ch, m.id, m.ext),
                     label: m.label,
                     digits: m.digits,
                     rule_on: m.rule_on,
@@ -1472,7 +1515,7 @@ impl Config {
             .state_trackers
             .into_iter()
             .map(|w| {
-                let signals = sig_keys(&w.signals);
+                let signals = sig_keys(&maps, &w.signals);
                 let mut rules = HashMap::new();
                 let mut overrides = HashMap::new();
                 for (s, cfg) in signals.iter().zip(&w.signals) {
@@ -1890,13 +1933,10 @@ mod tests {
         assert_eq!(app.fr_bus_name(1), "动力总成");
         assert_eq!(app.fr_bus_label(1), "动力总成 (FR1)");
         assert_eq!(app.fr_bus_name(0), "FR0", "another 路 is untouched");
+        let cluster = app.cluster_ids.allocate();
+        app.fr_cluster_ids.insert(1, cluster);
         assert_eq!(
-            app.sig_bus_label(&crate::observe::SigKey::Fr {
-                cluster: crate::model::ClusterId(0),
-                bus: 1,
-                slot: 13,
-                name: "DriveTorque".to_string(),
-            }),
+            app.sig_bus_label(&crate::observe::SigKey::fr_in(cluster, 13, "DriveTorque")),
             "动力总成",
             "the legends a FlexRay signal appears in follow the name"
         );
@@ -2183,11 +2223,8 @@ mod tests {
     #[test]
     fn monitor_rows_round_trip_with_the_project() {
         let mut app = App::headless();
-        app.set_win_signal(
-            crate::workspace::PopupTarget::Monitor,
-            SigKey::can(0, 0x100, false, "EngineStatus"),
-            true,
-        );
+        let key = app.can_key(0, 0x100, false, "EngineStatus".to_string());
+        app.set_win_signal(crate::workspace::PopupTarget::Monitor, key, true);
         assert_eq!(app.monitor_view.rows.len(), 1, "the row was added");
         app.monitor_view.rows[0].digits = 2;
         app.monitor_view.rows[0].rule_on = true;
@@ -2206,7 +2243,7 @@ mod tests {
             matches!(
                 r.key,
                 crate::observe::SigKey::Can {
-                    ch: 0,
+                    cluster: crate::model::ClusterId(1),
                     id: 0x100,
                     ext: false,
                     ..
@@ -2795,13 +2832,16 @@ mod eth_config_tests {
     /// come back pointing at a CAN id no frame ever carries.
     #[test]
     fn ethernet_signal_keys_round_trip_through_project_fields() {
-        let key = SigKey::eth(2, "SpeedFrame", "Speed");
+        let mut app = App::headless();
+        let cluster = app.cluster_ids.allocate();
+        app.eth_cluster_ids.insert(2, cluster);
+        let key = app.eth_key(2, "SpeedFrame".to_string(), "Speed".to_string());
         let gfx = GfxSignal {
             key: key.clone(),
             visible: true,
             y_mode: YMode::Auto,
         };
-        let cfg = sig_cfgs(&[gfx]);
+        let cfg = sig_cfgs(&app, &[gfx]);
         assert_eq!(cfg[0].ch, 2);
         assert_eq!(cfg[0].eth_frame.as_deref(), Some("SpeedFrame"));
         assert_eq!(cfg[0].fr_slot, None);
@@ -2812,7 +2852,17 @@ mod eth_config_tests {
             "the frame is stated in the file: {json}"
         );
         let back: SignalCfg = serde_json::from_str(&json).unwrap();
-        assert_eq!(sig_keys(&[back])[0].key, key);
+        let mut eth = std::collections::BTreeMap::new();
+        eth.insert(2u8, cluster.0);
+        let can: Vec<u32> = Vec::new();
+        let fr = std::collections::BTreeMap::new();
+        let maps = KeyMaps {
+            can: &can,
+            fr: &fr,
+            eth: &eth,
+        };
+        let keys = sig_keys(&maps, &[back]);
+        assert_eq!(keys[0].key, key);
     }
 
     /// A hand-picked Ethernet flow is part of the window's Manual selection,
