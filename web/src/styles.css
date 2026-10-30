@@ -2816,7 +2816,9 @@ body.row-resizing {
    buttons (the Node Scripts list) are exempt: they size to their content. */
 .modal-backdrop
   > :not(.palette)
-  button:not(.script-item):not(.script-issue):not(.picker-mode),
+  button:not(.script-item):not(.script-issue):not(.picker-mode):not(
+    .description-remove
+  ),
 .modal-backdrop > :not(.palette) select,
 .modal-backdrop
   > :not(.palette)
@@ -3633,15 +3635,15 @@ button.mini.on {
 .description-chip {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
-  height: 20px;
-  padding: 0 3px 0 6px;
+  gap: 4px;
+  min-height: 20px;
+  padding: 0 2px 0 6px;
   border: 1px solid var(--line);
   border-radius: 3px;
   background: var(--panel);
   color: var(--text);
   font-size: 10px;
-  line-height: 18px;
+  line-height: 1.4;
 }
 
 .description-chip em {
@@ -3656,14 +3658,18 @@ button.mini.on {
 }
 
 .description-remove {
-  width: 16px;
-  height: 16px;
+  display: grid;
+  flex: 0 0 18px;
+  place-items: center;
+  width: 18px;
+  height: 18px;
   padding: 0;
   border: none;
+  border-radius: 2px;
   background: transparent;
   color: var(--muted);
-  font-size: 12px;
-  line-height: 16px;
+  font-size: 13px;
+  line-height: 1;
   cursor: pointer;
 }
 
