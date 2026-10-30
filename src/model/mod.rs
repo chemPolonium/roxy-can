@@ -1010,6 +1010,13 @@ impl Comm {
             cluster.id = to;
             self.clusters.insert(to, cluster);
         }
+        let old_network = NetworkId(old.0);
+        let new_network = NetworkId(to.0);
+        if let Some(mut network) = self.networks.remove(&old_network) {
+            network.id = new_network;
+            network.cluster = to;
+            self.networks.insert(new_network, network);
+        }
         for network in self.networks.values_mut() {
             if network.cluster == old {
                 network.cluster = to;
@@ -1019,7 +1026,65 @@ impl Comm {
             if frame.cluster == old {
                 frame.cluster = to;
             }
+            if frame.network == old_network {
+                frame.network = new_network;
+            }
         }
+    }
+
+    /// Merges a second description of the same physical cluster into this
+    /// model. Both sides must already name `cluster`; ids stay unique because
+    /// each source was imported under its own temporary cluster id before the
+    /// rebind. Duplicate declarations keep the first model's entry.
+    pub fn merge_from(&mut self, mut other: Comm, cluster: ClusterId) {
+        if let Some(extra) = other.clusters.remove(&cluster) {
+            match self.clusters.get_mut(&cluster) {
+                Some(base) => {
+                    for source in extra.sources {
+                        if !base.sources.contains(&source) {
+                            base.sources.push(source);
+                        }
+                    }
+                    for alias in extra.aliases {
+                        if !base.aliases.contains(&alias) {
+                            base.aliases.push(alias);
+                        }
+                    }
+                    if base.description.is_empty() {
+                        base.description = extra.description;
+                    }
+                }
+                None => {
+                    self.clusters.insert(cluster, extra);
+                }
+            }
+        }
+        for (id, network) in other.networks {
+            self.networks.entry(id).or_insert(network);
+        }
+        self.ecus.extend(other.ecus);
+        self.connectors.extend(other.connectors);
+        self.frames.extend(other.frames);
+        self.pdus.extend(other.pdus);
+        self.signals.extend(other.signals);
+        self.system_signals.extend(other.system_signals);
+        self.groups.extend(other.groups);
+        self.base_types.extend(other.base_types);
+        self.compu_methods.extend(other.compu_methods);
+        self.transformations.extend(other.transformations);
+        self.e2e.extend(other.e2e);
+        self.frame_pdu_mappings.extend(other.frame_pdu_mappings);
+        self.signal_pdu_mappings.extend(other.signal_pdu_mappings);
+        self.contained_pdu_mappings
+            .extend(other.contained_pdu_mappings);
+        self.multiplexed_parts.extend(other.multiplexed_parts);
+        self.frame_relations.extend(other.frame_relations);
+        self.pdu_relations.extend(other.pdu_relations);
+        self.signal_relations.extend(other.signal_relations);
+        for (frame, over) in other.overrides {
+            self.overrides.entry(frame).or_insert(over);
+        }
+        self.issues.extend(other.issues);
     }
 
     pub fn cluster_by_name(&self, name: &str) -> Option<&Cluster> {

@@ -265,6 +265,59 @@ impl FrDb {
         db
     }
 
+    /// Merges another description of the same physical cluster. Timing must
+    /// agree; duplicate ECUs/PDUs/frames keep the first file's copy and are
+    /// reported back as warnings.
+    pub fn merge(&mut self, other: FrDb) -> Result<Vec<String>, String> {
+        if self.params != other.params {
+            return Err(format!(
+                "FlexRay timing differs ({} kbit/s / {} ms vs {} kbit/s / {} ms)",
+                self.params.speed_kbps,
+                self.params.cycle_time_ms,
+                other.params.speed_kbps,
+                other.params.cycle_time_ms
+            ));
+        }
+        let mut warnings = Vec::new();
+        let mut ecus = self.ecus.clone();
+        for ecu in other.ecus {
+            if !ecus.contains(&ecu) {
+                ecus.push(ecu);
+            }
+        }
+        let mut pdus = self.pdus.clone();
+        for pdu in other.pdus {
+            if pdus.iter().any(|known| known.name == pdu.name) {
+                warnings.push(format!("PDU `{}` is declared twice; first wins", pdu.name));
+            } else {
+                pdus.push(pdu);
+            }
+        }
+        let mut frames = self.frames.clone();
+        for frame in other.frames {
+            let duplicate = frames.iter().any(|known| {
+                known.name == frame.name
+                    && known.triggering.slot_id == frame.triggering.slot_id
+                    && known.triggering.base_cycle == frame.triggering.base_cycle
+                    && known.triggering.cycle_repetition == frame.triggering.cycle_repetition
+            });
+            if duplicate {
+                warnings.push(format!(
+                    "frame `{}` in slot {} is declared twice; first wins",
+                    frame.name, frame.triggering.slot_id
+                ));
+            } else {
+                frames.push(frame);
+            }
+        }
+        let mut senders = self.pdu_senders.clone();
+        for (pdu, node) in other.pdu_senders {
+            senders.entry(pdu).or_insert(node);
+        }
+        *self = Self::assemble(self.params.clone(), ecus, pdus, frames).with_pdu_senders(senders);
+        Ok(warnings)
+    }
+
     /// Attaches the ECU → transmitted-PDU bindings. Separate from
     /// [`Self::assemble`] because only one of the two document formats carries
     /// them: leaving the map empty is the honest answer for the other.

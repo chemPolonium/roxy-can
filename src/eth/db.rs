@@ -92,6 +92,37 @@ pub struct DecodedSignal {
 }
 
 impl EthDb {
+    /// Merges another matrix describing the same physical bus. A cluster
+    /// name or a frame name inside one cluster keeps the first definition.
+    pub fn merge(&mut self, other: EthDb) -> Vec<String> {
+        let mut warnings = Vec::new();
+        for cluster in other.clusters {
+            if self.clusters.iter().any(|known| known.name == cluster.name) {
+                warnings.push(format!(
+                    "Ethernet cluster `{}` is declared twice; first wins",
+                    cluster.name
+                ));
+            } else {
+                self.clusters.push(cluster);
+            }
+        }
+        for frame in other.frames {
+            if self
+                .frames
+                .iter()
+                .any(|known| known.name == frame.name && known.cluster == frame.cluster)
+            {
+                warnings.push(format!(
+                    "Ethernet frame `{}` in `{}` is declared twice; first wins",
+                    frame.name, frame.cluster
+                ));
+            } else {
+                self.frames.push(frame);
+            }
+        }
+        warnings
+    }
+
     pub fn parse(text: &str) -> Result<Self, String> {
         let doc = Document::parse(text).map_err(|e| e.to_string())?;
         let root = doc.root_element();
