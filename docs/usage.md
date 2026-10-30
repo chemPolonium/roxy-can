@@ -237,7 +237,7 @@ roxy-can -h                               完整帮助
 
 ## 工程文件
 
-- 工程（`.rxproj`）单文件 JSON（schema v2：cluster 带持久化 id，回放映射、generator 与 trigger 行按 cluster id 记录；旧工程打开时一次性迁移），描述文件路径相对工程目录。
+- 工程（`.rxproj`）单文件 JSON（schema v2：cluster 带持久化 id，回放映射表项存 cluster id（播放时再解析成路），generator 与 trigger 行按 cluster id 记录；旧工程打开时一次性迁移），描述文件路径相对工程目录。
 - 只保留当前格式：旧版本工程里已删除的字段不会再被迁移（例如旧的 dock 布局、`sim_nodes`、单 FIBEX 路径）；未知字段按 serde 规则忽略。
 - 新会话从 Web workspace 恢复：主视图（Trace/Messages/Panel）、右侧标签页、下栏标签页、已选信号与 Read 集、曲线游标、列宽/列显隐、分栏比例与 Panel book 都按保存的状态回来；没有"先加窗口再填内容"的步骤。
 - 坏库容错：复用报文的 mux 条件引用了不存在的开关时按"无条件"处理（显示数据而不是空解码）。
