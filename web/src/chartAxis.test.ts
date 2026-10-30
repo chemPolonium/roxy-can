@@ -12,8 +12,8 @@ describe("value axis ticks", () => {
     expect(niceTicks(-762, 8382, 3)).toContain(0);
   });
 
-  it("falls back to the padded bounds when no step yields two ticks", () => {
-    expect(niceTicks(180, 7620, 2)).toEqual([180, 7620]);
+  it("prefers an extra tick over falling back to the padded bounds", () => {
+    expect(niceTicks(180, 7620, 2)).toEqual([2000, 4000, 6000]);
   });
 
   it("returns nothing for a flat range", () => {

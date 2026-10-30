@@ -20,7 +20,7 @@ const Y_AXIS_W = 52;
 function yAxisWidth(height: number, lanes: number, overlay: boolean): number {
   if (overlay) return 8;
   const laneH = Math.max(1, (height - TOP - AXIS_H) / Math.max(1, lanes));
-  return laneH >= 24 ? Y_AXIS_W : 8;
+  return laneH >= 32 ? Y_AXIS_W : 8;
 }
 
 function plotWidthFor(
@@ -287,7 +287,7 @@ export function niceTicks(
       ticks.push(Number(v.toFixed(10)));
       if (ticks.length > maxTicks + 2) break;
     }
-    if (ticks.length === 0) continue;
+    if (ticks.length < 2) continue;
     // Overshooting the label budget overlaps the lane; undershooting merely
     // shows fewer ticks, so treat the former as the worse outcome.
     const score =
@@ -831,12 +831,11 @@ export function SignalChart({
           plotTop + plotH - ((value - low) / (high - low)) * plotH;
 
         // Nice ticks plus faint horizontal rules give a stable scale; the
-        // zero line stands out for bipolar signals. A heavily split pane drops
-        // the axis entirely rather than stacking unreadable numbers.
+        // zero line stands out for bipolar signals. Below 24px of plot the
+        // axis drops out entirely rather than stacking unreadable numbers.
         const axisRight = GUTTER + plotW;
-        const maxTicks =
-          plotH >= 120 ? 6 : plotH >= 72 ? 5 : plotH >= 28 ? 3 : 2;
-        const ticks = plotH >= 16 ? niceTicks(low, high, maxTicks) : [];
+        const maxTicks = plotH >= 120 ? 6 : plotH >= 72 ? 5 : 3;
+        const ticks = plotH >= 24 ? niceTicks(low, high, maxTicks) : [];
 
         if (ticks.length > 0) {
           ctx.strokeStyle = colors.signalTimeGrid;
@@ -868,11 +867,10 @@ export function SignalChart({
 
           ctx.fillStyle = colors.signalMeta;
           ctx.font = "10px 'Cascadia Mono', Consolas, monospace";
-          ctx.textAlign = "right";
-          for (const value of ticks) {
-            ctx.fillText(axisText(value), width - 8, y(value) + 3.5);
-          }
           ctx.textAlign = "left";
+          for (const value of ticks) {
+            ctx.fillText(axisText(value), axisRight + 7, y(value) + 3.5);
+          }
         }
 
         if (raw) {
