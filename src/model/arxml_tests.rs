@@ -159,12 +159,6 @@ fn imports_can_frame_pdu_and_signal() {
     assert_eq!(signal.initial_physical(), Some(10.0));
     assert_eq!(signal.id, comm.signals.keys().next().copied().unwrap());
 
-    let key = comm.signal_key(signal).unwrap();
-    assert_eq!(
-        SignalRef::parse(&key.text(), &comm).unwrap(),
-        SignalRef::Signal(key)
-    );
-    assert_eq!(key.display(&comm), "[CanCluster:EngineFrame:Speed]");
     let ecu = comm.ecus.values().find(|ecu| ecu.name == "ECU_A").unwrap();
     assert_eq!(comm.sender_of_frame(frame.id), Some(ecu));
     let group = comm.groups.values().next().unwrap();

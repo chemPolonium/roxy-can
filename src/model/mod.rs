@@ -39,7 +39,7 @@ pub use dbc_import::{
 #[allow(unused_imports)]
 pub use id::{ClusterIds, ElementIds, ElementKind};
 #[allow(unused_imports)]
-pub use key::{BusMap, KeyError, SignalKey, SignalRef};
+pub use key::BusMap;
 #[allow(unused_imports)]
 pub use legacy_import::{import_eth_db, import_eth_db_obj, import_fibex, import_fr_db};
 #[allow(unused_imports)]
@@ -1164,16 +1164,6 @@ impl Comm {
             .iter()
             .find(|r| r.pdu == pdu && r.role == RelationRole::Sender)
             .and_then(|r| self.ecus.get(&r.ecu))
-    }
-
-    pub fn signal_key(&self, signal: &Signal) -> Option<SignalKey> {
-        let frame_id = self.frame_for_pdu(signal.pdu)?;
-        let frame = self.frames.get(&frame_id)?;
-        Some(SignalKey {
-            cluster: frame.cluster,
-            frame: frame.id,
-            signal: signal.id,
-        })
     }
 
     fn frame_for_pdu(&self, pdu: PduId) -> Option<FrameId> {
