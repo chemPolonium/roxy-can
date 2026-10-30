@@ -315,6 +315,52 @@ export function niceTicks(
   return best.length >= 2 ? best : [low, high];
 }
 
+export interface NiceAxis {
+  low: number;
+  high: number;
+  ticks: number[];
+}
+
+/// Snap the axis bounds to the tick grid so the labels span the whole lane
+/// instead of clustering in the middle. Rejected when the snap would waste
+/// too much of the lane or pack the labels; the caller then keeps the padded
+/// range with interior ticks.
+export function niceAxis(
+  low: number,
+  high: number,
+  maxTicks: number,
+  plotH: number,
+): NiceAxis | null {
+  const span = high - low;
+  if (!(span > 0) || !Number.isFinite(span)) return null;
+  const target = Math.max(1, maxTicks - 1);
+  const rough = span / target;
+  const base = 10 ** Math.floor(Math.log10(rough));
+  let best: NiceAxis | null = null;
+  let bestScore = Number.POSITIVE_INFINITY;
+  for (const mult of [1, 2, 2.5, 5, 10]) {
+    const step = base * mult;
+    const lowB = Math.floor(low / step) * step;
+    const highB = Math.ceil(high / step) * step;
+    const intervals = Math.round((highB - lowB) / step);
+    const count = intervals + 1;
+    if (intervals < 1 || count > maxTicks) continue;
+    if (plotH / intervals < 20) continue;
+    const fill = span / (highB - lowB);
+    if (fill < 0.6) continue;
+    const ticks: number[] = [];
+    for (let i = 0; i <= intervals; i += 1) {
+      ticks.push(Number((lowB + i * step).toFixed(10)));
+    }
+    const score = (maxTicks - count) * 2 + (1 - fill) * 10;
+    if (score < bestScore) {
+      best = { low: lowB, high: highB, ticks };
+      bestScore = score;
+    }
+  }
+  return best;
+}
+
 /// Shorten a label to fit the gutter; the full name still shows on hover.
 export function fitText(
   ctx: CanvasRenderingContext2D,
@@ -835,22 +881,29 @@ export function SignalChart({
           low -= 1;
           high += 1;
         }
-        const span = high - low;
-        low -= span * 0.1;
-        high += span * 0.1;
         const plotTop = top + 4;
         const plotH = laneH - 8;
-        const y = (value: number) =>
-          plotTop + plotH - ((value - low) / (high - low)) * plotH;
-
         // Nice ticks plus faint horizontal rules give a stable scale; the
         // zero line stands out for bipolar signals. Below 24px of plot the
         // axis drops out entirely rather than stacking unreadable numbers.
         const axisRight = GUTTER + plotW;
         const maxTicks =
           plotH >= 160 ? 6 : plotH >= 128 ? 5 : plotH >= 96 ? 4 : 3;
-        const ticks =
-          plotH >= 24 ? niceTicks(low, high, maxTicks, plotH) : [];
+        const precise =
+          plotH >= 24 ? niceAxis(low, high, maxTicks, plotH) : null;
+        let ticks: number[] = [];
+        if (precise) {
+          low = precise.low;
+          high = precise.high;
+          ticks = precise.ticks;
+        } else {
+          const span = high - low;
+          low -= span * 0.1;
+          high += span * 0.1;
+          if (plotH >= 24) ticks = niceTicks(low, high, maxTicks, plotH);
+        }
+        const y = (value: number) =>
+          plotTop + plotH - ((value - low) / (high - low)) * plotH;
 
         if (ticks.length > 0) {
           ctx.strokeStyle = colors.signalTimeGrid;
@@ -884,7 +937,14 @@ export function SignalChart({
           ctx.font = "10px 'Cascadia Mono', Consolas, monospace";
           ctx.textAlign = "left";
           for (const value of ticks) {
-            ctx.fillText(axisText(value), axisRight + 7, y(value) + 3.5);
+            // Edge ticks sit on the lane boundary; keep their labels inside
+            // the lane so neighbouring lanes do not stack two numbers.
+            const baseline = clamp(
+              y(value) + 3.5,
+              top + 10,
+              top + laneH - 4,
+            );
+            ctx.fillText(axisText(value), axisRight + 7, baseline);
           }
         }
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { fitText, niceTicks } from "./components/SignalChart";
+import { fitText, niceAxis, niceTicks } from "./components/SignalChart";
 
 describe("value axis ticks", () => {
   it("rounds to readable steps inside the range", () => {
@@ -27,6 +27,34 @@ describe("value axis ticks", () => {
 
   it("returns nothing for a flat range", () => {
     expect(niceTicks(5, 5, 3)).toEqual([]);
+  });
+});
+
+describe("snapped axis bounds", () => {
+  it("spreads the labels across the lane", () => {
+    expect(niceAxis(0, 7620, 3, 60)).toEqual({
+      low: 0,
+      high: 10000,
+      ticks: [0, 5000, 10000],
+    });
+    expect(niceAxis(0, 250, 3, 60)).toEqual({
+      low: 0,
+      high: 250,
+      ticks: [0, 250],
+    });
+  });
+
+  it("adds labels as the lane grows", () => {
+    expect(niceAxis(0, 250, 4, 120)).toEqual({
+      low: 0,
+      high: 300,
+      ticks: [0, 100, 200, 300],
+    });
+  });
+
+  it("keeps the padded range when snapping would waste the lane", () => {
+    expect(niceAxis(-10, 110, 3, 60)).toBeNull();
+    expect(niceAxis(0, 1100, 3, 60)).toBeNull();
   });
 });
 
