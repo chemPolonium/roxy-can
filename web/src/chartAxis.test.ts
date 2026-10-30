@@ -16,6 +16,15 @@ describe("value axis ticks", () => {
     expect(niceTicks(180, 7620, 2)).toEqual([2000, 4000, 6000]);
   });
 
+  it("drops a cramped step when the lane is short", () => {
+    expect(niceTicks(-321, 1822, 3, 60)).toEqual([0, 1000]);
+    expect(niceTicks(-321, 1822, 3, 30)).toEqual([0, 1000]);
+  });
+
+  it("keeps a readable step when the lane has room", () => {
+    expect(niceTicks(-321, 1822, 4, 96)).toEqual([0, 500, 1000, 1500]);
+  });
+
   it("returns nothing for a flat range", () => {
     expect(niceTicks(5, 5, 3)).toEqual([]);
   });

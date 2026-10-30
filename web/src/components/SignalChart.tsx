@@ -267,19 +267,26 @@ function axisText(value: number): string {
 }
 
 /// Round ticks to 1/2/2.5/5 steps so a live auto range produces stable,
-/// readable labels instead of the raw padded extremes.
+/// readable labels instead of the raw padded extremes. `plotH` filters out
+/// steps whose labels would sit closer than the lane can comfortably show.
 export function niceTicks(
   low: number,
   high: number,
   maxTicks: number,
+  plotH = Number.POSITIVE_INFINITY,
 ): number[] {
   const span = high - low;
   if (!(span > 0) || !Number.isFinite(span)) return [];
   const rough = span / Math.max(1, maxTicks - 1);
   const base = 10 ** Math.floor(Math.log10(rough));
+  const minGap = Number.isFinite(plotH)
+    ? Math.max(14, plotH / (maxTicks + 1))
+    : 0;
   let best: number[] = [];
   let bestScore = Number.POSITIVE_INFINITY;
-  for (const mult of [1, 2, 2.5, 5]) {
+  let spaced: number[] = [];
+  let spacedScore = Number.POSITIVE_INFINITY;
+  for (const mult of [1, 2, 2.5, 5, 10]) {
     const step = base * mult;
     const first = Math.ceil(low / step - 1e-9) * step;
     const ticks: number[] = [];
@@ -298,7 +305,13 @@ export function niceTicks(
       best = ticks;
       bestScore = score;
     }
+    if (minGap > 0 && (step / span) * plotH < minGap) continue;
+    if (score < spacedScore) {
+      spaced = ticks;
+      spacedScore = score;
+    }
   }
+  if (spaced.length >= 2) return spaced;
   return best.length >= 2 ? best : [low, high];
 }
 
@@ -834,8 +847,10 @@ export function SignalChart({
         // zero line stands out for bipolar signals. Below 24px of plot the
         // axis drops out entirely rather than stacking unreadable numbers.
         const axisRight = GUTTER + plotW;
-        const maxTicks = plotH >= 120 ? 6 : plotH >= 72 ? 5 : 3;
-        const ticks = plotH >= 24 ? niceTicks(low, high, maxTicks) : [];
+        const maxTicks =
+          plotH >= 160 ? 6 : plotH >= 128 ? 5 : plotH >= 96 ? 4 : 3;
+        const ticks =
+          plotH >= 24 ? niceTicks(low, high, maxTicks, plotH) : [];
 
         if (ticks.length > 0) {
           ctx.strokeStyle = colors.signalTimeGrid;
