@@ -11,7 +11,6 @@ mod id;
 mod import;
 mod key;
 mod plan;
-mod project_cfg;
 mod runtime;
 mod schema;
 
@@ -44,8 +43,6 @@ pub use import::{import_eth_db, import_eth_db_obj, import_fibex, import_fr_db};
 pub use key::BusMap;
 #[allow(unused_imports)]
 pub use plan::{PlanCache, build_decode_plan};
-#[allow(unused_imports)]
-pub use project_cfg::project_from_config;
 #[allow(unused_imports)]
 pub use runtime::{DecodedSignal, E2eReading, decode_e2e, decode_payload, encode_payload};
 #[allow(unused_imports)]

@@ -1,8 +1,11 @@
 use std::path::{Path, PathBuf};
 
-use crate::config::{Config, PROJECT_EXT};
-
 use crate::app::App;
+use crate::config::{PROJECT_EXT, ProjectSettings};
+use crate::model::{
+    CanCfg, ClusterCfg, ClusterKind, ClusterSource, EtherCfg, FlexRayCfg, GeneratorCfg, ProjectV2,
+    TriggerCfgV2,
+};
 
 /// Newest-first recent list: dedups and caps at 8 entries.
 fn push_recent(list: &mut Vec<String>, path: String) {
@@ -25,6 +28,791 @@ fn app_record_draft_is_default(draft: &str) -> bool {
     }
     let norm = draft.replace('\\', "/").to_ascii_lowercase();
     norm.ends_with("/record/record")
+}
+
+impl ProjectV2 {
+    /// The whole workspace as a project file: bus descriptions first, then
+    /// the settings/exports that reference them by cluster id.
+    pub fn from_app(app: &App, base: Option<&Path>) -> Self {
+        let rel = |path: &String| match base {
+            Some(base) => crate::config::relativize(path, base),
+            None => path.clone(),
+        };
+        let ids = &app.snap.cluster_ids;
+        let mut clusters = Vec::new();
+
+        for (index, channel) in app.snap.channels.iter().enumerate() {
+            let mut sources: Vec<ClusterSource> = channel
+                .dbc_paths
+                .iter()
+                .filter(|path| !path.trim().is_empty())
+                .map(|path| ClusterSource::Dbc { path: rel(path) })
+                .collect();
+            if let Some(list) = app.can_arxml.get(&(index as u8)) {
+                sources.extend(list.iter().map(|(path, cluster)| ClusterSource::Arxml {
+                    path: rel(path),
+                    cluster: cluster.clone(),
+                }));
+            }
+            clusters.push(ClusterCfg {
+                id: ids.can.get(index).copied().unwrap_or(0),
+                kind: ClusterKind::Can,
+                name: channel.name.clone(),
+                bus: None,
+                aliases: Vec::new(),
+                sources,
+                can: Some(CanCfg {
+                    bitrate_kbps: channel.bitrate_kbps,
+                    fd_data_kbps: channel.fd_data_kbps,
+                }),
+                flexray: None,
+                ether: None,
+                node_roles: channel
+                    .node_roles
+                    .iter()
+                    .map(|(name, role)| (name.clone(), role.tag().to_string()))
+                    .collect(),
+            });
+        }
+
+        let fr_buses: Vec<u8> = app
+            .fr_buses
+            .keys()
+            .chain(app.fr_sources.keys())
+            .chain(app.fr_names.keys())
+            .copied()
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        for bus in &fr_buses {
+            let sources = app
+                .fr_sources
+                .get(bus)
+                .cloned()
+                .filter(|list| !list.is_empty())
+                .unwrap_or_else(|| {
+                    vec![fallback_source(
+                        app.fr_description_path(*bus),
+                        app.fr_cluster_label(*bus),
+                    )]
+                });
+            let params = app
+                .fr_buses
+                .get(bus)
+                .map(|db| (db.params.speed_kbps, db.params.cycle_time_ms))
+                .unwrap_or((0, 0.0));
+            clusters.push(ClusterCfg {
+                id: ids.fr.get(bus).copied().unwrap_or(0),
+                kind: ClusterKind::FlexRay,
+                bus: Some(*bus),
+                name: app
+                    .fr_names
+                    .get(bus)
+                    .cloned()
+                    .unwrap_or_else(|| format!("FR{bus}")),
+                aliases: Vec::new(),
+                sources: sources
+                    .into_iter()
+                    .map(|source| relative_source(source, &rel))
+                    .collect(),
+                can: None,
+                flexray: Some(FlexRayCfg {
+                    speed_kbps: params.0,
+                    cycle_time_ms: params.1,
+                }),
+                ether: None,
+                node_roles: Default::default(),
+            });
+        }
+
+        let eth_buses: Vec<u8> = app
+            .eth_buses
+            .keys()
+            .chain(app.eth_sources.keys())
+            .copied()
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        for bus in &eth_buses {
+            let sources = app
+                .eth_sources
+                .get(bus)
+                .cloned()
+                .filter(|list| !list.is_empty())
+                .unwrap_or_else(|| {
+                    vec![fallback_source(
+                        app.eth_description_path(*bus),
+                        app.eth_cluster_label(*bus),
+                    )]
+                });
+            clusters.push(ClusterCfg {
+                id: ids.eth.get(bus).copied().unwrap_or(0),
+                kind: ClusterKind::Ethernet,
+                name: format!("ETH{bus}"),
+                bus: Some(*bus),
+                aliases: Vec::new(),
+                sources: sources
+                    .into_iter()
+                    .map(|source| relative_source(source, &rel))
+                    .collect(),
+                can: None,
+                flexray: None,
+                ether: Some(EtherCfg {
+                    physical_layer: None,
+                    vlans: Vec::new(),
+                    frame_length_includes_header: app.eth_length_includes_header,
+                }),
+                node_roles: Default::default(),
+            });
+        }
+
+        let mut settings = ProjectSettings::from_app(app, base);
+        for window in &mut settings.trace_windows {
+            window.manual_clusters = window
+                .manual
+                .iter()
+                .filter_map(|&(bus, id)| ids.can.get(bus as usize).map(|cluster| (*cluster, id)))
+                .collect();
+            window.fr_manual_clusters = window
+                .fr_manual
+                .iter()
+                .filter_map(|&(bus, slot)| ids.fr.get(&bus).map(|cluster| (*cluster, slot)))
+                .collect();
+        }
+
+        let mut project = ProjectV2::new(clusters);
+        project.next_cluster_id = ids.next;
+        project.bus_counter = app.snap.bus_counter;
+        project.settings = settings;
+        project.bus_map = Some(crate::model::BusMap {
+            can: ids
+                .can
+                .iter()
+                .copied()
+                .map(crate::model::ClusterId)
+                .collect(),
+            flexray: bus_map(&ids.fr, &fr_buses),
+            ethernet: bus_map(&ids.eth, &eth_buses),
+        });
+        project.replay = replay_entries(app);
+        project.generators = Some(generators(app));
+        project.triggers = Some(triggers(app));
+        project
+    }
+
+    /// Resolves every path a project file carries relative to its directory.
+    pub fn resolve_paths(&mut self, base: Option<&Path>) {
+        for cluster in &mut self.clusters {
+            for source in &mut cluster.sources {
+                match source {
+                    ClusterSource::Dbc { path }
+                    | ClusterSource::Arxml { path, .. }
+                    | ClusterSource::Fibex { path } => {
+                        *path = crate::config::resolve_dbc(path, base);
+                    }
+                    ClusterSource::Manual => {}
+                }
+            }
+        }
+    }
+
+    /// Replaces the live workspace with this project. Buses are created in
+    /// cluster order; the saved cluster ids are restored afterwards so
+    /// generators, triggers and window picks keep pointing at the same
+    /// clusters.
+    pub fn apply(mut self, app: &mut App) -> Vec<String> {
+        let mut problems = Vec::new();
+        app.reset_to_defaults();
+        let can_clusters: Vec<&ClusterCfg> = self
+            .clusters
+            .iter()
+            .filter(|cluster| cluster.kind == ClusterKind::Can)
+            .collect();
+        let mut count = app.snap.channel_count;
+        while count > can_clusters.len() {
+            app.remove_channel(count - 1);
+            count -= 1;
+        }
+        while count < can_clusters.len() {
+            app.add_channel();
+            count += 1;
+        }
+        for (index, cluster) in can_clusters.iter().enumerate() {
+            let can = cluster.can.clone().unwrap_or_default();
+            let roles = cluster
+                .node_roles
+                .iter()
+                .filter_map(|(name, role)| {
+                    crate::app::NodeRole::parse(role).map(|role| (name.clone(), role))
+                })
+                .collect();
+            let paths: Vec<String> = cluster
+                .sources
+                .iter()
+                .filter_map(|source| match source {
+                    ClusterSource::Dbc { path } => Some(path.clone()),
+                    _ => None,
+                })
+                .collect();
+            app.send(crate::bus::BusCommand::SetChannelConfig {
+                ch: index as u8,
+                name: Some(cluster.name.clone()),
+                dbc_path: paths.first().cloned(),
+                bitrate_kbps: Some(can.bitrate_kbps),
+                fd_data_kbps: Some(can.fd_data_kbps),
+                node_roles: Some(roles),
+            });
+            app.send(crate::bus::BusCommand::LoadDbc {
+                ch: index as u8,
+                paths,
+            });
+            for source in &cluster.sources {
+                if let ClusterSource::Arxml {
+                    path,
+                    cluster: name,
+                } = source
+                    && let Err(e) = app.load_can_arxml_on_bus(path, name, index as u8)
+                {
+                    problems.push(format!("CAN ARXML load failed: {e}"));
+                }
+            }
+        }
+        app.set_bus_counter(self.bus_counter.max(can_clusters.len()));
+        app.settle();
+
+        for cluster in self
+            .clusters
+            .iter()
+            .filter(|cluster| cluster.kind == ClusterKind::FlexRay)
+        {
+            let bus = cluster
+                .bus
+                .or_else(|| bus_index(self.bus_map.as_ref(), true, cluster.id))
+                .or_else(|| app.next_flexray_bus())
+                .unwrap_or(u8::MAX);
+            app.ensure_flexray_bus(bus);
+            app.set_flexray_name(bus, &cluster.name);
+            for source in &cluster.sources {
+                if let Err(e) = app.add_fr_description(bus, source.clone()) {
+                    problems.push(format!("FlexRay description load failed: {e}"));
+                }
+            }
+        }
+        for cluster in self
+            .clusters
+            .iter()
+            .filter(|cluster| cluster.kind == ClusterKind::Ethernet)
+        {
+            let bus = cluster
+                .bus
+                .or_else(|| bus_index(self.bus_map.as_ref(), false, cluster.id))
+                .or_else(|| app.next_eth_bus())
+                .unwrap_or(u8::MAX);
+            app.ensure_eth_bus(bus);
+            for source in &cluster.sources {
+                if let Err(e) = app.add_eth_description(bus, source.clone()) {
+                    problems.push(format!("Ethernet ARXML load failed: {e}"));
+                }
+            }
+        }
+        if let Some(flag) = self
+            .clusters
+            .iter()
+            .find(|cluster| cluster.kind == ClusterKind::Ethernet)
+            .and_then(|cluster| cluster.ether.as_ref())
+            .map(|ether| ether.frame_length_includes_header)
+        {
+            app.set_eth_length_includes_header(flag);
+        }
+        app.settle();
+
+        // Drop the bootstrap generator rows; the project's own entries follow.
+        let stale: Vec<(u8, u32)> = app.snap.tx.iter().map(|t| (t.channel, t.id)).collect();
+        for (ch, id) in stale {
+            app.send(crate::bus::BusCommand::RemoveEntry { ch, id });
+        }
+        let stale_fr: Vec<(u8, u16)> = app.snap.fr_tx.iter().map(|t| (t.bus, t.slot)).collect();
+        for (bus, slot) in stale_fr {
+            app.send(crate::bus::BusCommand::RemoveFrEntry { bus, slot });
+        }
+        restore_generators(&self, app);
+        restore_triggers(&self, app);
+        restore_replay(&self, app);
+
+        if let Some(map) = &self.bus_map {
+            for window in &mut self.settings.trace_windows {
+                if !window.manual_clusters.is_empty() {
+                    window.manual = window
+                        .manual_clusters
+                        .iter()
+                        .filter_map(|&(cluster, id)| {
+                            map.can
+                                .iter()
+                                .position(|saved| saved.0 == cluster)
+                                .map(|bus| (bus as u8, id))
+                        })
+                        .collect();
+                }
+                if !window.fr_manual_clusters.is_empty() {
+                    window.fr_manual = window
+                        .fr_manual_clusters
+                        .iter()
+                        .filter_map(|&(cluster, slot)| {
+                            map.flexray
+                                .iter()
+                                .position(|saved| saved.0 == cluster)
+                                .map(|bus| (bus as u8, slot))
+                        })
+                        .collect();
+                }
+            }
+        }
+        self.settings.apply(app);
+        app.settle();
+
+        if let Some(map) = &self.bus_map {
+            app.send(crate::bus::BusCommand::SetClusterIds {
+                next: self.next_cluster_id,
+                can: map.can.iter().map(|id| id.0).collect(),
+                fr: map
+                    .flexray
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, id)| id.0 != 0)
+                    .map(|(bus, id)| (bus as u8, id.0))
+                    .collect(),
+                eth: map
+                    .ethernet
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, id)| id.0 != 0)
+                    .map(|(bus, id)| (bus as u8, id.0))
+                    .collect(),
+            });
+            app.reload_arxml_models();
+            app.settle();
+        }
+        problems
+    }
+}
+
+fn restore_generators(project: &ProjectV2, app: &mut App) {
+    let map = project.bus_map.as_ref();
+    let bus_of = |ids: &[crate::model::ClusterId], cluster: u32| {
+        ids.iter()
+            .position(|id| id.0 == cluster)
+            .map(|bus| bus as u8)
+    };
+    for generator in project.generators.iter().flatten() {
+        match generator {
+            crate::model::GeneratorCfg::Can {
+                cluster,
+                id,
+                active,
+                data_text,
+                cycle_us,
+                fd,
+                brs,
+                srcs,
+                ..
+            } => {
+                let Some(channel) = map.and_then(|map| bus_of(&map.can, *cluster)) else {
+                    continue;
+                };
+                app.add_tx(channel, *id);
+                app.send(crate::bus::BusCommand::SetEntryConfig {
+                    ch: channel,
+                    id: *id,
+                    active: *active,
+                    cycle_us: if *cycle_us == 0 {
+                        0
+                    } else {
+                        (*cycle_us).max(1_000)
+                    },
+                    fd: *fd,
+                    flags: Some(if *fd {
+                        let flags = crate::can::frame::FrameFlags::FD;
+                        if *brs {
+                            flags.union(crate::can::frame::FrameFlags::BRS)
+                        } else {
+                            flags
+                        }
+                    } else {
+                        crate::can::frame::FrameFlags::NONE
+                    }),
+                    data_text: (!data_text.is_empty()).then(|| data_text.clone()),
+                    srcs: srcs.iter().map(src_from_cfg).collect(),
+                });
+            }
+            crate::model::GeneratorCfg::FlexRay {
+                cluster,
+                slot,
+                active,
+                data_text,
+                cycle_us,
+                srcs,
+            } => {
+                let Some(bus) = map.and_then(|map| bus_of(&map.flexray, *cluster)) else {
+                    continue;
+                };
+                app.add_fr_tx(bus, *slot);
+                app.send(crate::bus::BusCommand::SetFrEntryCycle {
+                    bus,
+                    slot: *slot,
+                    cycle_us: if *cycle_us == 0 {
+                        0
+                    } else {
+                        (*cycle_us).max(1_000)
+                    },
+                });
+                if !data_text.is_empty() {
+                    app.send(crate::bus::BusCommand::SetFrEntryHex {
+                        bus,
+                        slot: *slot,
+                        text: data_text.clone(),
+                    });
+                }
+                for src in srcs.iter().map(src_from_cfg) {
+                    app.send(crate::bus::BusCommand::SetFrEntrySource {
+                        bus,
+                        slot: *slot,
+                        src,
+                    });
+                }
+                app.send(crate::bus::BusCommand::SetFrEntryActive {
+                    bus,
+                    slot: *slot,
+                    on: *active,
+                });
+            }
+        }
+    }
+}
+
+fn src_from_cfg(cfg: &crate::config::SrcCfg) -> crate::sim::ValueSrc {
+    crate::config::value_src(cfg.clone()).unwrap_or_else(|| {
+        crate::sim::ValueSrc::new(&cfg.name, crate::sim::SrcKind::Ramp, cfg.lo, cfg.hi)
+    })
+}
+
+fn restore_triggers(project: &ProjectV2, app: &mut App) {
+    let map = project.bus_map.as_ref();
+    let bus_of = |ids: Option<&Vec<crate::model::ClusterId>>, cluster: u32| {
+        ids?.iter()
+            .position(|id| id.0 == cluster)
+            .map(|bus| bus as u8)
+    };
+    let (can_ids, fr_ids) = map
+        .map(|map| (Some(&map.can), Some(&map.flexray)))
+        .unwrap_or((None, None));
+    let rows = project
+        .triggers
+        .iter()
+        .flatten()
+        .filter_map(|row| {
+            let ch = match row.kind {
+                0..=3 => bus_of(can_ids, row.cluster)?,
+                5 | 6 => bus_of(fr_ids, row.cluster)?,
+                _ => 0,
+            };
+            let send_ch = if row.action == 2 {
+                row.action_cluster
+                    .and_then(|cluster| bus_of(can_ids, cluster))
+                    .unwrap_or(0)
+            } else {
+                0
+            };
+            Some(crate::config::TriggerCfg {
+                kind: row.kind,
+                ch,
+                id: row.id,
+                signal: row.signal.clone(),
+                threshold: row.threshold,
+                rising: row.rising,
+                ext: row.extended,
+                action: row.action,
+                send_ch,
+                send_id: row.action_id,
+                enabled: row.enabled,
+            })
+        })
+        .collect::<Vec<_>>();
+    let triggers = rows
+        .iter()
+        .filter_map(|c| {
+            let cond = match c.kind {
+                0 => crate::trigger::TriggerCond::SignalCross {
+                    ch: c.ch,
+                    id: c.id,
+                    ext: c.ext,
+                    signal: c.signal.clone(),
+                    threshold: c.threshold,
+                    rising: c.rising,
+                },
+                1 => crate::trigger::TriggerCond::IdPresent { ch: c.ch, id: c.id },
+                2 => crate::trigger::TriggerCond::ErrorFrame { ch: c.ch },
+                3 => crate::trigger::TriggerCond::CycleTimeout { ch: c.ch, id: c.id },
+                4 => crate::trigger::TriggerCond::SysVar {
+                    key: c.signal.clone(),
+                    threshold: c.threshold,
+                    rising: c.rising,
+                },
+                5 => crate::trigger::TriggerCond::FrFramePresent {
+                    bus: c.ch,
+                    slot: c.id.min(u32::from(u16::MAX)) as u16,
+                },
+                6 => crate::trigger::TriggerCond::FrSignalCross {
+                    bus: c.ch,
+                    slot: c.id.min(u32::from(u16::MAX)) as u16,
+                    signal: c.signal.clone(),
+                    threshold: c.threshold,
+                    rising: c.rising,
+                },
+                7 => crate::trigger::TriggerCond::DerivedSignal {
+                    id: c.signal.clone(),
+                    threshold: c.threshold,
+                    rising: c.rising,
+                },
+                _ => return None,
+            };
+            let action = match c.action {
+                1 => crate::trigger::TriggerAction::StopRecording,
+                2 => crate::trigger::TriggerAction::Send {
+                    ch: c.send_ch,
+                    id: c.send_id,
+                },
+                3 => crate::trigger::TriggerAction::ClearTrace,
+                4 => crate::trigger::TriggerAction::InsertMarker,
+                _ => crate::trigger::TriggerAction::StartRecording,
+            };
+            let mut trigger = crate::trigger::Trigger::new(cond, action);
+            trigger.enabled = c.enabled;
+            Some(trigger)
+        })
+        .collect();
+    app.send(crate::bus::BusCommand::SetTriggers(triggers));
+}
+
+fn restore_replay(project: &ProjectV2, app: &mut App) {
+    if project.replay.is_empty() {
+        return;
+    }
+    let mut replay = crate::replay_map::ReplayMap::default();
+    for entry in &project.replay {
+        use crate::replay_map::LogBusKind;
+        let kind = match entry.kind.as_str() {
+            "can" => LogBusKind::Can,
+            "flexray" | "fr" => LogBusKind::Fr,
+            "ethernet" | "eth" => LogBusKind::Eth,
+            _ => continue,
+        };
+        let target = if entry.disabled {
+            None
+        } else {
+            Some(crate::model::ClusterId(entry.cluster))
+        };
+        replay.set(kind, entry.file_channel, target);
+    }
+    app.send(crate::bus::BusCommand::SetReplayMap(replay));
+}
+
+fn relative_source(source: ClusterSource, rel: &impl Fn(&String) -> String) -> ClusterSource {
+    match source {
+        ClusterSource::Dbc { path } => ClusterSource::Dbc { path: rel(&path) },
+        ClusterSource::Arxml { path, cluster } => ClusterSource::Arxml {
+            path: rel(&path),
+            cluster,
+        },
+        ClusterSource::Fibex { path } => ClusterSource::Fibex { path: rel(&path) },
+        ClusterSource::Manual => ClusterSource::Manual,
+    }
+}
+
+fn fallback_source(path: Option<String>, cluster: String) -> ClusterSource {
+    match path {
+        Some(path) if !path.trim().is_empty() => {
+            crate::channel::description_source(&path, Some(&cluster))
+        }
+        _ => ClusterSource::Manual,
+    }
+}
+
+fn bus_index(map: Option<&crate::model::BusMap>, flexray: bool, cluster: u32) -> Option<u8> {
+    let map = map?;
+    let ids = if flexray { &map.flexray } else { &map.ethernet };
+    ids.iter()
+        .position(|id| id.0 == cluster)
+        .map(|bus| bus as u8)
+}
+
+fn bus_map(
+    ids: &std::collections::BTreeMap<u8, u32>,
+    buses: &[u8],
+) -> Vec<crate::model::ClusterId> {
+    let mut map = Vec::new();
+    for bus in buses {
+        if let Some(id) = ids.get(bus) {
+            while map.len() <= *bus as usize {
+                map.push(crate::model::ClusterId(0));
+            }
+            map[*bus as usize] = crate::model::ClusterId(*id);
+        }
+    }
+    map
+}
+
+fn replay_entries(app: &App) -> Vec<crate::model::ReplayCfg> {
+    use crate::replay_map::LogBusKind;
+    let mut entries = Vec::new();
+    for (kind, label) in [
+        (LogBusKind::Can, "can"),
+        (LogBusKind::Fr, "flexray"),
+        (LogBusKind::Eth, "ethernet"),
+    ] {
+        for (raw, target) in app.snap.replay_map.configured(kind) {
+            entries.push(crate::model::ReplayCfg {
+                kind: label.to_string(),
+                file_channel: raw,
+                cluster: target.map_or(0, |cluster| cluster.0),
+                disabled: target.is_none(),
+            });
+        }
+    }
+    entries
+}
+
+fn generators(app: &App) -> Vec<GeneratorCfg> {
+    let ids = &app.snap.cluster_ids;
+    let mut entries = Vec::new();
+    for entry in &app.snap.tx {
+        if let Some(cluster) = ids.can.get(entry.channel as usize) {
+            entries.push(GeneratorCfg::Can {
+                cluster: *cluster,
+                id: entry.id,
+                active: entry.active,
+                data_text: entry.data_text.clone(),
+                data: crate::generator::parse_hex_bytes(&entry.data_text).unwrap_or_default(),
+                cycle_us: entry.cycle_us,
+                fd: entry.fd,
+                brs: entry.brs,
+                srcs: entry.srcs.iter().map(crate::config::src_cfg).collect(),
+            });
+        }
+    }
+    for entry in &app.snap.fr_tx {
+        if let Some(cluster) = ids.fr.get(&entry.bus) {
+            entries.push(GeneratorCfg::FlexRay {
+                cluster: *cluster,
+                slot: entry.slot,
+                active: entry.active,
+                data_text: entry.data_text.clone(),
+                cycle_us: entry.cycle_us,
+                srcs: entry.srcs.iter().map(crate::config::src_cfg).collect(),
+            });
+        }
+    }
+    entries
+}
+
+fn triggers(app: &App) -> Vec<TriggerCfgV2> {
+    let ids = &app.snap.cluster_ids;
+    let mut rows = Vec::new();
+    for trigger in &app.snap.triggers {
+        let mut send_ch = 0u8;
+        let mut send_id = 0u32;
+        let (kind, ch, id, ext, signal, threshold, rising) = match &trigger.cond {
+            crate::trigger::TriggerCond::SignalCross {
+                ch,
+                id,
+                ext,
+                signal,
+                threshold,
+                rising,
+            } => (0, *ch, *id, *ext, signal.clone(), *threshold, *rising),
+            crate::trigger::TriggerCond::IdPresent { ch, id } => {
+                (1, *ch, *id, false, String::new(), 0.0, false)
+            }
+            crate::trigger::TriggerCond::ErrorFrame { ch } => {
+                (2, *ch, 0, false, String::new(), 0.0, false)
+            }
+            crate::trigger::TriggerCond::CycleTimeout { ch, id } => {
+                (3, *ch, *id, false, String::new(), 0.0, false)
+            }
+            crate::trigger::TriggerCond::SysVar {
+                key,
+                threshold,
+                rising,
+            } => (4, 0, 0, false, key.clone(), *threshold, *rising),
+            crate::trigger::TriggerCond::FrFramePresent { bus, slot } => {
+                (5, *bus, u32::from(*slot), false, String::new(), 0.0, false)
+            }
+            crate::trigger::TriggerCond::FrSignalCross {
+                bus,
+                slot,
+                signal,
+                threshold,
+                rising,
+            } => (
+                6,
+                *bus,
+                u32::from(*slot),
+                false,
+                signal.clone(),
+                *threshold,
+                *rising,
+            ),
+            crate::trigger::TriggerCond::DerivedSignal {
+                id,
+                threshold,
+                rising,
+            } => (7, 0, 0, false, id.clone(), *threshold, *rising),
+        };
+        let cluster = match kind {
+            0..=3 => ids
+                .can
+                .get(ch as usize)
+                .copied()
+                .map(crate::model::ClusterId),
+            5 | 6 => ids.fr.get(&ch).copied().map(crate::model::ClusterId),
+            _ => Some(crate::model::ClusterId(0)),
+        };
+        let Some(cluster) = cluster else {
+            continue;
+        };
+        let action = match trigger.action {
+            crate::trigger::TriggerAction::StartRecording => 0,
+            crate::trigger::TriggerAction::StopRecording => 1,
+            crate::trigger::TriggerAction::Send { ch, id } => {
+                send_ch = ch;
+                send_id = id;
+                2
+            }
+            crate::trigger::TriggerAction::ClearTrace => 3,
+            crate::trigger::TriggerAction::InsertMarker => 4,
+        };
+        let action_cluster = if action == 2 {
+            ids.can
+                .get(send_ch as usize)
+                .copied()
+                .map(crate::model::ClusterId)
+        } else {
+            None
+        };
+        rows.push(TriggerCfgV2 {
+            kind,
+            cluster: cluster.0,
+            id,
+            signal,
+            threshold,
+            rising,
+            extended: ext,
+            action,
+            action_cluster: action_cluster.map(|id| id.0),
+            action_id: send_id,
+            enabled: trigger.enabled,
+        });
+    }
+    rows
 }
 
 impl App {
@@ -79,9 +867,9 @@ impl App {
     pub(crate) fn config_snapshot(&self) -> String {
         // The web workspace is saved but never marks a project dirty: moving
         // a panel or a cursor is not a semantic change to the bench setup.
-        let mut cfg = Config::from_app(self, None);
-        cfg.web = None;
-        serde_json::to_string(&cfg).unwrap_or_default()
+        let mut project = ProjectV2::from_app(self, None);
+        project.settings.workspace = None;
+        serde_json::to_string(&project).unwrap_or_default()
     }
 
     pub fn is_dirty(&self) -> bool {
@@ -111,219 +899,7 @@ impl App {
             }
         };
         let base = path.parent().map(|d| d.to_path_buf());
-        let config = Config::from_app(self, base.as_deref());
-        let mut project = crate::model::project_from_config(&config);
-        project.replay_speed = config.replay_speed;
-        project.replay_fastest = config.replay_fastest;
-        project.text_rate_hz = config.text_rate_hz;
-        project.trace_limit = config.trace_limit;
-        project.counters = config.counters.clone();
-        project.recent_dbc = config.recent_dbc.clone();
-        project.recent_log = config.recent_log.clone();
-        project.spec = config.spec;
-        project.limits = config.limits;
-        let ids = &self.snap.cluster_ids;
-        let mut fr_order: Vec<u8> = config.fr_buses.iter().map(|bus| bus.bus).collect();
-        fr_order.sort_unstable();
-        fr_order.dedup();
-        let mut eth_order: Vec<u8> = config.eth_buses.iter().map(|bus| bus.bus).collect();
-        eth_order.sort_unstable();
-        eth_order.dedup();
-        let mut can_index = 0usize;
-        let mut fr_index = 0usize;
-        let mut eth_index = 0usize;
-        for cluster in &mut project.clusters {
-            match cluster.kind {
-                crate::model::ClusterKind::Can => {
-                    if let Some(id) = ids.can.get(can_index) {
-                        cluster.id = *id;
-                    }
-                    can_index += 1;
-                }
-                crate::model::ClusterKind::FlexRay => {
-                    if let Some(bus) = fr_order.get(fr_index)
-                        && let Some(id) = ids.fr.get(bus)
-                    {
-                        cluster.id = *id;
-                    }
-                    fr_index += 1;
-                }
-                crate::model::ClusterKind::Ethernet => {
-                    if let Some(bus) = eth_order.get(eth_index)
-                        && let Some(id) = ids.eth.get(bus)
-                    {
-                        cluster.id = *id;
-                    }
-                    eth_index += 1;
-                }
-            }
-        }
-        if !ids.can.is_empty() || !ids.fr.is_empty() || !ids.eth.is_empty() {
-            project.next_cluster_id = ids.next;
-            project.bus_map = Some(crate::model::BusMap {
-                can: ids
-                    .can
-                    .iter()
-                    .copied()
-                    .map(crate::model::ClusterId)
-                    .collect(),
-                flexray: {
-                    let mut buses: Vec<_> = fr_order.iter().collect();
-                    buses.sort_unstable();
-                    let mut map = Vec::new();
-                    for bus in buses {
-                        if let Some(id) = ids.fr.get(bus) {
-                            while map.len() <= *bus as usize {
-                                map.push(crate::model::ClusterId(0));
-                            }
-                            map[*bus as usize] = crate::model::ClusterId(*id);
-                        }
-                    }
-                    map
-                },
-                ethernet: {
-                    let mut map = Vec::new();
-                    for bus in &eth_order {
-                        if let Some(id) = ids.eth.get(bus) {
-                            while map.len() <= *bus as usize {
-                                map.push(crate::model::ClusterId(0));
-                            }
-                            map[*bus as usize] = crate::model::ClusterId(*id);
-                        }
-                    }
-                    map
-                },
-            });
-        }
-        project.replay.clear();
-        for (raw, target) in self
-            .snap
-            .replay_map
-            .configured(crate::replay_map::LogBusKind::Can)
-        {
-            project.replay.push(crate::model::ReplayCfg {
-                kind: "can".to_string(),
-                file_channel: raw,
-                cluster: target.map_or(0, |cluster| cluster.0),
-                disabled: target.is_none(),
-            });
-        }
-        for (raw, target) in self
-            .snap
-            .replay_map
-            .configured(crate::replay_map::LogBusKind::Fr)
-        {
-            project.replay.push(crate::model::ReplayCfg {
-                kind: "flexray".to_string(),
-                file_channel: raw,
-                cluster: target.map_or(0, |cluster| cluster.0),
-                disabled: target.is_none(),
-            });
-        }
-        for (raw, target) in self
-            .snap
-            .replay_map
-            .configured(crate::replay_map::LogBusKind::Eth)
-        {
-            project.replay.push(crate::model::ReplayCfg {
-                kind: "ethernet".to_string(),
-                file_channel: raw,
-                cluster: target.map_or(0, |cluster| cluster.0),
-                disabled: target.is_none(),
-            });
-        }
-        let mut generators = Vec::new();
-        for entry in &config.tx {
-            if let Some(cluster) = ids.can.get(entry.channel as usize) {
-                generators.push(crate::model::GeneratorCfg::Can {
-                    cluster: *cluster,
-                    id: entry.id,
-                    active: entry.active,
-                    data_text: entry.data_text.clone(),
-                    data: entry.data.clone(),
-                    cycle_us: entry.cycle_us,
-                    fd: entry.fd,
-                    brs: entry.brs,
-                    srcs: entry.srcs.clone(),
-                });
-            }
-        }
-        for entry in &config.fr_tx {
-            if let Some(cluster) = ids.fr.get(&entry.bus) {
-                generators.push(crate::model::GeneratorCfg::FlexRay {
-                    cluster: *cluster,
-                    slot: entry.slot,
-                    active: entry.active,
-                    data_text: entry.data_text.clone(),
-                    cycle_us: entry.cycle_us,
-                    srcs: entry.srcs.clone(),
-                });
-            }
-        }
-        project.generators = Some(generators);
-        let mut triggers = Vec::new();
-        for cfg in &config.triggers {
-            let cluster = match cfg.kind {
-                0..=3 => ids
-                    .can
-                    .get(cfg.ch as usize)
-                    .copied()
-                    .map(crate::model::ClusterId),
-                5 | 6 => ids.fr.get(&cfg.ch).copied().map(crate::model::ClusterId),
-                _ => Some(crate::model::ClusterId(0)),
-            };
-            let Some(cluster) = cluster else {
-                continue;
-            };
-            let action_cluster = if cfg.action == 2 {
-                ids.can
-                    .get(cfg.send_ch as usize)
-                    .copied()
-                    .map(crate::model::ClusterId)
-            } else {
-                None
-            };
-            triggers.push(crate::model::TriggerCfgV2 {
-                kind: cfg.kind,
-                cluster: cluster.0,
-                id: cfg.id,
-                signal: cfg.signal.clone(),
-                threshold: cfg.threshold,
-                rising: cfg.rising,
-                extended: cfg.ext,
-                action: cfg.action,
-                action_cluster: action_cluster.map(|id| id.0),
-                action_id: cfg.send_id,
-                enabled: cfg.enabled,
-            });
-        }
-        project.triggers = Some(triggers);
-        // Workspace sections move out of the compat blob and into typed v2
-        // fields; their picks still name buses by index for now.
-        project.trace_windows = config.trace_windows.clone();
-        for window in &mut project.trace_windows {
-            window.manual_clusters = window
-                .manual
-                .iter()
-                .filter_map(|&(bus, id)| ids.can.get(bus as usize).map(|cluster| (*cluster, id)))
-                .collect();
-            window.fr_manual_clusters = window
-                .fr_manual
-                .iter()
-                .filter_map(|&(bus, slot)| ids.fr.get(&bus).map(|cluster| (*cluster, slot)))
-                .collect();
-        }
-        project.msg_windows = config.msg_windows.clone();
-        project.stats_windows = config.stats_windows.clone();
-        project.graphics = config.graphics.clone();
-        project.data_windows = config.data_windows.clone();
-        project.monitor_rows = config.monitor_rows.clone();
-        project.state_trackers = config.state_trackers.clone();
-        project.nodes = config.nodes.clone();
-        project.blocks = config.blocks.clone();
-        project.sysvars = config.sysvars.clone();
-        project.derived = config.derived.clone();
-        project.workspace = config.web.clone();
+        let project = ProjectV2::from_app(self, base.as_deref());
         let written = serde_json::to_string_pretty(&project)
             .map_err(|e| e.to_string())
             .and_then(|j| std::fs::write(&path, j).map_err(|e| e.to_string()));
@@ -369,256 +945,9 @@ impl App {
                     return;
                 }
             };
-            // The project is the whole on-disk schema: build the apply DTO
-            // from its typed sections, never from a compat blob.
-            let mut cfg = Config::default();
-            restore_buses_from_clusters(&project, &mut cfg);
-            cfg.replay_speed = project.replay_speed;
-            cfg.replay_fastest = project.replay_fastest;
-            cfg.text_rate_hz = project.text_rate_hz;
-            cfg.trace_limit = project.trace_limit;
-            cfg.counters = project.counters.clone();
-            cfg.recent_dbc = project.recent_dbc.clone();
-            cfg.recent_log = project.recent_log.clone();
-            cfg.spec = project.spec;
-            cfg.limits = project.limits;
-            cfg.trace_windows = project.trace_windows.clone();
-            cfg.msg_windows = project.msg_windows.clone();
-            cfg.stats_windows = project.stats_windows.clone();
-            cfg.graphics = project.graphics.clone();
-            cfg.data_windows = project.data_windows.clone();
-            cfg.monitor_rows = project.monitor_rows.clone();
-            cfg.state_trackers = project.state_trackers.clone();
-            cfg.nodes = project.nodes.clone();
-            cfg.blocks = project.blocks.clone();
-            cfg.sysvars = project.sysvars.clone();
-            cfg.derived = project.derived.clone();
-            cfg.web = project.workspace.clone();
-
-            // generator 段以 cluster id 记路，打开时换回路号。
-            if let Some(generators) = &project.generators {
-                let bus_of = |ids: &[crate::model::ClusterId], cluster: u32| {
-                    ids.iter()
-                        .position(|id| id.0 == cluster)
-                        .map(|bus| bus as u8)
-                };
-                let map = project.bus_map.as_ref();
-                cfg.tx.clear();
-                cfg.fr_tx.clear();
-                for generator in generators {
-                    match generator {
-                        crate::model::GeneratorCfg::Can {
-                            cluster,
-                            id,
-                            active,
-                            data_text,
-                            data,
-                            cycle_us,
-                            fd,
-                            brs,
-                            srcs,
-                        } => {
-                            let Some(channel) = map.and_then(|m| bus_of(&m.can, *cluster)) else {
-                                continue;
-                            };
-                            cfg.tx.push(crate::config::TxCfg {
-                                channel,
-                                id: *id,
-                                active: *active,
-                                data_text: data_text.clone(),
-                                data: data.clone(),
-                                cycle_us: *cycle_us,
-                                fd: *fd,
-                                brs: *brs,
-                                srcs: srcs.clone(),
-                            });
-                        }
-                        crate::model::GeneratorCfg::FlexRay {
-                            cluster,
-                            slot,
-                            active,
-                            data_text,
-                            cycle_us,
-                            srcs,
-                        } => {
-                            let Some(bus) = map.and_then(|m| bus_of(&m.flexray, *cluster)) else {
-                                continue;
-                            };
-                            cfg.fr_tx.push(crate::config::FrTxCfg {
-                                bus,
-                                slot: *slot,
-                                active: *active,
-                                data_text: data_text.clone(),
-                                cycle_us: *cycle_us,
-                                srcs: srcs.clone(),
-                            });
-                        }
-                    }
-                }
-            }
-            // v2 trigger rows name their buses by cluster id; the core still
-            // keys rules by 路号, so convert back through the saved map. A
-            // rule whose cluster is gone is dropped rather than pointed at a
-            // different bus.
-            if let Some(triggers) = &project.triggers {
-                let map = project.bus_map.as_ref();
-                let bus_of = |ids: Option<&Vec<crate::model::ClusterId>>, cluster: u32| {
-                    ids?.iter()
-                        .position(|id| id.0 == cluster)
-                        .map(|bus| bus as u8)
-                };
-                let (can_ids, fr_ids) = map
-                    .map(|m| (Some(&m.can), Some(&m.flexray)))
-                    .unwrap_or((None, None));
-                cfg.triggers = triggers
-                    .iter()
-                    .filter_map(|t| {
-                        let ch = match t.kind {
-                            0..=3 => bus_of(can_ids, t.cluster)?,
-                            5 | 6 => bus_of(fr_ids, t.cluster)?,
-                            _ => 0,
-                        };
-                        let send_ch = if t.action == 2 {
-                            t.action_cluster
-                                .and_then(|cluster| bus_of(can_ids, cluster))
-                                .unwrap_or(0)
-                        } else {
-                            0
-                        };
-                        Some(crate::config::TriggerCfg {
-                            kind: t.kind,
-                            ch,
-                            id: t.id,
-                            signal: t.signal.clone(),
-                            threshold: t.threshold,
-                            rising: t.rising,
-                            ext: t.extended,
-                            action: t.action,
-                            send_ch,
-                            send_id: t.action_id,
-                            enabled: t.enabled,
-                        })
-                    })
-                    .collect();
-            }
-            // Typed v2 workspace sections win over the compat blob; an empty
-            // section means the project legitimately has none (new saves do
-            // not write those keys into `config` any more).
-            if !project.trace_windows.is_empty() {
-                cfg.trace_windows = project.trace_windows.clone();
-            }
-            if !project.msg_windows.is_empty() {
-                cfg.msg_windows = project.msg_windows.clone();
-            }
-            if !project.stats_windows.is_empty() {
-                cfg.stats_windows = project.stats_windows.clone();
-            }
-            if !project.graphics.is_empty() {
-                cfg.graphics = project.graphics.clone();
-            }
-            if !project.data_windows.is_empty() {
-                cfg.data_windows = project.data_windows.clone();
-            }
-            if !project.monitor_rows.is_empty() {
-                cfg.monitor_rows = project.monitor_rows.clone();
-            }
-            if !project.state_trackers.is_empty() {
-                cfg.state_trackers = project.state_trackers.clone();
-            }
-            if !project.nodes.is_empty() {
-                cfg.nodes = project.nodes.clone();
-            }
-            if !project.blocks.is_empty() {
-                cfg.blocks = project.blocks.clone();
-            }
-            if !project.sysvars.is_empty() {
-                cfg.sysvars = project.sysvars.clone();
-            }
-            if !project.derived.is_empty() {
-                cfg.derived = project.derived.clone();
-            }
-            if let Some(workspace) = &project.workspace {
-                cfg.web = Some(workspace.clone());
-            }
-            // Window picks saved by cluster id turn back into the bus indexes
-            // the trace tables use.
-            if let Some(map) = &project.bus_map {
-                for window in &mut cfg.trace_windows {
-                    if !window.manual_clusters.is_empty() {
-                        window.manual = window
-                            .manual_clusters
-                            .iter()
-                            .filter_map(|&(cluster, id)| {
-                                map.can
-                                    .iter()
-                                    .position(|saved| saved.0 == cluster)
-                                    .map(|bus| (bus as u8, id))
-                            })
-                            .collect();
-                    }
-                    if !window.fr_manual_clusters.is_empty() {
-                        window.fr_manual = window
-                            .fr_manual_clusters
-                            .iter()
-                            .filter_map(|&(cluster, slot)| {
-                                map.flexray
-                                    .iter()
-                                    .position(|saved| saved.0 == cluster)
-                                    .map(|bus| (bus as u8, slot))
-                            })
-                            .collect();
-                    }
-                }
-            }
-            self.reset_to_defaults();
-            cfg.resolve_paths(path.parent());
-            let problems = cfg.apply(self);
-            self.settle();
-
-            if let Some(map) = &project.bus_map {
-                self.send(crate::bus::BusCommand::SetClusterIds {
-                    next: project.next_cluster_id,
-                    can: map.can.iter().map(|id| id.0).collect(),
-                    fr: map
-                        .flexray
-                        .iter()
-                        .enumerate()
-                        .filter(|(_, id)| id.0 != 0)
-                        .map(|(bus, id)| (bus as u8, id.0))
-                        .collect(),
-                    eth: map
-                        .ethernet
-                        .iter()
-                        .enumerate()
-                        .filter(|(_, id)| id.0 != 0)
-                        .map(|(bus, id)| (bus as u8, id.0))
-                        .collect(),
-                });
-                if !project.replay.is_empty() {
-                    let mut replay = crate::replay_map::ReplayMap::default();
-                    for entry in &project.replay {
-                        use crate::replay_map::LogBusKind;
-                        let kind = match entry.kind.as_str() {
-                            "can" => LogBusKind::Can,
-                            "flexray" | "fr" => LogBusKind::Fr,
-                            "ethernet" | "eth" => LogBusKind::Eth,
-                            _ => continue,
-                        };
-                        let target = if entry.disabled {
-                            None
-                        } else {
-                            Some(crate::model::ClusterId(entry.cluster))
-                        };
-                        replay.set(kind, entry.file_channel, target);
-                    }
-                    self.send(crate::bus::BusCommand::SetReplayMap(replay));
-                }
-                // `SetClusterIds` rebuilt the adapter models around the
-                // restored ids; the ARXML models have to be read once more
-                // or the document's container/mux structure is lost.
-                self.reload_arxml_models();
-                self.settle();
-            }
+            let mut project = project;
+            project.resolve_paths(path.parent());
+            let problems = project.apply(self);
             self.workspace_rev = self.workspace_rev.wrapping_add(1);
             self.project_path = Some(path.to_path_buf());
             self.retarget_record_draft();
@@ -664,94 +993,5 @@ impl App {
         self.state_trackers.clear();
         self.baseline = self.config_snapshot();
         self.status = "new project".to_string();
-    }
-}
-
-/// Rebuilds the bus description lists from the project's typed clusters.
-/// The config blob deliberately carries no channels, so this is the only
-/// place bus names, paths, bitrates and node roles come back on open.
-fn restore_buses_from_clusters(project: &crate::model::ProjectV2, cfg: &mut Config) {
-    use crate::model::{ClusterKind, ClusterSource};
-    cfg.channels.clear();
-    cfg.can_arxml.clear();
-    cfg.fr_buses.clear();
-    cfg.fr_names.clear();
-    cfg.eth_buses.clear();
-    let (mut can, mut fr, mut eth) = (0u8, 0u8, 0u8);
-    for cluster in &project.clusters {
-        match cluster.kind {
-            ClusterKind::Can => {
-                let mut paths = Vec::new();
-                for source in &cluster.sources {
-                    match source {
-                        ClusterSource::Dbc { path } => paths.push(path.clone()),
-                        ClusterSource::Arxml { path, cluster } => {
-                            cfg.can_arxml.push(crate::config::CanArxmlFile {
-                                bus: can,
-                                path: path.clone(),
-                                cluster: cluster.clone(),
-                            });
-                        }
-                        _ => {}
-                    }
-                }
-                let can_cfg = cluster.can.as_ref();
-                cfg.channels.push(crate::config::ChannelCfg {
-                    name: cluster.name.clone(),
-                    dbc_path: paths.first().cloned().unwrap_or_default(),
-                    dbc_paths_extra: paths.into_iter().skip(1).collect(),
-                    node_roles: cluster.node_roles.clone(),
-                    bitrate_kbps: can_cfg
-                        .map(|params| params.bitrate_kbps)
-                        .unwrap_or(crate::model::CanParams::DEFAULT_BITRATE_KBPS),
-                    fd_data_kbps: can_cfg
-                        .map(|params| params.fd_data_kbps)
-                        .unwrap_or(crate::model::CanParams::DEFAULT_FD_DATA_KBPS),
-                });
-                can += 1;
-            }
-            ClusterKind::FlexRay => {
-                for source in &cluster.sources {
-                    match source {
-                        ClusterSource::Arxml {
-                            path,
-                            cluster: name,
-                        } => {
-                            cfg.fr_buses.push(crate::config::FrBusFile {
-                                bus: fr,
-                                path: path.clone(),
-                                cluster: name.clone(),
-                            });
-                        }
-                        ClusterSource::Fibex { path } => {
-                            cfg.fr_buses.push(crate::config::FrBusFile {
-                                bus: fr,
-                                path: path.clone(),
-                                cluster: String::new(),
-                            });
-                        }
-                        _ => {}
-                    }
-                }
-                cfg.fr_names.push((fr, cluster.name.clone()));
-                fr += 1;
-            }
-            ClusterKind::Ethernet => {
-                for source in &cluster.sources {
-                    if let ClusterSource::Arxml {
-                        path,
-                        cluster: name,
-                    } = source
-                    {
-                        cfg.eth_buses.push(crate::config::EthBusFile {
-                            bus: eth,
-                            path: path.clone(),
-                            cluster: name.clone(),
-                        });
-                    }
-                }
-                eth += 1;
-            }
-        }
     }
 }

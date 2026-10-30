@@ -431,6 +431,7 @@ fn cluster_cfg(id: u32, kind: ClusterKind, name: &str) -> ClusterCfg {
         id,
         kind,
         name: name.to_string(),
+        bus: None,
         aliases: vec![],
         sources: vec![ClusterSource::Arxml {
             path: "Matrix.arxml".to_string(),
@@ -449,7 +450,7 @@ fn schema_v2_roundtrips_the_workspace_section() {
         cluster_cfg(1, ClusterKind::Can, "CAN1"),
         cluster_cfg(2, ClusterKind::Ethernet, "ETH1"),
     ]);
-    project.workspace = Some(json!({
+    project.settings.workspace = Some(json!({
         "graphics": [{ "signals": ["sig:1:17:42"] }],
         "panelBook": { "pages": [] }
     }));

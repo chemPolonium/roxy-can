@@ -439,23 +439,40 @@ impl App {
     /// for the protocols whose bus index is not a CAN channel.
     pub fn add_flexray_bus(&mut self) -> Option<u8> {
         let bus = self.next_flexray_bus()?;
+        self.ensure_flexray_bus(bus);
+        self.status = format!("Added FlexRay bus FR{bus}");
+        Some(bus)
+    }
+
+    /// Creates the empty bus at a specific index, preserving a project's
+    /// sparse FlexRay numbering.
+    pub fn ensure_flexray_bus(&mut self, bus: u8) {
+        if self.fr_buses.contains_key(&bus) {
+            return;
+        }
         self.fr_buses
             .insert(bus, std::sync::Arc::new(crate::fr_db::FrDb::default()));
         self.fr_sources.entry(bus).or_default();
         self.push_fr_db_to_core();
-        self.status = format!("Added FlexRay bus FR{bus}");
-        Some(bus)
     }
 
     /// Adds an empty Ethernet bus, the Ethernet twin of [`Self::add_flexray_bus`].
     pub fn add_eth_bus(&mut self) -> Option<u8> {
         let bus = self.next_eth_bus()?;
+        self.ensure_eth_bus(bus);
+        self.status = format!("Added Ethernet bus ETH{bus}");
+        Some(bus)
+    }
+
+    /// Creates the empty bus at a specific index.
+    pub fn ensure_eth_bus(&mut self, bus: u8) {
+        if self.eth_buses.contains_key(&bus) {
+            return;
+        }
         self.eth_buses
             .insert(bus, std::sync::Arc::new(crate::eth::db::EthDb::default()));
         self.eth_sources.entry(bus).or_default();
         self.push_eth_db_to_core();
-        self.status = format!("Added Ethernet bus ETH{bus}");
-        Some(bus)
     }
 
     /// Reads an uploaded ARXML and lists its clusters for the binding chooser.

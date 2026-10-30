@@ -92,6 +92,9 @@ pub struct ClusterCfg {
     pub id: u32,
     pub kind: ClusterKind,
     pub name: String,
+    /// Physical road index for FlexRay/Ethernet; CAN uses list position.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bus: Option<u8>,
     #[serde(default)]
     pub aliases: Vec<String>,
     #[serde(default)]
@@ -276,6 +279,8 @@ pub struct ProjectV2 {
     #[serde(default)]
     pub clusters: Vec<ClusterCfg>,
     #[serde(default)]
+    pub bus_counter: usize,
+    #[serde(default)]
     pub id_aliases: Vec<IdAliasCfg>,
     #[serde(default)]
     pub frame_overrides: Vec<FrameOverrideCfg>,
@@ -289,56 +294,14 @@ pub struct ProjectV2 {
     /// is a project with no rules.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub triggers: Option<Vec<TriggerCfgV2>>,
-    /// Observer windows and their filters. Their picks still name buses by
-    /// index; moving those to cluster ids is the remaining key migration.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub trace_windows: Vec<crate::config::TraceCfg>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub msg_windows: Vec<crate::config::MsgCfg>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub stats_windows: Vec<crate::config::StatsCfg>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub graphics: Vec<crate::config::GfxCfg>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub data_windows: Vec<crate::config::DataCfg>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub monitor_rows: Vec<crate::config::MonitorRowCfg>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub state_trackers: Vec<crate::config::StateCfg>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub nodes: Vec<crate::config::NodeCfg>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub blocks: Vec<crate::config::BlockCfg>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub sysvars: Vec<crate::bus::SysVarDef>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub derived: Vec<crate::derived::DerivedDef>,
-    /// Frontend workspace (tabs, cursors, column widths, splitters), opaque
-    /// to the core exactly as before, but now a v2 section of its own.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub workspace: Option<Value>,
+    /// Frontend workspace and observer windows, flattened so their JSON keys
+    /// stay where project files already put them.
+    #[serde(flatten)]
+    pub settings: crate::config::ProjectSettings,
     /// Old bus index → cluster id, kept so the frontend can rewrite its
     /// opaque `web` workspace during the v1→v2 migration.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bus_map: Option<BusMap>,
-    #[serde(default = "one_f64")]
-    pub replay_speed: f64,
-    #[serde(default)]
-    pub replay_fastest: bool,
-    #[serde(default = "ten_u32")]
-    pub text_rate_hz: u32,
-    #[serde(default = "trace_limit_default")]
-    pub trace_limit: usize,
-    #[serde(default)]
-    pub counters: crate::config::Counters,
-    #[serde(default)]
-    pub recent_dbc: Vec<String>,
-    #[serde(default)]
-    pub recent_log: Vec<String>,
-    #[serde(default)]
-    pub spec: crate::config::SpecCfg,
-    #[serde(default)]
-    pub limits: crate::config::LimitsCfg,
 }
 
 impl Default for ProjectV2 {
@@ -348,33 +311,14 @@ impl Default for ProjectV2 {
             version: PROJECT_VERSION,
             next_cluster_id: 1,
             clusters: Vec::new(),
+            bus_counter: 0,
             id_aliases: Vec::new(),
             frame_overrides: Vec::new(),
             replay: Vec::new(),
             generators: None,
             triggers: None,
-            trace_windows: Vec::new(),
-            msg_windows: Vec::new(),
-            stats_windows: Vec::new(),
-            graphics: Vec::new(),
-            data_windows: Vec::new(),
-            monitor_rows: Vec::new(),
-            state_trackers: Vec::new(),
-            nodes: Vec::new(),
-            blocks: Vec::new(),
-            sysvars: Vec::new(),
-            derived: Vec::new(),
-            workspace: None,
+            settings: Default::default(),
             bus_map: None,
-            replay_speed: 1.0,
-            replay_fastest: false,
-            text_rate_hz: 10,
-            trace_limit: crate::app::TRACE_LIMIT,
-            counters: Default::default(),
-            recent_dbc: Vec::new(),
-            recent_log: Vec::new(),
-            spec: Default::default(),
-            limits: Default::default(),
         }
     }
 }
@@ -606,6 +550,7 @@ impl ClusterCfg {
             id: cluster.id.0,
             kind: cluster.kind,
             name: cluster.name.clone(),
+            bus: None,
             aliases: cluster.aliases.clone(),
             sources: cluster.sources.clone(),
             can,

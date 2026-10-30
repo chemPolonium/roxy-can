@@ -1,10 +1,10 @@
 use super::*;
+use crate::model::ProjectV2;
 use crate::test_assets::TestBusLoad;
 // The tests rely on the parent's imports through `use super::*`; the
 // ones app.rs itself no longer needs are imported directly here.
 use crate::bus::MAX_TX_CATCHUP;
 use crate::can::frame::{FrameFlags, MAX_CAN_FD_LEN};
-use crate::config::Config;
 use crate::generator::TxMsg;
 use crate::log::AscWriter;
 use crate::observe::SigKey;
@@ -6785,13 +6785,13 @@ fn replay_blocks_round_trip_through_a_project() {
     app.set_replay_block_enabled(id, true);
     app.settle();
 
-    let json = serde_json::to_string(&Config::from_app(&app, None)).unwrap();
+    let json = serde_json::to_string(&ProjectV2::from_app(&app, None)).unwrap();
     assert!(
         json.contains(r#""blocks""#) && json.contains("engine_log"),
         "the declaration is in the file"
     );
     let mut restored = App::headless();
-    serde_json::from_str::<Config>(&json)
+    serde_json::from_str::<ProjectV2>(&json)
         .unwrap()
         .apply(&mut restored);
     restored.settle();
@@ -7636,10 +7636,10 @@ fn sysvars_survive_a_project_roundtrip() {
         },
     ));
     app.settle();
-    let json = serde_json::to_string(&Config::from_app(&app, None)).unwrap();
+    let json = serde_json::to_string(&ProjectV2::from_app(&app, None)).unwrap();
     assert!(json.contains("\"sysvars\""), "the section is in the file");
     let mut restored = App::headless();
-    serde_json::from_str::<Config>(&json)
+    serde_json::from_str::<ProjectV2>(&json)
         .unwrap()
         .apply(&mut restored);
     restored.settle();

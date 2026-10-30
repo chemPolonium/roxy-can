@@ -815,10 +815,10 @@ SecOC 没有逐帧的额外校验：头、secured area 与认证长度在建计�
 | `src/model/plan.rs` | `DecodePlan` / `PlanCache`：Frame→PDU→Signal 展开，含 Container/Mux/Secured 偏移 |
 | `src/model/runtime.rs` | 按计划解码/编码：物理值、符号、float、mux 选择器门控 |
 | `src/model/registry.rs` | 工程级 cluster 注册表：全局 id、按源去重、三协议共存、导出 schema v2、从 schema v2 重新导入 |
-| `src/model/project_cfg.rs` | `Config` 总线列表 → v2 `clusters`，供保存写入 |
-| `src/bus.rs` | CAN/FR/ETH 分配全局 `ClusterId`；订阅、三协议 Messages 展开、CAN/FR 触发器、脚本节点输入、三协议 Panel 物理编码、CAN/FR Generator 与三协议脚本发送走统一模型，旧实现仅作无模型时回退 |
-| `src/project.rs` | `.rxproj` 保存 schema v2（`clusters`/`busMap`/`config`），打开时恢复 ClusterId；只读 v2，v1 文件直接拒绝 |
-| `src/web.rs` + `web/src/components/BusesModal.tsx` | Web 状态输出统一 `clusters`；Buses 顶部渲染 Cluster 表，单一 **Add cluster** 菜单按来源分流 CAN/ARXML/FIBEX；编辑仍按 kind 分卡 |
+| `src/project.rs` | `ProjectV2::from_app` / `resolve_paths` / `apply`：唯一工程 schema 的保存与打开，`clusters[].sources` + `busMap` 直接映射 App |
+| `src/config.rs` | 仅保留窗口/标量设置 DTO（`ProjectSettings`），以 `#[serde(flatten)]` 进入 `ProjectV2`；不再有 `Config` 或总线文件列表 |
+| `src/bus.rs` | CAN/FR/ETH 分配全局 `ClusterId`；订阅、三协议 Messages 展开、CAN/FR 触发器、脚本节点输入、三协议 Panel 物理编码、CAN/FR Generator 与三协议脚本发送都走统一模型 |
+| `src/web.rs` + `web/src/components/BusesModal.tsx` | Web 状态输出统一 `clusters`；Buses 顶部渲染 Cluster 表，**Add bus** 建 CAN/FR/ETH 总线，描述在选中总线详情里逐个 Add/Remove，ARXML 多 cluster 有选择器 |
 
 单测：
 

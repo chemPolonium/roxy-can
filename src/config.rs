@@ -9,10 +9,8 @@ use serde::{Deserialize, Serialize};
 use crate::app::{
     App, DataWindow, GfxSignal, GraphicsWindow, MsgWin, SigScope, StatsWin, TraceWin, YMode,
 };
-use crate::can::frame::FrameFlags;
 use crate::observe::SigKey;
 use crate::sim::{SrcKind, ValueSrc};
-use crate::trigger::{TriggerAction, TriggerCond};
 
 pub const PROJECT_EXT: &str = "rxproj";
 
@@ -72,38 +70,6 @@ fn trace_limit_default() -> usize {
 }
 fn sixty_default() -> f64 {
     60.0
-}
-
-#[derive(Serialize, Deserialize)]
-pub struct ChannelCfg {
-    pub name: String,
-    /// The bus's primary database. Kept as its own field so older
-    /// versions can still read new projects (they see the primary).
-    pub dbc_path: String,
-    /// Any further databases attached to the bus, in attach order.
-    /// Absent from projects saved before multi-database support.
-    #[serde(default)]
-    pub dbc_paths_extra: Vec<String>,
-    /// Per-node roles declared on this bus, in the labels' project-file
-    /// spelling. A node without an entry is `Absent` -- the restbus
-    /// default. Unknown role names are dropped on load rather than
-    /// guessed. Absent from projects saved before the role model.
-    #[serde(default)]
-    pub node_roles: std::collections::BTreeMap<String, String>,
-    /// Arbitration and CAN FD data-phase bitrates in kbit/s, for the load
-    /// view.
-    #[serde(default = "default_bitrate")]
-    pub bitrate_kbps: u32,
-    #[serde(default = "default_fd_data_bitrate")]
-    pub fd_data_kbps: u32,
-}
-
-fn default_bitrate() -> u32 {
-    crate::model::CanParams::DEFAULT_BITRATE_KBPS
-}
-
-fn default_fd_data_bitrate() -> u32 {
-    crate::model::CanParams::DEFAULT_FD_DATA_KBPS
 }
 
 /// One window's hand-picked subjects as the file stores them: the two buses
@@ -429,50 +395,6 @@ pub struct SrcCfg {
     pub redraw_us: u64,
 }
 
-#[derive(Serialize, Deserialize)]
-pub struct TxCfg {
-    pub channel: u8,
-    pub id: u32,
-    #[serde(default)]
-    pub active: bool,
-    #[serde(default)]
-    pub data_text: String,
-    #[serde(default)]
-    pub data: Vec<u8>,
-    #[serde(default = "cycle_default")]
-    pub cycle_us: u64,
-    #[serde(default)]
-    pub fd: bool,
-    /// FD data phase at the bus's data bitrate; ignored without `fd`.
-    #[serde(default)]
-    pub brs: bool,
-    /// Value sources layered over `data` at emit time. Absent in projects
-    /// saved before the stimulus engine, which then behave exactly as before.
-    #[serde(default)]
-    pub srcs: Vec<SrcCfg>,
-}
-
-/// One FlexRay generator entry: which slot of which 路 it fills, and what it
-/// puts there. The payload travels as the hex text the row's box shows, since a
-/// FlexRay frame is however long the description says it is.
-#[derive(Serialize, Deserialize)]
-pub struct FrTxCfg {
-    pub bus: u8,
-    pub slot: u16,
-    #[serde(default)]
-    pub active: bool,
-    #[serde(default)]
-    pub data_text: String,
-    #[serde(default = "cycle_default")]
-    pub cycle_us: u64,
-    #[serde(default)]
-    pub srcs: Vec<SrcCfg>,
-}
-
-fn cycle_default() -> u64 {
-    100_000
-}
-
 #[derive(Serialize, Deserialize, Default, Clone, Debug, PartialEq)]
 pub struct Counters {
     #[serde(default)]
@@ -545,40 +467,6 @@ impl Default for SpecCfg {
     }
 }
 
-/// One FlexRay bus in a project file: which bus the description belongs to
-/// and the file it was parsed from. Slot numbers repeat across clusters, so
-/// a path without its bus index would not say what it describes.
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
-pub struct FrBusFile {
-    #[serde(default)]
-    pub bus: u8,
-    pub path: String,
-    /// The named cluster inside a multi-cluster ARXML. Empty means the whole
-    /// file.
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub cluster: String,
-}
-
-/// One Ethernet bus's AUTOSAR matrix, stored like a FlexRay description.
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
-pub struct EthBusFile {
-    #[serde(default)]
-    pub bus: u8,
-    pub path: String,
-    /// The named cluster inside a multi-cluster ARXML; empty = whole file.
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub cluster: String,
-}
-
-/// One CAN bus whose database came from an ARXML matrix cluster.
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
-pub struct CanArxmlFile {
-    #[serde(default)]
-    pub bus: u8,
-    pub path: String,
-    pub cluster: String,
-}
-
 /// Trigger-recording context sizes: pre-trigger frames kept for
 /// trigger-started recordings, post-roll frames after a trigger-stopped
 /// edge, and the marker list cap.
@@ -614,37 +502,13 @@ fn marker_cap_default() -> usize {
     crate::bus::MARKER_CAP
 }
 
-#[derive(Serialize, Deserialize)]
-pub struct Config {
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectSettings {
     /// Trigger-recording context sizes (pre-trigger, post-roll, marker
     /// cap). Absent fields load at the defaults the constants carried.
     #[serde(default)]
     pub limits: LimitsCfg,
-    #[serde(default)]
-    pub channels: Vec<ChannelCfg>,
-    #[serde(default)]
-    pub bus_counter: usize,
-    /// The FlexRay descriptions, one entry per bus, behind the FR
-    /// watch/replay decoding, stored like the DBC paths.
-    #[serde(default)]
-    pub fr_buses: Vec<FrBusFile>,
-    /// What the user named each FlexRay 路, as `(bus, name)` pairs. Separate
-    /// from `fr_buses` because a name is not a description: a cluster that only
-    /// a replayed log carries can be named too. Absent means the `FR{n}`
-    /// default.
-    #[serde(default)]
-    pub fr_names: Vec<(u8, String)>,
-    /// Ethernet buses and their AUTOSAR matrices. Separate index space.
-    #[serde(default)]
-    pub eth_buses: Vec<EthBusFile>,
-    /// CAN buses whose databases were imported from one named ARXML cluster.
-    #[serde(default)]
-    pub can_arxml: Vec<CanArxmlFile>,
-    /// Whether those matrices state `FRAME-LENGTH` including the 14-byte L2
-    /// header. Absent (false) means the length is the payload the capture
-    /// reports, which is what Vector BLF carries.
-    #[serde(default)]
-    pub eth_frame_length_includes_header: bool,
     /// 回放倍速。`∞`（as-fast-as-possible）在 JSON 里写不出一个数，所以那一档
     /// 记在 `replay_fastest` 上，这个数只在有限倍速时有意义。
     #[serde(default = "one_default")]
@@ -684,12 +548,6 @@ pub struct Config {
     #[serde(default)]
     pub sysvars: Vec<crate::bus::SysVarDef>,
     #[serde(default)]
-    pub tx: Vec<TxCfg>,
-    /// The FlexRay generator entries. Absent in projects saved before they
-    /// existed, which then load with none.
-    #[serde(default)]
-    pub fr_tx: Vec<FrTxCfg>,
-    #[serde(default)]
     pub counters: Counters,
     #[serde(default)]
     pub recent_dbc: Vec<String>,
@@ -697,12 +555,10 @@ pub struct Config {
     pub recent_log: Vec<String>,
     #[serde(default)]
     pub spec: SpecCfg,
-    #[serde(default)]
-    pub triggers: Vec<TriggerCfg>,
     /// Frontend workspace (tabs, cursors, column widths, splitters). Opaque
     /// to the core so the web shell can evolve without a schema bump.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub web: Option<serde_json::Value>,
+    pub workspace: Option<serde_json::Value>,
     /// Derived channels: expression, unit and State bands. The core owns
     /// sampling, so the file carries the definitions, not their samples.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -808,7 +664,7 @@ fn sig_cfgs(app: &App, signals: &[GfxSignal]) -> Vec<SignalCfg> {
         .collect()
 }
 
-fn src_cfg(s: &ValueSrc) -> SrcCfg {
+pub(crate) fn src_cfg(s: &ValueSrc) -> SrcCfg {
     SrcCfg {
         name: s.name.clone(),
         kind: s.kind.to_u8(),
@@ -822,7 +678,7 @@ fn src_cfg(s: &ValueSrc) -> SrcCfg {
     }
 }
 
-fn value_src(c: SrcCfg) -> Option<ValueSrc> {
+pub(crate) fn value_src(c: SrcCfg) -> Option<ValueSrc> {
     let kind = SrcKind::from_u8(c.kind)?;
     Some(ValueSrc {
         name: c.name,
@@ -848,16 +704,9 @@ fn sig_keys(maps: &KeyMaps<'_>, signals: &[SignalCfg]) -> Vec<GfxSignal> {
         .collect()
 }
 
-impl Default for Config {
+impl Default for ProjectSettings {
     fn default() -> Self {
         Self {
-            channels: Vec::new(),
-            bus_counter: 0,
-            fr_buses: Vec::new(),
-            fr_names: Vec::new(),
-            eth_buses: Vec::new(),
-            can_arxml: Vec::new(),
-            eth_frame_length_includes_header: false,
             replay_speed: 1.0,
             replay_fastest: false,
             text_rate_hz: 10,
@@ -872,139 +721,20 @@ impl Default for Config {
             nodes: Vec::new(),
             blocks: Vec::new(),
             sysvars: Vec::new(),
-            tx: Vec::new(),
-            fr_tx: Vec::new(),
             counters: Counters::default(),
             recent_dbc: Vec::new(),
             recent_log: Vec::new(),
             spec: SpecCfg::default(),
-            triggers: Vec::new(),
-            web: None,
+            workspace: None,
             limits: LimitsCfg::default(),
             derived: Vec::new(),
         }
     }
 }
 
-impl Config {
-    pub fn from_app(app: &App, base: Option<&Path>) -> Self {
-        let rel = |p: &String| match base {
-            Some(b) => relativize(p, b),
-            None => p.clone(),
-        };
-        // One project entry per bound description file, so several files on
-        // one bus survive the round trip. A bus whose description was put
-        // there by a test or an adapter (no App-side list) still saves its
-        // first source, as before.
-        let mut fr_buses: Vec<FrBusFile> = app
-            .fr_sources
-            .iter()
-            .flat_map(|(bus, sources)| {
-                sources.iter().filter_map(move |source| match source {
-                    crate::model::ClusterSource::Arxml { path, cluster } => Some(FrBusFile {
-                        bus: *bus,
-                        path: rel(path),
-                        cluster: cluster.clone(),
-                    }),
-                    crate::model::ClusterSource::Fibex { path } => Some(FrBusFile {
-                        bus: *bus,
-                        path: rel(path),
-                        cluster: String::new(),
-                    }),
-                    _ => None,
-                })
-            })
-            .collect();
-        for bus in app.fr_buses.keys() {
-            if !app.fr_sources.contains_key(bus) {
-                fr_buses.push(FrBusFile {
-                    bus: *bus,
-                    path: app
-                        .fr_description_path(*bus)
-                        .map(|path| rel(&path))
-                        .unwrap_or_default(),
-                    cluster: app.fr_cluster_label(*bus),
-                });
-            }
-        }
-        let mut eth_buses: Vec<EthBusFile> = app
-            .eth_sources
-            .iter()
-            .flat_map(|(bus, sources)| {
-                sources.iter().filter_map(move |source| match source {
-                    crate::model::ClusterSource::Arxml { path, cluster } => Some(EthBusFile {
-                        bus: *bus,
-                        path: rel(path),
-                        cluster: cluster.clone(),
-                    }),
-                    _ => None,
-                })
-            })
-            .collect();
-        for bus in app.eth_buses.keys() {
-            if !app.eth_sources.contains_key(bus) {
-                eth_buses.push(EthBusFile {
-                    bus: *bus,
-                    path: app
-                        .eth_description_path(*bus)
-                        .map(|path| rel(&path))
-                        .unwrap_or_default(),
-                    cluster: app.eth_cluster_label(*bus),
-                });
-            }
-        }
-        // Bus-side reads go through the snapshot, like every other
-        // frontend read of the bus.
-        Config {
-            channels: app
-                .snap
-                .channels
-                .iter()
-                .map(|c| {
-                    // Primary first, then the extras; every path is stored
-                    // relative to the project directory when there is one.
-                    let rel = |p: &String| match base {
-                        Some(b) => relativize(p, b),
-                        None => p.clone(),
-                    };
-                    let (first, rest) = match c.dbc_paths.split_first() {
-                        Some((f, r)) => (rel(f), r.iter().map(rel).collect()),
-                        None => (String::new(), Vec::new()),
-                    };
-                    ChannelCfg {
-                        name: c.name.clone(),
-                        dbc_path: first,
-                        dbc_paths_extra: rest,
-                        node_roles: c
-                            .node_roles
-                            .iter()
-                            .map(|(n, r)| (n.clone(), r.tag().to_string()))
-                            .collect(),
-                        bitrate_kbps: c.bitrate_kbps,
-                        fd_data_kbps: c.fd_data_kbps,
-                    }
-                })
-                .collect(),
-            bus_counter: app.snap.bus_counter,
-            fr_buses,
-            fr_names: app
-                .fr_names
-                .iter()
-                .map(|(bus, name)| (*bus, name.clone()))
-                .collect(),
-            eth_buses,
-            can_arxml: app
-                .can_arxml
-                .iter()
-                .flat_map(|(bus, sources)| {
-                    sources.iter().map(move |(path, cluster)| CanArxmlFile {
-                        bus: *bus,
-                        path: rel(path),
-                        cluster: cluster.clone(),
-                    })
-                })
-                .collect(),
-            eth_frame_length_includes_header: app.eth_length_includes_header,
+impl ProjectSettings {
+    pub fn from_app(app: &App, _base: Option<&Path>) -> Self {
+        ProjectSettings {
             // ∞ 存不成数，所以那一档走 `replay_fastest`，数本身留一个中性值。
             replay_fastest: !app.replay_speed.is_finite(),
             replay_speed: if app.replay_speed.is_finite() {
@@ -1188,35 +918,6 @@ impl Config {
                 })
                 .collect(),
             sysvars: app.snap.sysvars.iter().map(|v| v.def.clone()).collect(),
-            tx: app
-                .snap
-                .tx
-                .iter()
-                .map(|t| TxCfg {
-                    channel: t.channel,
-                    id: t.id,
-                    active: t.active,
-                    data_text: t.data_text.clone(),
-                    data: crate::generator::parse_hex_bytes(&t.data_text).unwrap_or_default(),
-                    cycle_us: t.cycle_us,
-                    fd: t.fd,
-                    brs: t.brs,
-                    srcs: t.srcs.iter().map(src_cfg).collect(),
-                })
-                .collect(),
-            fr_tx: app
-                .snap
-                .fr_tx
-                .iter()
-                .map(|t| FrTxCfg {
-                    bus: t.bus,
-                    slot: t.slot,
-                    active: t.active,
-                    data_text: t.data_text.clone(),
-                    cycle_us: t.cycle_us,
-                    srcs: t.srcs.iter().map(src_cfg).collect(),
-                })
-                .collect(),
             counters: app.window_counters(),
             recent_dbc: app.recent_dbc.clone(),
             recent_log: app.recent_log.clone(),
@@ -1224,114 +925,8 @@ impl Config {
                 tolerance_percent: app.spec_tol_pct,
                 grace_cycles: app.spec_grace,
             },
-            triggers: app
-                .snap
-                .triggers
-                .iter()
-                .map(|t| {
-                    let mut send_ch = 0u8;
-                    let mut send_id = 0u32;
-                    let (kind, ch, id, ext, signal, threshold, rising) = match &t.cond {
-                        TriggerCond::SignalCross {
-                            ch,
-                            id,
-                            ext,
-                            signal,
-                            threshold,
-                            rising,
-                        } => (0, *ch, *id, *ext, signal.clone(), *threshold, *rising),
-                        TriggerCond::IdPresent { ch, id } => {
-                            (1, *ch, *id, false, String::new(), 0.0, false)
-                        }
-                        TriggerCond::ErrorFrame { ch } => {
-                            (2, *ch, 0, false, String::new(), 0.0, false)
-                        }
-                        TriggerCond::CycleTimeout { ch, id } => {
-                            (3, *ch, *id, false, String::new(), 0.0, false)
-                        }
-                        // The sysvar key rides the `signal` string field;
-                        // ch/id carry nothing for it.
-                        TriggerCond::SysVar {
-                            key,
-                            threshold,
-                            rising,
-                        } => (4, 0, 0, false, key.clone(), *threshold, *rising),
-                        // A FlexRay rule's `ch` is a FlexRay bus index and its
-                        // `id` the slot: `kind` 5/6 is what says so, and no
-                        // arbitration id is invented for a schedule position.
-                        TriggerCond::FrFramePresent { bus, slot } => {
-                            (5, *bus, u32::from(*slot), false, String::new(), 0.0, false)
-                        }
-                        TriggerCond::FrSignalCross {
-                            bus,
-                            slot,
-                            signal,
-                            threshold,
-                            rising,
-                        } => (
-                            6,
-                            *bus,
-                            u32::from(*slot),
-                            false,
-                            signal.clone(),
-                            *threshold,
-                            *rising,
-                        ),
-                        // The definition id rides the `signal` field, the
-                        // same convention the sysvar key uses.
-                        TriggerCond::DerivedSignal {
-                            id,
-                            threshold,
-                            rising,
-                        } => (7, 0, 0, false, id.clone(), *threshold, *rising),
-                    };
-                    TriggerCfg {
-                        kind,
-                        ch,
-                        id,
-                        signal,
-                        threshold,
-                        rising,
-                        ext,
-                        action: match t.action {
-                            TriggerAction::StartRecording => 0,
-                            TriggerAction::StopRecording => 1,
-                            TriggerAction::Send { ch, id } => {
-                                send_ch = ch;
-                                send_id = id;
-                                2
-                            }
-                            TriggerAction::ClearTrace => 3,
-                            TriggerAction::InsertMarker => 4,
-                        },
-                        send_ch,
-                        send_id,
-                        enabled: t.enabled,
-                    }
-                })
-                .collect(),
-            web: app.web_workspace.clone(),
+            workspace: app.web_workspace.clone(),
             derived: app.derived_defs.clone(),
-        }
-    }
-
-    /// Resolves relative DBC paths against the project directory they were
-    /// saved relative to; call before `apply`.
-    pub fn resolve_paths(&mut self, base: Option<&Path>) {
-        for c in &mut self.channels {
-            c.dbc_path = resolve_dbc(&c.dbc_path, base);
-            for p in &mut c.dbc_paths_extra {
-                *p = resolve_dbc(p, base);
-            }
-        }
-        for f in &mut self.fr_buses {
-            f.path = resolve_dbc(&f.path, base);
-        }
-        for f in &mut self.eth_buses {
-            f.path = resolve_dbc(&f.path, base);
-        }
-        for f in &mut self.can_arxml {
-            f.path = resolve_dbc(&f.path, base);
         }
     }
 
@@ -1345,125 +940,9 @@ impl Config {
     /// the caller has to report: `apply` cannot say it itself, because the load
     /// path writes its own "project loaded" over the bar the moment this
     /// returns.
-    pub fn apply(self, app: &mut App) -> Vec<String> {
-        let mut problems: Vec<String> = Vec::new();
-        app.web_workspace = self.web;
+    pub fn apply(self, app: &mut App) {
+        app.web_workspace = self.workspace;
         app.set_derived_defs(self.derived);
-        // Description sources are rebuilt from this file; a project that
-        // carries none must not inherit the previous project's cluster maps.
-        app.can_arxml.clear();
-        app.fr_sources.clear();
-        app.eth_sources.clear();
-
-        if !self.channels.is_empty() {
-            // Grow or shrink the fresh app's two default buses to the
-            // saved count, then overlay the saved declarations on top.
-            // The count is stepped locally -- on the threaded drive the
-            // snapshot lags the commands by a lap.
-            let mut count = app.snap.channel_count;
-            while count > self.channels.len() {
-                app.remove_channel(count - 1);
-                count -= 1;
-            }
-            while count < self.channels.len() {
-                app.add_channel();
-                count += 1;
-            }
-            for (i, c) in self.channels.iter().enumerate() {
-                // Role declarations: drop unknown spellings (the 未知码丢条
-                // convention).
-                let roles: std::collections::BTreeMap<String, crate::app::NodeRole> = c
-                    .node_roles
-                    .iter()
-                    .filter_map(|(n, r)| crate::app::NodeRole::parse(r).map(|r| (n.clone(), r)))
-                    .collect();
-                app.send(crate::bus::BusCommand::SetChannelConfig {
-                    ch: i as u8,
-                    name: Some(c.name.clone()),
-                    dbc_path: Some(c.dbc_path.clone()),
-                    bitrate_kbps: Some(c.bitrate_kbps),
-                    fd_data_kbps: Some(c.fd_data_kbps),
-                    node_roles: Some(roles),
-                });
-                // The full attach list (primary + extras) travels as one
-                // command; SetChannelConfig only pins the primary.
-                let mut paths = vec![c.dbc_path.clone()];
-                paths.extend(c.dbc_paths_extra.iter().cloned());
-                app.send(crate::bus::BusCommand::LoadDbc { ch: i as u8, paths });
-            }
-            // Intent only. What transmits is decided by each TxCfg's
-            // `active` below, so a restored project never starts
-            // traffic that was stopped when it was saved.
-            app.set_bus_counter(self.bus_counter.max(self.channels.len()));
-            app.settle();
-            // Databases were already loaded with their full attach lists
-            // above; no second pass needed.
-        }
-        // CAN buses restored from ARXML replace the empty DBC load above with
-        // their parsed cluster. The project stores the source because the
-        // channel itself only carries the resulting table.
-        for file in &self.can_arxml {
-            if file.bus as usize >= app.snap.channel_count {
-                problems.push(format!(
-                    "CAN ARXML `{}` names bus {} but the project has no such bus",
-                    file.cluster, file.bus
-                ));
-                continue;
-            }
-            if let Err(e) = app.load_can_arxml_on_bus(&file.path, &file.cluster, file.bus) {
-                problems.push(format!("CAN ARXML load failed: {e}"));
-            }
-        }
-        app.settle();
-        // Whatever the fresh app or the loaded databases put in the generator
-        // goes, and the project's own entries come back in its place.
-        let stale: Vec<(u8, u32)> = app.snap.tx.iter().map(|t| (t.channel, t.id)).collect();
-        for (ch, id) in stale {
-            app.send(crate::bus::BusCommand::RemoveEntry { ch, id });
-        }
-        // The saved entries, and only those. Adding a row for every message in
-        // every loaded database would fill the panel with entries the user had
-        // deleted, because `set_entry_config` only edits an entry that already
-        // exists. A message the databases no longer declare keeps its row on
-        // purpose: the generator has always accepted an entry the database
-        // does not know.
-        for t in &self.tx {
-            app.add_tx(t.channel, t.id);
-        }
-        app.settle();
-        for t in self.tx {
-            // 0 is a real state now: a DBC-declared event-triggered
-            // message. Everything else keeps the anti-typo floor.
-            let cycle_us = if t.cycle_us == 0 {
-                0
-            } else {
-                t.cycle_us.max(1_000)
-            };
-            let data_text = if t.data_text.is_empty() {
-                None
-            } else {
-                Some(t.data_text)
-            };
-            app.send(crate::bus::BusCommand::SetEntryConfig {
-                ch: t.channel,
-                id: t.id,
-                active: t.active,
-                cycle_us,
-                fd: t.fd,
-                flags: Some(if t.fd {
-                    let flags = FrameFlags::FD;
-                    if t.brs {
-                        flags.union(FrameFlags::BRS)
-                    } else {
-                        flags
-                    }
-                } else {
-                    FrameFlags::NONE
-                }),
-                data_text,
-                srcs: t.srcs.into_iter().filter_map(value_src).collect(),
-            });
-        }
         // Every window kind is restored as the file states it -- an empty list
         // means the project has none of that kind; letting the default windows
         // leak back in would resurrect what the user deleted.
@@ -1666,70 +1145,6 @@ impl Config {
         app.send(crate::bus::BusCommand::SetReplayBlocks {
             blocks: self.blocks.clone(),
         });
-        // An unknown kind code (a project from a future version) drops
-        // only that trigger; the rest load. The list belongs to the bus,
-        // so it crosses as a command; restore reads the list back below
-        // (the project's clean baseline), hence the settle.
-        let triggers: Vec<crate::trigger::Trigger> = self
-            .triggers
-            .iter()
-            .filter_map(|c| {
-                let cond = match c.kind {
-                    0 => TriggerCond::SignalCross {
-                        ch: c.ch,
-                        id: c.id,
-                        ext: c.ext,
-                        signal: c.signal.clone(),
-                        threshold: c.threshold,
-                        rising: c.rising,
-                    },
-                    1 => TriggerCond::IdPresent { ch: c.ch, id: c.id },
-                    2 => TriggerCond::ErrorFrame { ch: c.ch },
-                    3 => TriggerCond::CycleTimeout { ch: c.ch, id: c.id },
-                    // The sysvar key rides the `signal` string field.
-                    4 => TriggerCond::SysVar {
-                        key: c.signal.clone(),
-                        threshold: c.threshold,
-                        rising: c.rising,
-                    },
-                    // A FlexRay rule's `ch` is a FlexRay bus index and its `id`
-                    // the slot; kind 5/6 is what says so.
-                    5 => TriggerCond::FrFramePresent {
-                        bus: c.ch,
-                        slot: c.id.min(u32::from(u16::MAX)) as u16,
-                    },
-                    6 => TriggerCond::FrSignalCross {
-                        bus: c.ch,
-                        slot: c.id.min(u32::from(u16::MAX)) as u16,
-                        signal: c.signal.clone(),
-                        threshold: c.threshold,
-                        rising: c.rising,
-                    },
-                    // The definition id rides the `signal` field.
-                    7 => TriggerCond::DerivedSignal {
-                        id: c.signal.clone(),
-                        threshold: c.threshold,
-                        rising: c.rising,
-                    },
-                    _ => return None,
-                };
-                let action = match c.action {
-                    1 => TriggerAction::StopRecording,
-                    2 => TriggerAction::Send {
-                        ch: c.send_ch,
-                        id: c.send_id,
-                    },
-                    3 => TriggerAction::ClearTrace,
-                    4 => TriggerAction::InsertMarker,
-                    _ => TriggerAction::StartRecording,
-                };
-                let mut t = crate::trigger::Trigger::new(cond, action);
-                t.enabled = c.enabled;
-                Some(t)
-            })
-            .collect();
-        app.send(crate::bus::BusCommand::SetTriggers(triggers));
-        app.settle();
         app.spec_tol_pct = self.spec.tolerance_percent;
         app.spec_grace = self.spec.grace_cycles.max(1);
         app.replay_speed = if self.replay_fastest {
@@ -1737,84 +1152,6 @@ impl Config {
         } else {
             self.replay_speed.clamp(0.01, 100.0)
         };
-        // FlexRay and Ethernet descriptions are rebound one file at a time;
-        // several files may describe the same bus, so the merge rules decide
-        // duplicates and timing conflicts. A file that moved or broke is a
-        // problem row, not a failed project load.
-        for file in &self.fr_buses {
-            let source = if file.path.to_ascii_lowercase().ends_with(".arxml") {
-                crate::model::ClusterSource::Arxml {
-                    path: file.path.clone(),
-                    cluster: file.cluster.clone(),
-                }
-            } else {
-                crate::model::ClusterSource::Fibex {
-                    path: file.path.clone(),
-                }
-            };
-            if let Err(e) = app.add_fr_description(file.bus, source) {
-                problems.push(format!("FlexRay description load failed: {e}"));
-            }
-        }
-        for file in &self.eth_buses {
-            let source = crate::model::ClusterSource::Arxml {
-                path: file.path.clone(),
-                cluster: file.cluster.clone(),
-            };
-            if let Err(e) = app.add_eth_description(file.bus, source) {
-                problems.push(format!("Ethernet ARXML load failed: {e}"));
-            }
-        }
-        // Names come back before anything that labels a bus, and they survive a
-        // description that failed to load: a name is the user's, not the file's.
-        for (bus, name) in &self.fr_names {
-            app.set_flexray_name(*bus, name);
-        }
-        app.set_eth_length_includes_header(self.eth_frame_length_includes_header);
-        // The FlexRay generator entries are rebuilt *after* the descriptions
-        // land, because their name, payload length and send period are read out
-        // of the description: restored earlier, every entry would come back as a
-        // raw 8-byte filler.
-        let stale_fr: Vec<(u8, u16)> = app.snap.fr_tx.iter().map(|t| (t.bus, t.slot)).collect();
-        for (bus, slot) in stale_fr {
-            app.send(crate::bus::BusCommand::RemoveFrEntry { bus, slot });
-        }
-        let fr_slots: Vec<(u8, u16)> = self.fr_tx.iter().map(|t| (t.bus, t.slot)).collect();
-        for (bus, slot) in fr_slots {
-            app.add_fr_tx(bus, slot);
-        }
-        app.settle();
-        for t in self.fr_tx {
-            let cycle_us = if t.cycle_us == 0 {
-                0
-            } else {
-                t.cycle_us.max(1_000)
-            };
-            app.send(crate::bus::BusCommand::SetFrEntryCycle {
-                bus: t.bus,
-                slot: t.slot,
-                cycle_us,
-            });
-            if !t.data_text.is_empty() {
-                app.send(crate::bus::BusCommand::SetFrEntryHex {
-                    bus: t.bus,
-                    slot: t.slot,
-                    text: t.data_text,
-                });
-            }
-            for src in t.srcs.into_iter().filter_map(value_src) {
-                app.send(crate::bus::BusCommand::SetFrEntrySource {
-                    bus: t.bus,
-                    slot: t.slot,
-                    src,
-                });
-            }
-            app.send(crate::bus::BusCommand::SetFrEntryActive {
-                bus: t.bus,
-                slot: t.slot,
-                on: t.active,
-            });
-        }
         app.set_window_counters(self.counters);
         app.recent_dbc = self.recent_dbc;
         app.recent_log = self.recent_log;
@@ -1839,7 +1176,6 @@ impl Config {
         for key in keys {
             app.subscribe(key);
         }
-        problems
     }
 }
 
@@ -1847,6 +1183,8 @@ impl Config {
 mod tests {
     use super::*;
     use crate::app::NodeRole;
+    use crate::can::frame::FrameFlags;
+    use crate::model::ProjectV2;
     use crate::test_assets::TestBusLoad;
 
     #[test]
@@ -1870,9 +1208,9 @@ mod tests {
         app.tx_list[0].flags = FrameFlags::FD.union(FrameFlags::BRS);
         app.refresh_snapshot();
 
-        let json = serde_json::to_string(&Config::from_app(&app, None)).unwrap();
+        let json = serde_json::to_string(&ProjectV2::from_app(&app, None)).unwrap();
         let mut restored = App::headless();
-        serde_json::from_str::<Config>(&json)
+        serde_json::from_str::<ProjectV2>(&json)
             .unwrap()
             .apply(&mut restored);
 
@@ -1913,9 +1251,9 @@ mod tests {
             "the new-project path empties every kind"
         );
 
-        let json = serde_json::to_string(&Config::from_app(&app, None)).unwrap();
+        let json = serde_json::to_string(&ProjectV2::from_app(&app, None)).unwrap();
         let mut restored = App::headless();
-        serde_json::from_str::<Config>(&json)
+        serde_json::from_str::<ProjectV2>(&json)
             .unwrap()
             .apply(&mut restored);
 
@@ -1947,9 +1285,9 @@ mod tests {
         let saved: Vec<(u8, u32)> = app.snap.tx.iter().map(|t| (t.channel, t.id)).collect();
         assert_eq!(saved.len(), 2, "the two kept entries");
 
-        let json = serde_json::to_string(&Config::from_app(&app, None)).unwrap();
+        let json = serde_json::to_string(&ProjectV2::from_app(&app, None)).unwrap();
         let mut restored = App::headless();
-        serde_json::from_str::<Config>(&json)
+        serde_json::from_str::<ProjectV2>(&json)
             .unwrap()
             .apply(&mut restored);
 
@@ -1981,9 +1319,9 @@ mod tests {
             "the legends a FlexRay signal appears in follow the name"
         );
 
-        let json = serde_json::to_string(&Config::from_app(&app, None)).unwrap();
+        let json = serde_json::to_string(&ProjectV2::from_app(&app, None)).unwrap();
         let mut restored = App::headless();
-        serde_json::from_str::<Config>(&json)
+        serde_json::from_str::<ProjectV2>(&json)
             .expect("a file with the new key loads")
             .apply(&mut restored);
         assert_eq!(restored.fr_bus_name(1), "动力总成");
@@ -2002,10 +1340,16 @@ mod tests {
 
     /// True when `app` would write no FlexRay names into its project file.
     fn unnamed(app: &App) -> bool {
-        serde_json::to_value(Config::from_app(app, None)).expect("serialises")["fr_names"]
-            .as_array()
-            .unwrap()
-            .is_empty()
+        ProjectV2::from_app(app, None)
+            .clusters
+            .iter()
+            .filter(|cluster| cluster.kind == crate::model::ClusterKind::FlexRay)
+            .all(|cluster| {
+                cluster.name
+                    == cluster
+                        .bus
+                        .map_or_else(String::new, |bus| format!("FR{bus}"))
+            })
     }
 
     /// A FlexRay generator entry is a stimulus setup the user built: slot, ECU,
@@ -2049,9 +1393,9 @@ mod tests {
         let node = app.fr_tx_list[0].node.clone();
         assert!(!node.is_empty(), "the entry carries its declared sender");
 
-        let json = serde_json::to_string(&Config::from_app(&app, None)).unwrap();
+        let json = serde_json::to_string(&ProjectV2::from_app(&app, None)).unwrap();
         let mut restored = App::headless();
-        serde_json::from_str::<Config>(&json)
+        serde_json::from_str::<ProjectV2>(&json)
             .unwrap()
             .apply(&mut restored);
         assert_eq!(restored.fr_tx_list.len(), 1);
@@ -2079,10 +1423,13 @@ mod tests {
 
         // The same file with the key removed still loads.
         let mut doc: serde_json::Value = serde_json::from_str(&json).unwrap();
-        doc.as_object_mut().unwrap().remove("fr_tx");
-        assert!(!doc.to_string().contains("fr_tx"), "the key is really gone");
+        doc.as_object_mut().unwrap().remove("generators");
+        assert!(
+            !doc.to_string().contains("generators"),
+            "the key is really gone"
+        );
         let mut restored = App::headless();
-        serde_json::from_value::<Config>(doc)
+        serde_json::from_value::<ProjectV2>(doc)
             .expect("a file without the key loads")
             .apply(&mut restored);
         assert!(
@@ -2104,12 +1451,12 @@ mod tests {
             .manual
             .insert(crate::workspace::Pick::Fr { bus: 0, slot: 13 });
         app.refresh_snapshot();
-        let json = serde_json::to_string(&Config::from_app(&app, None)).unwrap();
+        let json = serde_json::to_string(&ProjectV2::from_app(&app, None)).unwrap();
         let mut doc: serde_json::Value = serde_json::from_str(&json).unwrap();
         // All three window kinds gained the key, so an old file lacks it in all
         // three -- stripping one and leaving the others would not be the file
         // this test claims to read.
-        for kind in ["trace_windows", "msg_windows", "stats_windows"] {
+        for kind in ["traceWindows", "msgWindows", "statsWindows"] {
             for w in doc[kind].as_array_mut().unwrap() {
                 w.as_object_mut().unwrap().remove("fr_manual");
             }
@@ -2120,7 +1467,7 @@ mod tests {
         );
 
         let mut restored = App::headless();
-        serde_json::from_value::<Config>(doc)
+        serde_json::from_value::<ProjectV2>(doc)
             .expect("a file without the new key loads")
             .apply(&mut restored);
         assert!(
@@ -2164,92 +1511,13 @@ mod tests {
             },
         );
 
-        let json = serde_json::to_string(&Config::from_app(&app, None)).unwrap();
+        let json = serde_json::to_string(&ProjectV2::from_app(&app, None)).unwrap();
         assert!(json.contains(r#""srcs""#), "the key is written");
         let mut restored = App::headless();
-        serde_json::from_str::<Config>(&json)
+        serde_json::from_str::<ProjectV2>(&json)
             .unwrap()
             .apply(&mut restored);
         assert_eq!(restored.tx_list[0].srcs, app.tx_list[0].srcs);
-    }
-
-    /// An entry with no `srcs` key loads with nothing driven.
-    #[test]
-    fn a_tx_entry_without_srcs_stays_flat() {
-        let mut restored = App::headless();
-        let text = r#"{"tx":[{"channel":0,"id":256,"active":true,"cycle_us":20000,
-                               "data_text":"01 02","data":[1,2]}]}"#;
-        serde_json::from_str::<Config>(text)
-            .unwrap()
-            .apply(&mut restored);
-        let tx = restored
-            .tx_list
-            .iter()
-            .find(|t| t.id == 0x100)
-            .expect("EngineStatus entry");
-        assert!(tx.srcs.is_empty(), "an absent key means no driven signal");
-        assert!(tx.active, "the rest of the entry still applied");
-        assert_eq!(tx.len, 2);
-    }
-
-    /// A source written by a newer build must vanish on its own rather than
-    /// come back as some other shape.
-    #[test]
-    fn an_unknown_kind_code_drops_only_that_source() {
-        let mut restored = App::headless();
-        let json = r#"{"tx":[{"channel":0,"id":256,"srcs":[{"name":"EngineSpeed","kind":1,"lo":0.0,"hi":8000.0,"period_us":2000000},{"name":"GearPosition","kind":200}]}]}"#;
-        serde_json::from_str::<Config>(json)
-            .unwrap()
-            .apply(&mut restored);
-        let tx = restored
-            .tx_list
-            .iter()
-            .find(|t| t.id == 0x100)
-            .expect("EngineStatus entry");
-        assert_eq!(tx.srcs.len(), 1, "only the unreadable entry goes");
-        assert_eq!(tx.srcs[0].name, "EngineSpeed");
-        assert_eq!(tx.srcs[0].kind, SrcKind::Sine, "code 1 is Sine");
-        assert_eq!(tx.srcs[0].period_us, 2_000_000);
-    }
-
-    /// A stored cycle of 0 means event-triggered, so the load-time floor must
-    /// not resurrect it as a 1 ms cyclic sender -- but it must still catch
-    /// genuinely bogus small values.
-    #[test]
-    fn an_event_triggered_cycle_survives_a_project_round_trip() {
-        let mut app = App::headless();
-        let i = app
-            .tx_list
-            .iter()
-            .position(|t| t.channel == 0 && t.id == 0x100)
-            .expect("EngineStatus entry");
-        app.tx_list[i].cycle_us = 0;
-        let j = app
-            .tx_list
-            .iter()
-            .position(|t| t.channel == 0 && t.id == 0x200)
-            .expect("VehicleState entry");
-        app.tx_list[j].cycle_us = 500;
-        app.refresh_snapshot();
-
-        let json = serde_json::to_string(&Config::from_app(&app, None)).unwrap();
-        let mut restored = App::headless();
-        serde_json::from_str::<Config>(&json)
-            .unwrap()
-            .apply(&mut restored);
-        let find = |id: u32| {
-            restored
-                .tx_list
-                .iter()
-                .find(|t| t.channel == 0 && t.id == id)
-                .map(|t| t.cycle_us)
-        };
-        assert_eq!(find(0x100), Some(0), "0 must not come back as 1ms");
-        assert_eq!(
-            find(0x200),
-            Some(1_000),
-            "the anti-typo floor still applies"
-        );
     }
 
     /// The Monitor window's rows persist with the project: the watched
@@ -2266,9 +1534,9 @@ mod tests {
         app.monitor_view.rows[0].threshold = 87.5;
         app.monitor_view.rows[0].color = 3;
 
-        let json = serde_json::to_string(&Config::from_app(&app, None)).unwrap();
+        let json = serde_json::to_string(&ProjectV2::from_app(&app, None)).unwrap();
         let mut restored = App::headless();
-        serde_json::from_str::<Config>(&json)
+        serde_json::from_str::<ProjectV2>(&json)
             .unwrap()
             .apply(&mut restored);
         assert_eq!(restored.monitor_view.rows.len(), 1);
@@ -2318,18 +1586,29 @@ mod tests {
             cond: cond.clone(),
             action: crate::trigger::TriggerAction::InsertMarker,
         });
-        let config = Config::from_app(&app, None);
-        assert_eq!(config.derived, defs, "the file carries the definitions");
+        let config = ProjectV2::from_app(&app, None);
         assert_eq!(
-            config.monitor_rows[0].derived.as_deref(),
+            config.settings.derived, defs,
+            "the file carries the definitions"
+        );
+        assert_eq!(
+            config.settings.monitor_rows[0].derived.as_deref(),
             Some("d1"),
             "the row stores the definition id, not a fake CAN address"
         );
-        assert_eq!(config.triggers[0].kind, 7, "derived rule kind");
-        assert_eq!(config.triggers[0].signal, "d1", "the id rides signal");
+        assert_eq!(
+            config.triggers.as_ref().unwrap()[0].kind,
+            7,
+            "derived rule kind"
+        );
+        assert_eq!(
+            config.triggers.as_ref().unwrap()[0].signal,
+            "d1",
+            "the id rides signal"
+        );
         let json = serde_json::to_string(&config).unwrap();
         let mut restored = App::headless();
-        serde_json::from_str::<Config>(&json)
+        serde_json::from_str::<ProjectV2>(&json)
             .unwrap()
             .apply(&mut restored);
         assert_eq!(restored.derived_defs, defs);
@@ -2349,9 +1628,9 @@ mod tests {
         app.set_role_for_test(1, "ABS", NodeRole::Absent);
         app.set_role_for_test(1, "GearBox", NodeRole::Simulated);
         app.refresh_snapshot();
-        let json = serde_json::to_string(&Config::from_app(&app, None)).unwrap();
+        let json = serde_json::to_string(&ProjectV2::from_app(&app, None)).unwrap();
         let mut restored = App::headless();
-        serde_json::from_str::<Config>(&json)
+        serde_json::from_str::<ProjectV2>(&json)
             .unwrap()
             .apply(&mut restored);
         assert_eq!(
@@ -2379,20 +1658,6 @@ mod tests {
         );
     }
 
-    /// `name`/`dbc_path` stay required, since accepting a nameless bus would
-    /// hide real corruption; optional role/bitrate fields default.
-    #[test]
-    fn a_channel_config_needs_its_name_and_path() {
-        let cfg: Config =
-            serde_json::from_str(r#"{"channels":[{"name":"A","dbc_path":"sample.dbc"}]}"#).unwrap();
-        assert_eq!(cfg.channels.len(), 1);
-        assert!(cfg.channels[0].node_roles.is_empty());
-        assert!(
-            serde_json::from_str::<Config>(r#"{"channels":[{"dbc_path":"x.dbc"}]}"#).is_err(),
-            "name is still required"
-        );
-    }
-
     /// Deleting a 路 leaves a hole, and the hole is exactly what the project
     /// file states: every description carries its own cluster index, so the
     /// survivor comes back as FR1 rather than shifted into FR0's place -- which
@@ -2414,13 +1679,13 @@ mod tests {
         app.set_flexray_name(1, "底盘");
         app.remove_fr_bus(0);
 
-        let json = serde_json::to_string(&Config::from_app(&app, None)).expect("serialises");
+        let json = serde_json::to_string(&ProjectV2::from_app(&app, None)).expect("serialises");
         assert!(
             !json.contains("动力总成"),
             "the deleted 路's name went with it: {json}"
         );
         let mut again = App::headless();
-        serde_json::from_str::<Config>(&json)
+        serde_json::from_str::<ProjectV2>(&json)
             .expect("parses")
             .apply(&mut again);
         assert_eq!(
@@ -2436,69 +1701,6 @@ mod tests {
         );
     }
 
-    /// A FlexRay rule persists as kind 5/6, which is what states that `ch` names
-    /// a FlexRay bus and `id` a schedule slot. Reloaded as any other kind it
-    /// would become a CAN watch on a made-up arbitration id.
-    #[test]
-    fn a_flexray_trigger_keeps_its_kind_and_slot() {
-        use crate::trigger::{Trigger, TriggerAction, TriggerCond};
-        let mut app = App::headless();
-        app.triggers.push(Trigger::new(
-            TriggerCond::FrFramePresent { bus: 1, slot: 13 },
-            TriggerAction::StartRecording,
-        ));
-        app.triggers.push(Trigger::new(
-            TriggerCond::FrSignalCross {
-                bus: 0,
-                slot: 24,
-                signal: "CarSpeed".into(),
-                threshold: 118.0,
-                rising: false,
-            },
-            TriggerAction::InsertMarker,
-        ));
-        app.refresh_snapshot();
-        let json = serde_json::to_string(&Config::from_app(&app, None)).unwrap();
-        assert!(
-            json.contains(r#""kind":5"#)
-                && json.contains(r#""id":13"#)
-                && json.contains(r#""ch":1"#),
-            "the slot is stored as a slot: {json}"
-        );
-        assert!(
-            json.contains(r#""kind":6"#)
-                && json.contains(r#""id":24"#)
-                && json.contains("CarSpeed")
-                && json.contains(r#""rising":false"#),
-            "so is the signal, its threshold and its edge: {json}"
-        );
-
-        let mut restored = App::headless();
-        serde_json::from_str::<Config>(&json)
-            .unwrap()
-            .apply(&mut restored);
-        assert_eq!(
-            restored.snap.triggers[0].cond,
-            TriggerCond::FrFramePresent { bus: 1, slot: 13 },
-            "and comes back as the same cluster's slot"
-        );
-        assert_eq!(
-            restored.snap.triggers[1].cond,
-            TriggerCond::FrSignalCross {
-                bus: 0,
-                slot: 24,
-                signal: "CarSpeed".into(),
-                threshold: 118.0,
-                rising: false,
-            },
-            "the FlexRay crossing condition survives whole"
-        );
-        assert_eq!(
-            restored.snap.triggers[1].action,
-            TriggerAction::InsertMarker
-        );
-    }
-
     /// The bitrates feed the load view's arithmetic, so a saved opinion about
     /// them must come back exactly.
     #[test]
@@ -2506,9 +1708,9 @@ mod tests {
         let mut app = App::headless();
         app.set_can_bitrates_for_test(0, Some(1_000), Some(5_000));
         app.refresh_snapshot();
-        let json = serde_json::to_string(&Config::from_app(&app, None)).unwrap();
+        let json = serde_json::to_string(&ProjectV2::from_app(&app, None)).unwrap();
         let mut restored = App::headless();
-        serde_json::from_str::<Config>(&json)
+        serde_json::from_str::<ProjectV2>(&json)
             .unwrap()
             .apply(&mut restored);
         assert_eq!(restored.can_bitrates(0).0, 1_000);
@@ -2520,22 +1722,6 @@ mod tests {
         );
     }
 
-    /// Omitted bitrate keys load at the defaults rather than failing or
-    /// reading zero.
-    #[test]
-    fn omitted_bitrates_load_at_defaults() {
-        let cfg: Config =
-            serde_json::from_str(r#"{"channels":[{"name":"A","dbc_path":"sample.dbc"}]}"#).unwrap();
-        assert_eq!(
-            cfg.channels[0].bitrate_kbps,
-            crate::model::CanParams::DEFAULT_BITRATE_KBPS
-        );
-        assert_eq!(
-            cfg.channels[0].fd_data_kbps,
-            crate::model::CanParams::DEFAULT_FD_DATA_KBPS
-        );
-    }
-
     /// The trace ring's retention is a project opinion about how much
     /// history to keep, so it survives a save.
     #[test]
@@ -2543,16 +1729,16 @@ mod tests {
         let mut app = App::headless();
         app.trace_limit = 500_000;
         app.set_trace_limit(500_000);
-        let json = serde_json::to_string(&Config::from_app(&app, None)).unwrap();
+        let json = serde_json::to_string(&ProjectV2::from_app(&app, None)).unwrap();
         let mut restored = App::headless();
-        serde_json::from_str::<Config>(&json)
+        serde_json::from_str::<ProjectV2>(&json)
             .unwrap()
             .apply(&mut restored);
         assert_eq!(restored.trace_limit, 500_000);
         let default = App::headless();
-        let plain = serde_json::to_string(&Config::from_app(&default, None)).unwrap();
+        let plain = serde_json::to_string(&ProjectV2::from_app(&default, None)).unwrap();
         assert!(
-            plain.contains(&format!(r#""trace_limit":{}"#, crate::app::TRACE_LIMIT)),
+            plain.contains(&format!(r#""traceLimit":{}"#, crate::app::TRACE_LIMIT)),
             "the default capacity is written too"
         );
     }
@@ -2570,10 +1756,10 @@ mod tests {
         w.time_to = "2.5".to_string();
         w.filters_open = true;
         w.fr_expand = true;
-        let json = serde_json::to_string(&Config::from_app(&app, None)).unwrap();
+        let json = serde_json::to_string(&ProjectV2::from_app(&app, None)).unwrap();
 
         let mut restored = App::headless();
-        serde_json::from_str::<Config>(&json)
+        serde_json::from_str::<ProjectV2>(&json)
             .unwrap()
             .apply(&mut restored);
         let w = &restored.trace_windows[0];
@@ -2595,14 +1781,14 @@ mod tests {
 
         // A file omitting these keys reads with their defaults.
         let mut doc: serde_json::Value = serde_json::from_str(&json).unwrap();
-        for w in doc["trace_windows"].as_array_mut().unwrap() {
+        for w in doc["traceWindows"].as_array_mut().unwrap() {
             let obj = w.as_object_mut().unwrap();
             for key in ["time_from", "time_to", "filters_open", "fr_expand"] {
                 obj.remove(key);
             }
         }
         let mut restored = App::headless();
-        serde_json::from_value::<Config>(doc)
+        serde_json::from_value::<ProjectV2>(doc)
             .expect("a file omitting them loads")
             .apply(&mut restored);
         let w = &restored.trace_windows[0];
@@ -2621,9 +1807,9 @@ mod tests {
         app.limits.pre_frames = 1_024;
         app.limits.post_frames = 128;
         app.limits.marker_cap = 2_048;
-        let json = serde_json::to_string(&Config::from_app(&app, None)).unwrap();
+        let json = serde_json::to_string(&ProjectV2::from_app(&app, None)).unwrap();
         let mut restored = App::headless();
-        serde_json::from_str::<Config>(&json)
+        serde_json::from_str::<ProjectV2>(&json)
             .unwrap()
             .apply(&mut restored);
         assert_eq!(restored.limits.pre_frames, 1_024);
@@ -2638,9 +1824,9 @@ mod tests {
         let mut app = App::headless();
         app.spec_tol_pct = 25;
         app.spec_grace = 8;
-        let json = serde_json::to_string(&Config::from_app(&app, None)).unwrap();
+        let json = serde_json::to_string(&ProjectV2::from_app(&app, None)).unwrap();
         let mut restored = App::headless();
-        serde_json::from_str::<Config>(&json)
+        serde_json::from_str::<ProjectV2>(&json)
             .unwrap()
             .apply(&mut restored);
         assert_eq!(restored.spec_tol_pct, 25);
@@ -2654,21 +1840,21 @@ mod tests {
     #[test]
     fn an_old_project_without_a_spec_block_loads_the_defaults() {
         let mut restored = App::headless();
-        serde_json::from_str::<Config>(r#"{"channels":[]}"#)
+        serde_json::from_str::<ProjectV2>(r#"{"channels":[]}"#)
             .unwrap()
             .apply(&mut restored);
         assert_eq!(restored.spec_tol_pct, crate::spec::TOLERANCE_PERCENT);
         assert_eq!(restored.spec_grace, crate::spec::GRACE_CYCLES);
 
-        let partial: Config = serde_json::from_str(r#"{"spec":{"grace_cycles":5}}"#).unwrap();
+        let partial: ProjectV2 = serde_json::from_str(r#"{"spec":{"grace_cycles":5}}"#).unwrap();
         assert_eq!(
-            partial.spec.tolerance_percent,
+            partial.settings.spec.tolerance_percent,
             crate::spec::TOLERANCE_PERCENT,
             "the key that was not written keeps its own default"
         );
 
         let mut zeroed = App::headless();
-        serde_json::from_str::<Config>(r#"{"spec":{"grace_cycles":0}}"#)
+        serde_json::from_str::<ProjectV2>(r#"{"spec":{"grace_cycles":0}}"#)
             .unwrap()
             .apply(&mut zeroed);
         assert_eq!(
@@ -2679,9 +1865,9 @@ mod tests {
 
     #[test]
     fn missing_fields_fall_back_to_defaults() {
-        let cfg: Config = serde_json::from_str("{}").unwrap();
-        assert_eq!(cfg.replay_speed, 1.0);
-        assert!(cfg.channels.is_empty());
+        let cfg: ProjectV2 = serde_json::from_str("{}").unwrap();
+        assert_eq!(cfg.settings.replay_speed, 1.0);
+        assert!(cfg.clusters.is_empty());
     }
 
     /// Omitted keys keep markers on.
@@ -2740,13 +1926,13 @@ mod tests {
     fn as_fast_as_possible_survives_a_project_round_trip() {
         let mut app = App::headless();
         app.replay_speed = f64::INFINITY;
-        let cfg = Config::from_app(&app, None);
-        assert!(cfg.replay_fastest, "∞ 记在开关上，不记在数上");
+        let cfg = ProjectV2::from_app(&app, None);
+        assert!(cfg.settings.replay_fastest, "∞ 记在开关上，不记在数上");
         let json = serde_json::to_string(&cfg).unwrap();
-        assert!(json.contains("\"replay_fastest\":true"));
+        assert!(json.contains("\"replayFastest\":true"));
 
         let mut restored = App::headless();
-        serde_json::from_str::<Config>(&json)
+        serde_json::from_str::<ProjectV2>(&json)
             .expect("a project carrying the flag loads")
             .apply(&mut restored);
         assert_eq!(restored.replay_speed, f64::INFINITY);
@@ -2754,10 +1940,10 @@ mod tests {
         // 正常倍速不受牵连，也不该多出这一项。
         let mut finite = App::headless();
         finite.replay_speed = 4.0;
-        let json = serde_json::to_string(&Config::from_app(&finite, None)).unwrap();
-        assert!(!json.contains("replay_fastest"), "没到 ∞ 就不写这一项");
+        let json = serde_json::to_string(&ProjectV2::from_app(&finite, None)).unwrap();
+        assert!(!json.contains("replayFastest"), "没到 ∞ 就不写这一项");
         let mut back = App::headless();
-        serde_json::from_str::<Config>(&json)
+        serde_json::from_str::<ProjectV2>(&json)
             .unwrap()
             .apply(&mut back);
         assert_eq!(back.replay_speed, 4.0);
@@ -2767,6 +1953,7 @@ mod tests {
 #[cfg(test)]
 mod eth_config_tests {
     use super::*;
+    use crate::model::ProjectV2;
     use crate::test_assets::TestBusLoad;
 
     const ETH_SAMPLE: &str = r#"<?xml version="1.0"?>
@@ -2787,9 +1974,9 @@ mod eth_config_tests {
         assert_eq!(app.eth_buses.len(), 1);
         app.set_eth_length_includes_header(true);
 
-        let json = serde_json::to_string(&Config::from_app(&app, None)).unwrap();
+        let json = serde_json::to_string(&ProjectV2::from_app(&app, None)).unwrap();
         let mut restored = App::headless();
-        serde_json::from_str::<Config>(&json)
+        serde_json::from_str::<ProjectV2>(&json)
             .unwrap()
             .apply(&mut restored);
         assert!(restored.eth_buses.contains_key(&2));
@@ -2858,10 +2045,10 @@ mod eth_config_tests {
         app.trace_windows[0].manual.insert(pick);
         app.trace_windows[0].scope = SigScope::Manual;
 
-        let json = serde_json::to_string(&Config::from_app(&app, None)).unwrap();
+        let json = serde_json::to_string(&ProjectV2::from_app(&app, None)).unwrap();
         assert!(json.contains("eth_manual"), "the pick has its own list");
         let mut restored = App::headless();
-        serde_json::from_str::<Config>(&json)
+        serde_json::from_str::<ProjectV2>(&json)
             .unwrap()
             .apply(&mut restored);
         assert!(
