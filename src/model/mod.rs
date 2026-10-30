@@ -12,7 +12,6 @@ mod key;
 mod legacy_import;
 mod plan;
 mod project_cfg;
-mod registry;
 mod runtime;
 mod schema;
 
@@ -25,8 +24,6 @@ mod legacy_tests;
 #[cfg(test)]
 mod plan_tests;
 #[cfg(test)]
-mod registry_tests;
-#[cfg(test)]
 mod runtime_tests;
 #[cfg(test)]
 mod tests;
@@ -34,25 +31,21 @@ mod tests;
 // Phase 2 importers and the Phase 4 runtime consume this surface; until then
 // the public re-exports are intentionally ahead of their callers.
 #[allow(unused_imports)]
-pub use arxml::{ArxmlImporter, ScannedCluster, import_cluster, scan_clusters};
+pub use arxml::{ScannedCluster, import_cluster, scan_clusters};
 #[allow(unused_imports)]
 pub use dbc_import::{
-    DbcImporter, empty_can_comm, import_dbc, import_symbol_table, import_symbol_table_sources,
+    empty_can_comm, import_dbc, import_symbol_table, import_symbol_table_sources,
 };
 #[allow(unused_imports)]
 pub use id::{ClusterIds, ElementIds, ElementKind};
 #[allow(unused_imports)]
 pub use key::{BusMap, KeyError, SignalKey, SignalRef};
 #[allow(unused_imports)]
-pub use legacy_import::{
-    EthernetDbImporter, FibexImporter, import_eth_db, import_eth_db_obj, import_fibex, import_fr_db,
-};
+pub use legacy_import::{import_eth_db, import_eth_db_obj, import_fibex, import_fr_db};
 #[allow(unused_imports)]
 pub use plan::{PlanCache, build_decode_plan};
 #[allow(unused_imports)]
 pub use project_cfg::project_from_config;
-#[allow(unused_imports)]
-pub use registry::{ClusterEntry, ClusterRegistry};
 #[allow(unused_imports)]
 pub use runtime::{DecodedSignal, E2eReading, decode_e2e, decode_payload, encode_payload};
 #[allow(unused_imports)]
@@ -1315,21 +1308,7 @@ impl ClusterSource {
     }
 }
 
-pub struct ImportInput<'a> {
-    pub cluster: ClusterId,
-    pub source: &'a ClusterSource,
-    pub text: &'a str,
-}
-
 pub struct ImportOutcome {
     pub comm: Comm,
     pub issues: Vec<Issue>,
-}
-
-/// An importer reads one source into the unified model. Implementations are
-/// per-format; the cluster registry only ever sees this surface.
-pub trait ClusterImporter {
-    fn name(&self) -> &'static str;
-    fn accepts(&self, source: &ClusterSource) -> bool;
-    fn import(&self, input: ImportInput<'_>, ids: &mut ElementIds) -> ImportOutcome;
 }

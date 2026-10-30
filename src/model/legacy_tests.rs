@@ -137,17 +137,3 @@ fn dbc_and_arxml_agree_on_the_same_message() {
     assert_eq!(dbc_sig.max, arxml_sig.max);
     assert_eq!(dbc_sig.byte_order, arxml_sig.byte_order);
 }
-
-#[test]
-fn importers_accept_their_own_sources() {
-    assert!(FibexImporter.accepts(&ClusterSource::Fibex {
-        path: "a.xml".to_string()
-    }));
-    assert!(!FibexImporter.accepts(&ClusterSource::Dbc {
-        path: "a.dbc".to_string()
-    }));
-    assert!(EthernetDbImporter.accepts(&ClusterSource::Fibex {
-        path: "a.xml".to_string()
-    }));
-    assert!(!EthernetDbImporter.accepts(&ClusterSource::Manual));
-}

@@ -138,15 +138,3 @@ fn dbc_multiplexed_signals_carry_their_selector_conditions() {
     assert!(one.iter().any(|value| value.signal == second.id));
     assert!(one.iter().all(|value| value.signal != first.id));
 }
-
-#[test]
-fn dbc_importer_accepts_only_dbc_sources() {
-    let importer = DbcImporter;
-    assert!(importer.accepts(&ClusterSource::Dbc {
-        path: "a.dbc".to_string()
-    }));
-    assert!(!importer.accepts(&ClusterSource::Arxml {
-        path: "a.arxml".to_string(),
-        cluster: String::new()
-    }));
-}

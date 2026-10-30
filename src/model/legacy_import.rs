@@ -7,52 +7,6 @@ use super::*;
 use crate::eth::db::{EthDb, EthSignal};
 use crate::fr_db::FrDb;
 
-pub struct FibexImporter;
-
-impl ClusterImporter for FibexImporter {
-    fn name(&self) -> &'static str {
-        "fibex"
-    }
-
-    fn accepts(&self, source: &ClusterSource) -> bool {
-        matches!(source, ClusterSource::Fibex { .. })
-    }
-
-    fn import(&self, input: ImportInput<'_>, ids: &mut ElementIds) -> ImportOutcome {
-        let name = input
-            .source
-            .path()
-            .and_then(|path| std::path::Path::new(path).file_stem())
-            .map(|stem| stem.to_string_lossy().to_string())
-            .filter(|stem| !stem.is_empty())
-            .unwrap_or_else(|| format!("FR{}", input.cluster.0));
-        import_fibex(input.text, &name, input.cluster, input.source, ids)
-    }
-}
-
-pub struct EthernetDbImporter;
-
-impl ClusterImporter for EthernetDbImporter {
-    fn name(&self) -> &'static str {
-        "ethernet-db"
-    }
-
-    fn accepts(&self, source: &ClusterSource) -> bool {
-        matches!(source, ClusterSource::Fibex { .. })
-    }
-
-    fn import(&self, input: ImportInput<'_>, ids: &mut ElementIds) -> ImportOutcome {
-        let name = input
-            .source
-            .path()
-            .and_then(|path| std::path::Path::new(path).file_stem())
-            .map(|stem| stem.to_string_lossy().to_string())
-            .filter(|stem| !stem.is_empty())
-            .unwrap_or_else(|| format!("ETH{}", input.cluster.0));
-        import_eth_db(input.text, &name, input.cluster, input.source, ids)
-    }
-}
-
 pub fn import_fibex(
     text: &str,
     cluster_name: &str,

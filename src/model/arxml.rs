@@ -39,43 +39,6 @@ pub fn scan_clusters(text: &str) -> Result<Vec<ScannedCluster>, String> {
     Ok(found)
 }
 
-pub struct ArxmlImporter;
-
-impl ClusterImporter for ArxmlImporter {
-    fn name(&self) -> &'static str {
-        "arxml"
-    }
-
-    fn accepts(&self, source: &ClusterSource) -> bool {
-        matches!(source, ClusterSource::Arxml { .. })
-    }
-
-    fn import(&self, input: ImportInput<'_>, ids: &mut ElementIds) -> ImportOutcome {
-        let cluster = match input.source {
-            ClusterSource::Arxml { cluster, .. } if !cluster.is_empty() => cluster.clone(),
-            _ => {
-                // An unnamed source means the first cluster in the file.
-                let first = scan_clusters(input.text)
-                    .ok()
-                    .and_then(|clusters| clusters.into_iter().next());
-                match first {
-                    Some(cluster) => cluster.name,
-                    None => {
-                        return ImportOutcome {
-                            comm: Comm::default(),
-                            issues: vec![Issue::error(
-                                IssueKind::Other,
-                                "the ARXML file contains no communication cluster",
-                            )],
-                        };
-                    }
-                }
-            }
-        };
-        import_cluster(input.text, &cluster, input.cluster, input.source, ids)
-    }
-}
-
 pub fn import_cluster(
     text: &str,
     cluster_name: &str,

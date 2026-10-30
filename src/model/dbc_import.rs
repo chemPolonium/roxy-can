@@ -7,29 +7,6 @@
 use super::*;
 use crate::dbc::{self, MessageInfo, SignalInfo, SymbolTable};
 
-pub struct DbcImporter;
-
-impl ClusterImporter for DbcImporter {
-    fn name(&self) -> &'static str {
-        "dbc"
-    }
-
-    fn accepts(&self, source: &ClusterSource) -> bool {
-        matches!(source, ClusterSource::Dbc { .. })
-    }
-
-    fn import(&self, input: ImportInput<'_>, ids: &mut ElementIds) -> ImportOutcome {
-        let name = input
-            .source
-            .path()
-            .and_then(|path| std::path::Path::new(path).file_stem())
-            .map(|stem| stem.to_string_lossy().to_string())
-            .filter(|stem| !stem.is_empty())
-            .unwrap_or_else(|| format!("CAN{}", input.cluster.0));
-        import_dbc(input.text, &name, input.cluster, input.source, ids)
-    }
-}
-
 pub fn import_dbc(
     text: &str,
     cluster_name: &str,
