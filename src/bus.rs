@@ -1165,6 +1165,25 @@ type ModelHandle = (
     Arc<crate::model::PlanCache>,
 );
 
+/// The decoded model and the description it was built from, kept together so
+/// a table replacement can never leave a stale plan pretending to match.
+pub(crate) struct ProtocolRuntime<D> {
+    pub comm: Arc<crate::model::Comm>,
+    pub plans: Arc<crate::model::PlanCache>,
+    pub db: Arc<D>,
+}
+
+pub(crate) type FrRuntime = ProtocolRuntime<crate::fr_db::FrDb>;
+pub(crate) type EthRuntime = ProtocolRuntime<crate::eth::db::EthDb>;
+
+impl<D> std::ops::Deref for ProtocolRuntime<D> {
+    type Target = crate::model::Comm;
+
+    fn deref(&self) -> &Self::Target {
+        &self.comm
+    }
+}
+
 pub struct BusCore {
     /// Which timeline the bus runs on: Virtual generates against the sim
     /// clock, Replay follows a loaded log's own stamps.
@@ -1228,13 +1247,9 @@ pub struct BusCore {
     pub(crate) fr_cluster_ids: std::collections::BTreeMap<u8, crate::model::ClusterId>,
     pub(crate) eth_cluster_ids: std::collections::BTreeMap<u8, crate::model::ClusterId>,
     /// Unified-model view of each FlexRay bus, keyed by bus index.
-    pub(crate) fr_models: std::collections::BTreeMap<u8, Arc<crate::model::Comm>>,
-    pub(crate) fr_model_plans: std::collections::BTreeMap<u8, Arc<crate::model::PlanCache>>,
-    pub(crate) fr_model_dbs: std::collections::BTreeMap<u8, Arc<crate::fr_db::FrDb>>,
+    pub(crate) fr_models: std::collections::BTreeMap<u8, Arc<FrRuntime>>,
     /// Unified-model view of each Ethernet bus, keyed by bus index.
-    pub(crate) eth_models: std::collections::BTreeMap<u8, Arc<crate::model::Comm>>,
-    pub(crate) eth_model_plans: std::collections::BTreeMap<u8, Arc<crate::model::PlanCache>>,
-    pub(crate) eth_model_dbs: std::collections::BTreeMap<u8, Arc<crate::eth::db::EthDb>>,
+    pub(crate) eth_models: std::collections::BTreeMap<u8, Arc<EthRuntime>>,
     /// Model/plan issues already written to the Write log. Rebuilding a
     /// cluster must not repeat yesterday's warnings on every edit.
     pub(crate) model_issues_seen: std::collections::HashSet<String>,
@@ -1613,11 +1628,7 @@ impl BusCore {
             fr_cluster_ids: Default::default(),
             eth_cluster_ids: Default::default(),
             fr_models: Default::default(),
-            fr_model_plans: Default::default(),
-            fr_model_dbs: Default::default(),
             eth_models: Default::default(),
-            eth_model_plans: Default::default(),
-            eth_model_dbs: Default::default(),
             bus_counter: 2,
             tx_list: Vec::new(),
             fr_tx_list: Vec::new(),
@@ -3319,23 +3330,20 @@ impl BusCore {
                 (Some(_), Some(ix)) => {
                     // The model owns the signal's place in the frame; a bus
                     // without one cannot encode a named signal.
-                    let model = self.fr_models.get(&bus).cloned().and_then(|comm| {
-                        let plans = self.fr_model_plans.get(&bus).cloned()?;
+                    let model = self.fr_models.get(&bus).cloned().and_then(|runtime| {
                         let cluster = self.fr_cluster_ids.get(&bus).copied()?;
-                        Some((cluster, comm, plans))
+                        Some((cluster, runtime))
                     });
                     match model {
-                        Some((cluster, comm, plans)) => {
-                            crate::generator::fr_tx_set_signal_with_model(
-                                &mut self.fr_tx_list[ix],
-                                cluster,
-                                &comm,
-                                &plans,
-                                &name,
-                                v,
-                            )
-                            .err()
-                        }
+                        Some((cluster, runtime)) => crate::generator::fr_tx_set_signal_with_model(
+                            &mut self.fr_tx_list[ix],
+                            cluster,
+                            &runtime.comm,
+                            &runtime.plans,
+                            &name,
+                            v,
+                        )
+                        .err(),
                         None => Some(format!(
                             "FR{bus} has no model: the signal cannot be placed in the payload"
                         )),
@@ -3735,9 +3743,9 @@ impl BusCore {
     fn fr_model_frames_view(&self) -> std::collections::BTreeMap<(u8, u16), ModelFrameView> {
         use crate::model::FrameAddress;
         let mut out = std::collections::BTreeMap::new();
-        for (bus, comm) in &self.fr_models {
-            let plans = self.fr_model_plans.get(bus);
-            for frame in comm.frames.values() {
+        for (bus, runtime) in &self.fr_models {
+            let plans = Some(&runtime.plans);
+            for frame in runtime.frames.values() {
                 let FrameAddress::FlexRay { slot, .. } = frame.address else {
                     continue;
                 };
@@ -3760,9 +3768,9 @@ impl BusCore {
     fn eth_model_frames_view(&self) -> std::collections::BTreeMap<String, ModelFrameView> {
         use crate::model::FrameAddress;
         let mut out = std::collections::BTreeMap::new();
-        for (bus, comm) in &self.eth_models {
-            let plans = self.eth_model_plans.get(bus);
-            for frame in comm.frames.values() {
+        for runtime in self.eth_models.values() {
+            let plans = Some(&runtime.plans);
+            for frame in runtime.frames.values() {
                 if !matches!(frame.address, FrameAddress::Ethernet { .. }) {
                     continue;
                 }
@@ -5140,16 +5148,18 @@ impl BusCore {
         let (plans, plan_issues) = crate::model::PlanCache::build(&comm, 1);
         self.report_model_issues(&format!("FR{bus}"), &comm.issues);
         self.report_model_issues(&format!("FR{bus}"), &plan_issues);
-        self.fr_models.insert(bus, Arc::new(comm));
-        self.fr_model_plans.insert(bus, Arc::new(plans));
-        self.fr_model_dbs
-            .insert(bus, Arc::clone(&self.fr_dbs[&bus]));
+        self.fr_models.insert(
+            bus,
+            Arc::new(FrRuntime {
+                comm: Arc::new(comm),
+                plans: Arc::new(plans),
+                db: Arc::clone(&self.fr_dbs[&bus]),
+            }),
+        );
     }
 
     fn rebuild_fr_models(&mut self) {
         self.fr_models.clear();
-        self.fr_model_plans.clear();
-        self.fr_model_dbs.clear();
         let buses: Vec<u8> = self.fr_dbs.keys().copied().collect();
         self.fr_cluster_ids.retain(|bus, _| buses.contains(bus));
         for bus in &buses {
@@ -5185,16 +5195,19 @@ impl BusCore {
             let label = format!("FR{bus}");
             self.report_model_issues(&label, &outcome.issues);
             self.report_model_issues(&label, &plan_issues);
-            self.fr_models.insert(bus, Arc::new(comm));
-            self.fr_model_plans.insert(bus, Arc::new(plans));
-            self.fr_model_dbs.insert(bus, db);
+            self.fr_models.insert(
+                bus,
+                Arc::new(FrRuntime {
+                    comm: Arc::new(comm),
+                    plans: Arc::new(plans),
+                    db,
+                }),
+            );
         }
     }
 
     fn rebuild_eth_models(&mut self) {
         self.eth_models.clear();
-        self.eth_model_plans.clear();
-        self.eth_model_dbs.clear();
         let buses: Vec<u8> = self.eth_dbs.keys().copied().collect();
         self.eth_cluster_ids.retain(|bus, _| buses.contains(bus));
         for bus in &buses {
@@ -5236,9 +5249,14 @@ impl BusCore {
             let label = format!("ETH{bus}");
             self.report_model_issues(&label, &issues);
             self.report_model_issues(&label, &plan_issues);
-            self.eth_models.insert(bus, Arc::new(comm));
-            self.eth_model_plans.insert(bus, Arc::new(plans));
-            self.eth_model_dbs.insert(bus, db);
+            self.eth_models.insert(
+                bus,
+                Arc::new(EthRuntime {
+                    comm: Arc::new(comm),
+                    plans: Arc::new(plans),
+                    db,
+                }),
+            );
         }
     }
 
@@ -5283,17 +5301,14 @@ impl BusCore {
     }
 
     fn track_fr_e2e(&mut self, row: &crate::trace::FrRow, frame_ix: usize) {
-        let (Some(comm), Some(plans), Some(db), Some(model_db)) = (
-            self.fr_models.get(&row.bus),
-            self.fr_model_plans.get(&row.bus),
-            self.fr_dbs.get(&row.bus),
-            self.fr_model_dbs.get(&row.bus),
-        ) else {
+        let (Some(runtime), Some(db)) = (self.fr_models.get(&row.bus), self.fr_dbs.get(&row.bus))
+        else {
             return;
         };
-        if !Arc::ptr_eq(model_db, db) {
+        if !Arc::ptr_eq(&runtime.db, db) {
             return;
         }
+        let (comm, plans) = (&runtime.comm, &runtime.plans);
         let Some(name) = db.frame_index(frame_ix).map(|frame| frame.name.clone()) else {
             return;
         };
@@ -5319,17 +5334,13 @@ impl BusCore {
     }
 
     fn track_eth_e2e(&mut self, bus: u8, frame_name: &str, payload: &[u8]) {
-        let (Some(comm), Some(plans), Some(db), Some(model_db)) = (
-            self.eth_models.get(&bus),
-            self.eth_model_plans.get(&bus),
-            self.eth_dbs.get(&bus),
-            self.eth_model_dbs.get(&bus),
-        ) else {
+        let (Some(runtime), Some(db)) = (self.eth_models.get(&bus), self.eth_dbs.get(&bus)) else {
             return;
         };
-        if !Arc::ptr_eq(model_db, db) {
+        if !Arc::ptr_eq(&runtime.db, db) {
             return;
         }
+        let (comm, plans) = (&runtime.comm, &runtime.plans);
         let Some(&cluster) = self.eth_cluster_ids.get(&bus) else {
             return;
         };
@@ -5461,13 +5472,12 @@ impl BusCore {
         frame_ix: usize,
         only_subscribed: bool,
     ) -> Option<Vec<crate::dbc::DecodedSignal>> {
-        let comm = self.fr_models.get(&row.bus)?;
-        let plans = self.fr_model_plans.get(&row.bus)?;
+        let runtime = self.fr_models.get(&row.bus)?;
         let db = self.fr_dbs.get(&row.bus)?;
-        let model_db = self.fr_model_dbs.get(&row.bus)?;
-        if !Arc::ptr_eq(model_db, db) {
+        if !Arc::ptr_eq(&runtime.db, db) {
             return None;
         }
+        let (comm, plans) = (&runtime.comm, &runtime.plans);
         let frame_name = &db.frame_index(frame_ix)?.name;
         let cluster = self.fr_cluster_ids.get(&row.bus).copied()?;
         let frame = comm.frame_by_name(cluster, frame_name)?;
@@ -5514,13 +5524,12 @@ impl BusCore {
         payload: &[u8],
         only_subscribed: bool,
     ) -> Option<Vec<crate::dbc::DecodedSignal>> {
-        let comm = self.eth_models.get(&bus)?;
-        let plans = self.eth_model_plans.get(&bus)?;
+        let runtime = self.eth_models.get(&bus)?;
         let db = self.eth_dbs.get(&bus)?;
-        let model_db = self.eth_model_dbs.get(&bus)?;
-        if !Arc::ptr_eq(model_db, db) {
+        if !Arc::ptr_eq(&runtime.db, db) {
             return None;
         }
+        let (comm, plans) = (&runtime.comm, &runtime.plans);
         let cluster = self.eth_cluster_ids.get(&bus).copied()?;
         let frame = comm.frame_by_name(cluster, frame_name)?;
         let plan = plans.get(frame.id)?;
@@ -6249,13 +6258,12 @@ impl BusCore {
         frame_name: &str,
         signals: &std::collections::BTreeMap<String, f64>,
     ) -> Option<Result<Vec<u8>, String>> {
-        let comm = self.fr_models.get(&bus)?;
-        let plans = self.fr_model_plans.get(&bus)?;
+        let runtime = self.fr_models.get(&bus)?;
         let db = self.fr_dbs.get(&bus)?;
-        let model_db = self.fr_model_dbs.get(&bus)?;
-        if !Arc::ptr_eq(model_db, db) {
+        if !Arc::ptr_eq(&runtime.db, db) {
             return None;
         }
+        let (comm, plans) = (&runtime.comm, &runtime.plans);
         let cluster = self.fr_cluster_ids.get(&bus).copied()?;
         let frame = comm.frame_by_name(cluster, frame_name)?;
         let plan = plans.get(frame.id)?;
@@ -6322,13 +6330,12 @@ impl BusCore {
         frame_name: &str,
         signals: &std::collections::BTreeMap<String, f64>,
     ) -> Option<Result<Vec<u8>, String>> {
-        let comm = self.eth_models.get(&bus)?;
-        let plans = self.eth_model_plans.get(&bus)?;
+        let runtime = self.eth_models.get(&bus)?;
         let db = self.eth_dbs.get(&bus)?;
-        let model_db = self.eth_model_dbs.get(&bus)?;
-        if !Arc::ptr_eq(model_db, db) {
+        if !Arc::ptr_eq(&runtime.db, db) {
             return None;
         }
+        let (comm, plans) = (&runtime.comm, &runtime.plans);
         let cluster = self.eth_cluster_ids.get(&bus).copied()?;
         let frame = comm.frame_by_name(cluster, frame_name)?;
         let plan = plans.get(frame.id)?;
@@ -6668,10 +6675,9 @@ impl BusCore {
             return Err(format!("FR{bus} has no frame in slot {slot}"));
         };
         let cycle = now_cycle;
-        let model = self.fr_models.get(&bus).cloned().and_then(|comm| {
-            let plans = self.fr_model_plans.get(&bus).cloned()?;
+        let model = self.fr_models.get(&bus).cloned().and_then(|runtime| {
             let cluster = self.fr_cluster_ids.get(&bus).copied()?;
-            Some((comm, plans, cluster))
+            Some((runtime.comm.clone(), runtime.plans.clone(), cluster))
         });
         let payload = if let Some((comm, plans, cluster)) = model {
             let Some(model_frame) = comm.frame_by_name(cluster, &frame.name) else {
@@ -6730,10 +6736,9 @@ impl BusCore {
         if len == 0 {
             return Err(format!("frame \"{frame_name}\" declares no payload"));
         }
-        let model = self.eth_models.get(&bus).cloned().and_then(|comm| {
-            let plans = self.eth_model_plans.get(&bus).cloned()?;
+        let model = self.eth_models.get(&bus).cloned().and_then(|runtime| {
             let cluster = self.eth_cluster_ids.get(&bus).copied()?;
-            Some((comm, plans, cluster))
+            Some((runtime.comm.clone(), runtime.plans.clone(), cluster))
         });
         let mut payload = vec![0u8; len];
         if let Some((comm, plans, cluster)) = model {
@@ -7588,13 +7593,19 @@ impl BusCore {
         let fr_models: std::collections::BTreeMap<u8, ModelHandle> = self
             .fr_models
             .iter()
-            .filter_map(|(bus, comm)| {
+            .filter_map(|(bus, runtime)| {
                 let cluster = *self.fr_cluster_ids.get(bus)?;
-                let plans = self.fr_model_plans.get(bus)?;
-                let model_db = self.fr_model_dbs.get(bus)?;
                 let current = self.fr_dbs.get(bus)?;
-                Arc::ptr_eq(model_db, current)
-                    .then(|| (*bus, (cluster, Arc::clone(comm), Arc::clone(plans))))
+                Arc::ptr_eq(&runtime.db, current).then(|| {
+                    (
+                        *bus,
+                        (
+                            cluster,
+                            Arc::clone(&runtime.comm),
+                            Arc::clone(&runtime.plans),
+                        ),
+                    )
+                })
             })
             .collect();
         let replaying = matches!(self.mode, Mode::Replay);
@@ -8905,8 +8916,8 @@ mod tests {
             core.fr_models.contains_key(&0),
             "pushing a cluster description builds the FR model"
         );
-        assert!(core.fr_model_plans.contains_key(&0));
-        assert!(core.fr_model_dbs.contains_key(&0));
+        let runtime = core.fr_models.get(&0).expect("FR runtime");
+        assert!(Arc::ptr_eq(&runtime.db, core.fr_dbs.get(&0).unwrap()));
 
         let key = core.fr_key(0, 12, "Speed".to_string());
         core.subscribe_signal(key.clone());
@@ -8941,8 +8952,8 @@ mod tests {
             core.eth_models.contains_key(&0),
             "pushing a matrix builds the ETH model"
         );
-        assert!(core.eth_model_plans.contains_key(&0));
-        assert!(core.eth_model_dbs.contains_key(&0));
+        let runtime = core.eth_models.get(&0).expect("ETH runtime");
+        assert!(Arc::ptr_eq(&runtime.db, core.eth_dbs.get(&0).unwrap()));
 
         let key = core.eth_key(0, "EthFrame".to_string(), "Sig".to_string());
         core.subscribe_signal(key.clone());
@@ -8987,10 +8998,11 @@ mod tests {
             )],
             last_sent: Vec::new(),
         };
+        let runtime = core.fr_models.get(&0).expect("FR runtime");
         let payload = crate::generator::fr_tx_payload_with_model(
             *core.fr_cluster_ids.get(&0).unwrap(),
-            core.fr_models.get(&0).unwrap(),
-            core.fr_model_plans.get(&0).unwrap(),
+            &runtime.comm,
+            &runtime.plans,
             &tx,
             0,
         )
