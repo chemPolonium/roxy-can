@@ -672,3 +672,77 @@ fn update_indication_bit_gates_decode_and_is_set_by_encode() {
     assert_eq!(payload[0] & 1, 1, "encoding raises the update bit");
     assert_eq!(&payload[1..3], &[0x34, 0x12], "little-endian raw 0x1234");
 }
+
+/// AUTOSAR 4.2 shapes taken from the cantools `system-4.2.arxml` fixture:
+/// a SECURED-I-PDU whose PAYLOAD-REF names a PDU-TRIGGERING (whose own
+/// I-PDU-REF is the protected PDU), and E2E declared on a signal group
+/// through a TRANSFORMATION-TECHNOLOGY in a DATA-TRANSFORMATION-SET.
+#[test]
+fn a_42_secured_payload_triggering_and_group_e2e_are_read() {
+    const TEXT: &str = r#"<AUTOSAR><AR-PACKAGES><AR-PACKAGE><SHORT-NAME>P</SHORT-NAME><ELEMENTS>
+ <CAN-CLUSTER><SHORT-NAME>C</SHORT-NAME></CAN-CLUSTER>
+ <PDU-TRIGGERING><SHORT-NAME>Trig</SHORT-NAME>
+  <I-PDU-REF DEST="I-SIGNAL-I-PDU">/P/Inner</I-PDU-REF>
+ </PDU-TRIGGERING>
+ <SECURED-I-PDU><SHORT-NAME>Sec</SHORT-NAME><LENGTH>8</LENGTH>
+  <PAYLOAD-REF DEST="PDU-TRIGGERING">/P/Trig</PAYLOAD-REF>
+  <SECURE-COMMUNICATION-PROPS><DATA-ID>1337</DATA-ID></SECURE-COMMUNICATION-PROPS>
+ </SECURED-I-PDU>
+ <I-SIGNAL-I-PDU><SHORT-NAME>Inner</SHORT-NAME><LENGTH>8</LENGTH>
+  <I-SIGNAL-TO-I-PDU-MAPPINGS><I-SIGNAL-TO-I-PDU-MAPPING><SHORT-NAME>M</SHORT-NAME>
+   <START-POSITION>0</START-POSITION>
+   <PACKING-BYTE-ORDER>MOST-SIGNIFICANT-BYTE-LAST</PACKING-BYTE-ORDER>
+   <I-SIGNAL-REF DEST="I-SIGNAL">/P/SeqCounter</I-SIGNAL-REF>
+  </I-SIGNAL-TO-I-PDU-MAPPING></I-SIGNAL-TO-I-PDU-MAPPINGS>
+ </I-SIGNAL-I-PDU>
+ <I-SIGNAL><SHORT-NAME>SeqCounter</SHORT-NAME><LENGTH>4</LENGTH></I-SIGNAL>
+ <I-SIGNAL-GROUP><SHORT-NAME>G</SHORT-NAME>
+  <I-SIGNAL-REFS><I-SIGNAL-REF DEST="I-SIGNAL">/P/SeqCounter</I-SIGNAL-REF></I-SIGNAL-REFS>
+  <TRANSFORMATION-I-SIGNAL-PROPSS><END-TO-END-TRANSFORMATION-I-SIGNAL-PROPS>
+   <END-TO-END-TRANSFORMATION-I-SIGNAL-PROPS-VARIANTS>
+    <END-TO-END-TRANSFORMATION-I-SIGNAL-PROPS-CONDITIONAL>
+     <TRANSFORMER-REF DEST="TRANSFORMATION-TECHNOLOGY">/P/Set/Tech</TRANSFORMER-REF>
+     <DATA-IDS><DATA-ID>123</DATA-ID><DATA-ID>124</DATA-ID></DATA-IDS>
+    </END-TO-END-TRANSFORMATION-I-SIGNAL-PROPS-CONDITIONAL>
+   </END-TO-END-TRANSFORMATION-I-SIGNAL-PROPS-VARIANTS>
+  </END-TO-END-TRANSFORMATION-I-SIGNAL-PROPS></TRANSFORMATION-I-SIGNAL-PROPSS>
+ </I-SIGNAL-GROUP>
+ <DATA-TRANSFORMATION-SET><SHORT-NAME>Set</SHORT-NAME>
+  <TRANSFORMATION-TECHNOLOGYS><TRANSFORMATION-TECHNOLOGY><SHORT-NAME>Tech</SHORT-NAME>
+   <PROTOCOL>E2E</PROTOCOL>
+   <TRANSFORMATION-DESCRIPTIONS><END-TO-END-TRANSFORMATION-DESCRIPTION>
+    <PROFILE-NAME>Profile2</PROFILE-NAME>
+   </END-TO-END-TRANSFORMATION-DESCRIPTION></TRANSFORMATION-DESCRIPTIONS>
+  </TRANSFORMATION-TECHNOLOGY></TRANSFORMATION-TECHNOLOGYS>
+ </DATA-TRANSFORMATION-SET>
+</ELEMENTS></AR-PACKAGE></AR-PACKAGES></AUTOSAR>"#;
+    let comm = import(TEXT, "C", 1);
+    let secured = comm
+        .pdus
+        .values()
+        .find(|pdu| pdu.name == "Sec")
+        .expect("secured pdu");
+    let meta = secured.secured.as_ref().expect("secured meta");
+    assert_eq!(meta.data_id, Some(1337));
+    assert!(
+        meta.payload.is_some(),
+        "PDU-TRIGGERING indirection resolves to the protected PDU"
+    );
+    let group = comm
+        .groups
+        .values()
+        .find(|group| group.name == "G")
+        .expect("group");
+
+    let e2e = group.e2e.as_ref().expect("group-level E2E read");
+    assert_eq!(e2e.profile_name, "Profile2");
+    assert_eq!(e2e.profile, Some(2));
+    assert_eq!(e2e.data_ids, vec![123, 124]);
+    assert!(
+        comm.issues
+            .iter()
+            .any(|issue| issue.message.contains("counter continuity is not planned")),
+        "group-level E2E is recorded but explicitly not planned: {:?}",
+        comm.issues
+    );
+}

@@ -500,7 +500,26 @@ impl<'a> Importer<'a> {
             let Some(payload) = ref_node(*node, "PAYLOAD-REF", &self.objects) else {
                 continue;
             };
-            let Some(payload_id) = self.pdu_ids.get(&object_path(payload)).copied() else {
+            // AUTOSAR 4.2 lets PAYLOAD-REF name a PDU-TRIGGERING, whose own
+            // I-PDU-REF is the protected PDU (cantools' system-4.2 fixture is
+            // written this way). Anything else is still expected to be a PDU.
+            let mut payload_id = self.pdu_ids.get(&object_path(payload)).copied();
+            if payload_id.is_none() {
+                payload_id = ref_node(payload, "I-PDU-REF", &self.objects)
+                    .or_else(|| ref_node(payload, "PDU-REF", &self.objects))
+                    .and_then(|pdu| self.pdu_ids.get(&object_path(pdu)).copied());
+            }
+            let Some(payload_id) = payload_id else {
+                let name = self
+                    .comm
+                    .pdus
+                    .get(&secured_id)
+                    .map(|pdu| pdu.name.clone())
+                    .unwrap_or_else(|| "?".to_string());
+                self.issues.push(Issue::warning(
+                    IssueKind::Unsupported,
+                    format!("secured PDU {name}: payload reference does not resolve to an I-PDU"),
+                ));
                 continue;
             };
             if let Some(pdu) = self.comm.pdus.get_mut(&secured_id)
@@ -1065,6 +1084,44 @@ impl<'a> Importer<'a> {
         }
     }
 
+    /// E2E declared on a signal group through a transformation set. The
+    /// referenced TRANSFORMATION-TECHNOLOGY carries the profile name; the group
+    /// carries the data ids. Neither states where the counter or CRC sit, so this
+    /// is recorded for the UI and reported as unsupported for planning.
+    fn read_group_e2e(node: Node<'_, '_>, objects: &Objects<'_>) -> Option<GroupE2eProtection> {
+        let reference = node
+            .descendants()
+            .find(|n| n.has_tag_name("TRANSFORMER-REF"))?
+            .text()?
+            .trim()
+            .to_string();
+        let technology = objects.resolve(&reference)?;
+        let profile_name = technology
+            .descendants()
+            .find(|n| n.has_tag_name("PROFILE-NAME"))
+            .and_then(|n| n.text())
+            .unwrap_or_default()
+            .to_string();
+        if profile_name.is_empty() {
+            return None;
+        }
+        let profile = profile_name
+            .trim()
+            .strip_prefix("Profile")
+            .and_then(|number| number.trim().parse::<u32>().ok());
+        let data_ids = node
+            .descendants()
+            .filter(|n| n.has_tag_name("DATA-ID"))
+            .filter_map(|n| n.text())
+            .filter_map(|text| text.trim().parse::<u32>().ok())
+            .collect();
+        Some(GroupE2eProtection {
+            profile_name,
+            profile,
+            data_ids,
+        })
+    }
+
     fn read_signal_groups(&mut self) {
         let groups: Vec<Node<'a, 'a>> = self
             .root
@@ -1081,14 +1138,26 @@ impl<'a> Importer<'a> {
                 ElementKind::SignalGroup,
                 &source_key(self.cluster_id, "group", &path),
             ) as u32);
+            let e2e = Self::read_group_e2e(group_node, &self.objects);
             self.comm.groups.insert(
                 id,
                 SignalGroup {
                     id,
-                    name,
+                    name: name.clone(),
                     sender: None,
+                    e2e: e2e.clone(),
                 },
             );
+            if let Some(e2e) = &e2e {
+                self.issues.push(Issue::warning(
+                    IssueKind::Unsupported,
+                    format!(
+                        "signal group {name}: E2E {} is declared through a transformation set \
+                         without counter/CRC positions; frame-level counter continuity is not planned",
+                        e2e.profile_name
+                    ),
+                ));
+            }
             for reference in reference_list(group_node, "I-SIGNAL-REF") {
                 if let Some(signal_node) = self.objects.resolve(&reference)
                     && let Some(&signal_id) = self.signal_ids.get(&object_path(signal_node))
@@ -1621,6 +1690,7 @@ fn indexed_tag(tag: &str) -> bool {
             | "UNIT"
             | "ECU-INSTANCE"
             | "PDU-TRIGGERING"
+            | "TRANSFORMATION-TECHNOLOGY"
             | "DATA-CONSTR"
     )
 }

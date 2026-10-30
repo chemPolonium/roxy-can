@@ -596,6 +596,22 @@ pub struct SignalGroup {
     pub name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sender: Option<EcuId>,
+    /// E2E protection declared on the group itself (AUTOSAR 4.2
+    /// `TRANSFORMATION-I-SIGNAL-PROPSS` → `TRANSFORMER-REF`). The profile and
+    /// data ids are known; the counter/CRC member positions are not stated, so
+    /// the decode plan does not derive frame-level counter continuity from it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub e2e: Option<GroupE2eProtection>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GroupE2eProtection {
+    /// `PROFILE-NAME` as written (`Profile2`, `Profile5`, ...).
+    pub profile_name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile: Option<u32>,
+    #[serde(default)]
+    pub data_ids: Vec<u32>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

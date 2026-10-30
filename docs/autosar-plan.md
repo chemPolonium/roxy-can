@@ -20,7 +20,7 @@ CAN/FlexRay/Ethernet 的首选描述来源，DBC/FIBEX 只作为导入适配器�
 > derived/web 已迁为 typed v2 段，Trace 手选帧也按 cluster id 保存；生产解码路径
 > （含 Reference 与 CLI 导出）已全部走模型；观测键与 CAN 报文聚合都以 cluster 为身份，
 > 键文本一律写 `sig:` 规范形态，旧 `ch:id:name` / `fr:` / `eth:` 文本仍可读入。
-> 硬件端口按物理路号寻址（附件跟随通道/簇；2026-10-30 已在 VN1610 上重跑经典与 FD 2/5/8 Mbit/s 双向验收，物理拔插仍需人工复核）。旧表结构清理已完成：`Channel`/`FrBusCfg`/`EthBusCfg` 均已删除，CAN 通道就是模型里的 cluster（名称、位率、描述路径、节点角色都落在模型/按 `ClusterId` 的核心映射），生产路径没有描述表回退。剩余：真实 SecOC/E2E/Transformation 语料与物理拔插复核。逐项状态见 [`docs/autosar-model.md`](autosar-model.md) 第 10 节。
+> 硬件端口按物理路号寻址（附件跟随通道/簇；2026-10-30 已在 VN1610 上重跑经典与 FD 2/5/8 Mbit/s 双向验收，物理拔插仍需人工复核）。旧表结构清理已完成：`Channel`/`FrBusCfg`/`EthBusCfg` 均已删除，CAN 通道就是模型里的 cluster（名称、位率、描述路径、节点角色都落在模型/按 `ClusterId` 的核心映射），生产路径没有描述表回退。剩余：带 counter/CRC 位置的真实 E2E 语料、SecOC secured-area 真实语料与物理拔插复核。逐项状态见 [`docs/autosar-model.md`](autosar-model.md) 第 10 节。
 
 ## 1. 原则
 
