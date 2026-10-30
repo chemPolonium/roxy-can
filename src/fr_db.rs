@@ -265,6 +265,7 @@ impl FrDb {
         db
     }
 
+    #[allow(dead_code)]
     /// Merges another description of the same physical cluster. Timing must
     /// agree; duplicate ECUs/PDUs/frames keep the first file's copy and are
     /// reported back as warnings.
