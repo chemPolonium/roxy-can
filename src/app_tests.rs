@@ -464,7 +464,7 @@ fn arxml_can_import_reaches_the_unified_model_and_survives_reopen() {
     let dir = std::env::temp_dir().join("roxy_can_arxml_model");
     std::fs::create_dir_all(&dir).unwrap();
     let arxml = dir.join("two.arxml");
-    std::fs::write(&arxml, crate::can_arxml_tests::SAMPLE).unwrap();
+    std::fs::write(&arxml, crate::test_assets::CAN_ARXML_SAMPLE).unwrap();
     let mut app = App::headless();
     app.import_arxml_path(arxml.to_string_lossy().as_ref());
     app.settle();

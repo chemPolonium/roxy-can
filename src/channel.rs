@@ -279,60 +279,6 @@ impl App {
         // The status line ("bus CANx removed") came from the command.
     }
 
-    /// Opens either a DBC or a CAN ARXML on one existing bus. An ARXML with
-    /// exactly one CAN cluster loads that cluster; a multi-cluster matrix is
-    /// refused here with a pointer to the unified importer, which creates one
-    /// bus per cluster instead of silently choosing one.
-    #[cfg(test)]
-    pub fn open_can_database_for(&mut self, ch: usize, path: String) {
-        let ext = std::path::Path::new(&path)
-            .extension()
-            .and_then(|e| e.to_str())
-            .map(|e| e.to_ascii_lowercase());
-        if !matches!(ext.as_deref(), Some("arxml" | "xml")) {
-            self.open_dbc_for(ch, path);
-            return;
-        }
-        let text = match std::fs::read(&path) {
-            Ok(bytes) => crate::dbc::text_from_bytes(bytes),
-            Err(e) => {
-                self.fail(format!("ARXML read failed: {path}: {e}"));
-                return;
-            }
-        };
-        let clusters = match crate::can_arxml::scan(&text) {
-            Ok(clusters) => clusters,
-            Err(e) => {
-                self.fail(format!("ARXML parse failed: {e}"));
-                return;
-            }
-        };
-        let cans: Vec<_> = clusters
-            .into_iter()
-            .filter(|c| c.kind == crate::can_arxml::ClusterKind::Can)
-            .collect();
-        match cans.as_slice() {
-            [] => self.fail(format!("No CAN cluster found in {path}")),
-            [one] => {
-                if let Err(e) = self.load_can_arxml_on_bus(&path, &one.name, ch as u8) {
-                    self.fail(format!("CAN ARXML load failed: {e}"));
-                } else {
-                    self.status = format!(
-                        "Loaded CAN ARXML cluster `{}` on {}",
-                        one.name,
-                        self.channel_name(ch as u8)
-                    );
-                }
-            }
-            many => {
-                self.status = format!(
-                    "This ARXML declares {} CAN clusters; use Import ARXML... to add one bus per cluster",
-                    many.len()
-                );
-            }
-        }
-    }
-
     /// Loads a cluster description **without** attaching a watch: a replayed
     /// recording can hold two clusters (BLF states which one each frame came
     /// from), and the second one needs its own description to be named or
@@ -419,7 +365,7 @@ impl App {
     }
 
     /// Loads one named CAN cluster into an existing bus. The caller has
-    /// already decided the bus exists; the parsed table replaces its database.
+    /// already decided the bus exists; the document model replaces its table.
     pub fn load_can_arxml_on_bus(
         &mut self,
         path: &str,
@@ -428,23 +374,20 @@ impl App {
     ) -> Result<(), String> {
         let bytes = std::fs::read(path).map_err(|e| format!("{path}: {e}"))?;
         let text = crate::dbc::text_from_bytes(bytes);
-        let parsed = crate::can_arxml::parse_cluster(&text, cluster)?;
-        self.send(crate::bus::BusCommand::SetChannelDbc {
+        let comm = Self::can_arxml_comm(&text, path, cluster)
+            .ok_or_else(|| format!("{path}: cluster `{cluster}` has no frames"))?;
+        self.send(crate::bus::BusCommand::SetChannelModel {
             ch: bus,
-            dbc: std::sync::Arc::new(parsed.db),
+            comm: std::sync::Arc::new(comm),
         });
         self.can_arxml
             .insert(bus, (path.to_string(), cluster.to_string()));
-        self.apply_can_arxml_model(bus, &text, path, cluster);
         Ok(())
     }
 
-    /// Hands the core a CAN cluster's unified model read straight from ARXML.
-    /// The table just sent keeps names and the generator working; only this
-    /// model carries container/mux/E2E structure, so it has to be rebuilt from
-    /// the document rather than derived from the table. The core rebinds the
-    /// model to the channel's global cluster id.
-    fn apply_can_arxml_model(&mut self, bus: u8, text: &str, path: &str, cluster: &str) {
+    /// Reads one CAN cluster into the unified model. The model is the only
+    /// runtime source; there is no DBC-shaped intermediate table.
+    fn can_arxml_comm(text: &str, path: &str, cluster: &str) -> Option<crate::model::Comm> {
         let source = crate::model::ClusterSource::Arxml {
             path: path.to_string(),
             cluster: cluster.to_string(),
@@ -457,13 +400,7 @@ impl App {
             &source,
             &mut ids,
         );
-        if outcome.comm.clusters.is_empty() {
-            return;
-        }
-        self.send(crate::bus::BusCommand::SetChannelModel {
-            ch: bus,
-            comm: std::sync::Arc::new(outcome.comm),
-        });
+        (!outcome.comm.clusters.is_empty()).then_some(outcome.comm)
     }
 
     fn apply_fr_arxml_model(&mut self, bus: u8, text: &str, path: &str, cluster: &str) {
@@ -547,12 +484,13 @@ impl App {
             .collect();
         for (bus, path, cluster) in can {
             if let Ok(bytes) = std::fs::read(&path) {
-                self.apply_can_arxml_model(
-                    bus,
-                    &crate::dbc::text_from_bytes(bytes),
-                    &path,
-                    &cluster,
-                );
+                let text = crate::dbc::text_from_bytes(bytes);
+                if let Some(comm) = Self::can_arxml_comm(&text, &path, &cluster) {
+                    self.send(crate::bus::BusCommand::SetChannelModel {
+                        ch: bus,
+                        comm: std::sync::Arc::new(comm),
+                    });
+                }
             }
         }
         for (bus, path, cluster) in fr {
@@ -587,7 +525,7 @@ impl App {
             }
         };
         let text = crate::dbc::text_from_bytes(bytes);
-        let clusters = match crate::can_arxml::scan(&text) {
+        let clusters = match crate::model::scan_clusters(&text) {
             Ok(c) => c,
             Err(e) => {
                 self.fail(format!("ARXML parse failed: {e}"));
@@ -605,12 +543,12 @@ impl App {
         let mut next_can = self.snap.channel_count as u32;
         for info in clusters {
             let existing: Option<u8> = match info.kind {
-                crate::can_arxml::ClusterKind::Can => self
+                crate::model::ClusterKind::Can => self
                     .can_arxml
                     .iter()
                     .find(|(_, (p, c))| p == path && c == &info.name)
                     .map(|(bus, _)| *bus),
-                crate::can_arxml::ClusterKind::FlexRay => self
+                crate::model::ClusterKind::FlexRay => self
                     .fr_buses
                     .iter()
                     .find(|(bus, _)| {
@@ -618,7 +556,7 @@ impl App {
                             && self.fr_clusters.get(bus).is_some_and(|c| c == &info.name)
                     })
                     .map(|(bus, _)| *bus),
-                crate::can_arxml::ClusterKind::Ethernet => self
+                crate::model::ClusterKind::Ethernet => self
                     .eth_buses
                     .iter()
                     .find(|(bus, _)| {
@@ -628,7 +566,7 @@ impl App {
                     .map(|(bus, _)| *bus),
             };
             match info.kind {
-                crate::can_arxml::ClusterKind::Can => {
+                crate::model::ClusterKind::Can => {
                     if existing.is_none() && next_can > u8::MAX as u32 {
                         errors.push(format!(
                             "{} {}: CAN bus index exhausted",
@@ -637,44 +575,40 @@ impl App {
                         ));
                         continue;
                     }
-                    match crate::can_arxml::parse_cluster(&text, &info.name) {
-                        Ok(parsed) => {
-                            let name = if parsed.cluster.is_empty() {
-                                info.name.clone()
-                            } else {
-                                parsed.cluster.clone()
-                            };
+                    match Self::can_arxml_comm(&text, path, &info.name) {
+                        Some(comm) => {
+                            let comm = std::sync::Arc::new(comm);
                             let bus = match existing {
                                 Some(bus) => {
-                                    self.send(crate::bus::BusCommand::SetChannelDbc {
+                                    self.send(crate::bus::BusCommand::SetChannelModel {
                                         ch: bus,
-                                        dbc: std::sync::Arc::new(parsed.db),
+                                        comm: comm.clone(),
                                     });
                                     updated += 1;
                                     bus
                                 }
                                 None => {
                                     let bus = next_can as u8;
-                                    let bitrate = parsed
-                                        .bitrate_kbps
-                                        .unwrap_or(crate::model::CanParams::DEFAULT_BITRATE_KBPS);
-                                    self.send(crate::bus::BusCommand::AddChannelWithDbc {
-                                        name: name.clone(),
-                                        dbc: std::sync::Arc::new(parsed.db),
-                                        bitrate_kbps: bitrate,
+                                    self.send(crate::bus::BusCommand::AddChannelWithModel {
+                                        name: info.name.clone(),
+                                        comm: comm.clone(),
                                     });
                                     next_can += 1;
                                     added += 1;
                                     bus
                                 }
                             };
-                            self.can_arxml.insert(bus, (path.to_string(), name.clone()));
-                            self.apply_can_arxml_model(bus, &text, path, &name);
+                            self.can_arxml
+                                .insert(bus, (path.to_string(), info.name.clone()));
                         }
-                        Err(e) => errors.push(format!("{} {}: {e}", info.kind.label(), info.name)),
+                        None => errors.push(format!(
+                            "{} {}: no frames in the cluster",
+                            info.kind.label(),
+                            info.name
+                        )),
                     }
                 }
-                crate::can_arxml::ClusterKind::FlexRay => {
+                crate::model::ClusterKind::FlexRay => {
                     let bus = match existing {
                         Some(bus) => Some(bus),
                         None => self.next_flexray_bus(),
@@ -704,7 +638,7 @@ impl App {
                         ));
                     }
                 }
-                crate::can_arxml::ClusterKind::Ethernet => {
+                crate::model::ClusterKind::Ethernet => {
                     let bus = match existing {
                         Some(bus) => Some(bus),
                         None => self.next_eth_bus(),

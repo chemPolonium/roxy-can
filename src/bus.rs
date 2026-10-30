@@ -211,15 +211,13 @@ pub enum BusCommand {
     /// Add a bus with the sample DBC path, load it, and pre-populate its
     /// generator.
     AddChannel,
-    /// Append a CAN bus whose database was already parsed from one ARXML
-    /// cluster. The frontend carries the table so a parse error is reported
-    /// before the bus exists.
-    AddChannelWithDbc {
+    /// Append a CAN bus straight from an ARXML cluster's unified model.
+    AddChannelWithModel {
         name: String,
-        dbc: Arc<crate::dbc::SymbolTable>,
-        bitrate_kbps: u32,
+        comm: Arc<crate::model::Comm>,
     },
     /// Replace one CAN bus's database from a parsed ARXML cluster.
+    #[cfg(test)]
     SetChannelDbc {
         ch: u8,
         dbc: Arc<crate::dbc::SymbolTable>,
@@ -1938,11 +1936,10 @@ impl BusCore {
             BusCommand::ClearAggregates => self.clear_aggregates(status),
             BusCommand::SetRunMode(mode) => self.run_mode = mode,
             BusCommand::AddChannel => self.add_channel(status),
-            BusCommand::AddChannelWithDbc {
-                name,
-                dbc,
-                bitrate_kbps,
-            } => self.add_channel_with_dbc(name, dbc, bitrate_kbps, status),
+            BusCommand::AddChannelWithModel { name, comm } => {
+                self.add_channel_with_model(name, comm, status)
+            }
+            #[cfg(test)]
             BusCommand::SetChannelDbc { ch, dbc } => self.set_channel_dbc(ch, dbc, status),
             BusCommand::RemoveChannel { ch } => self.remove_channel(ch, status),
             BusCommand::SetNodeRole { ch, node, role } => {
@@ -4446,10 +4443,6 @@ impl BusCore {
         let index = ch as usize;
         let comm = self.model_comms.get(index)?.as_ref()?.clone();
         let plans = self.model_plans.get(index)?.as_ref()?.clone();
-        let db = self.model_dbs.get(index)?.as_ref()?;
-        if !Arc::ptr_eq(self.model_dbs.get(index)?.as_ref()?, db) {
-            return None;
-        }
         Some((comm, plans, *self.can_cluster_ids.get(index)?))
     }
 
@@ -4860,9 +4853,9 @@ impl BusCore {
         }
     }
 
-    /// Appends a CAN bus from an already-parsed ARXML cluster. The table is
-    /// the same shape a DBC load produces; no file is read here, so a parse
-    /// error was already reported by the frontend before this command.
+    /// Test hook: append a bus from a parsed table, the shape fixtures still
+    /// use to seed a specific CAN database.
+    #[cfg(test)]
     fn add_channel_with_dbc(
         &mut self,
         name: String,
@@ -4896,9 +4889,47 @@ impl BusCore {
         *status = format!("{name} ARXML loaded: {} message(s)", dbc.order.len());
     }
 
-    /// Replaces one bus's database from a parsed ARXML cluster, leaving its
-    /// port, name and role declarations alone. The source table's paths are
-    /// cleared: the project carries the ARXML path/cluster separately.
+    /// Appends a CAN bus from an already-built ARXML model. No description
+    /// table is created: the model is the runtime source, and the generator
+    /// rows come from its CAN frames.
+    fn add_channel_with_model(
+        &mut self,
+        name: String,
+        comm: Arc<crate::model::Comm>,
+        status: &mut String,
+    ) {
+        self.bus_counter += 1;
+        let cluster = self.cluster_ids.allocate();
+        self.can_cluster_ids.push(cluster);
+        let mut comm = (*comm).clone();
+        comm.rebind_cluster(cluster);
+        let (plans, plan_issues) = crate::model::PlanCache::build(&comm, 1);
+        self.report_model_issues(&name, &comm.issues);
+        self.report_model_issues(&name, &plan_issues);
+        let ids: Vec<u32> = comm
+            .frames
+            .values()
+            .filter_map(|frame| match frame.address {
+                crate::model::FrameAddress::Can { id, .. } => Some(id),
+                _ => None,
+            })
+            .collect();
+        let messages = ids.len();
+        self.model_comms.push(Some(Arc::new(comm)));
+        self.model_plans.push(Some(Arc::new(plans)));
+        self.model_dbs.push(None);
+        self.bus_loads.push(crate::load::BusLoad::new());
+        self.loads_dirty = true;
+        self.nodes_dirty = true;
+        let ch = self.can_count() - 1;
+        self.seed_entries_for_simulated(ch);
+        for id in ids {
+            self.add_entry(ch as u8, id);
+        }
+        *status = format!("{name} ARXML loaded: {messages} message(s)");
+    }
+
+    #[cfg(test)]
     fn set_channel_dbc(&mut self, ch: u8, dbc: Arc<crate::dbc::SymbolTable>, status: &mut String) {
         if ch as usize >= self.can_count() {
             return;
@@ -5062,6 +5093,18 @@ impl BusCore {
             .map(|cluster| cluster.sources.clone())
             .unwrap_or_default();
         let Some(db) = self.model_dbs.get(ch).and_then(|db| db.clone()) else {
+            // An ARXML-sourced channel has no table: its model is already the
+            // document, so a rebuild (project restore, cluster renumber) must
+            // leave it alone instead of replacing it with an empty cluster.
+            let from_arxml = self.can_cluster(ch).is_some_and(|cluster| {
+                cluster
+                    .sources
+                    .iter()
+                    .any(|source| matches!(source, crate::model::ClusterSource::Arxml { .. }))
+            });
+            if from_arxml && self.model_comms[ch].is_some() {
+                return;
+            }
             self.model_comms[ch] = Some(Arc::new(crate::model::empty_can_comm(
                 &name, cluster_id, &sources, bitrate, fd,
             )));
@@ -5111,7 +5154,6 @@ impl BusCore {
             return;
         }
         let label = self.can_name(ch);
-        let channel_dbc = self.model_dbs.get(ch).and_then(|db| db.clone());
         if self.model_comms.len() <= ch {
             self.model_comms.resize(ch + 1, None);
             self.model_plans.resize(ch + 1, None);
@@ -5128,7 +5170,7 @@ impl BusCore {
         self.report_model_issues(&label, &plan_issues);
         self.model_comms[ch] = Some(Arc::new(comm));
         self.model_plans[ch] = Some(Arc::new(plans));
-        self.model_dbs[ch] = channel_dbc;
+        self.model_dbs[ch] = None;
     }
 
     fn set_fr_model(&mut self, bus: u8, comm: Arc<crate::model::Comm>) {
@@ -5404,9 +5446,6 @@ impl BusCore {
             .and_then(|entry| entry.as_ref())?;
         let plans = self
             .model_plans
-            .get(f.channel as usize)
-            .and_then(|entry| entry.as_ref())?;
-        self.model_dbs
             .get(f.channel as usize)
             .and_then(|entry| entry.as_ref())?;
         let cluster = *self.can_cluster_ids.get(f.channel as usize)?;
@@ -6225,9 +6264,6 @@ impl BusCore {
             .and_then(|entry| entry.as_ref())?;
         let plans = self
             .model_plans
-            .get(channel as usize)
-            .and_then(|entry| entry.as_ref())?;
-        self.model_dbs
             .get(channel as usize)
             .and_then(|entry| entry.as_ref())?;
         let cluster = self.can_cluster_ids.get(channel as usize).copied()?;
@@ -7493,7 +7529,6 @@ impl BusCore {
                 let cluster = *self.can_cluster_ids.get(index)?;
                 let comm = self.model_comms.get(index)?.as_ref()?;
                 let plans = self.model_plans.get(index)?.as_ref()?;
-                self.model_dbs.get(index)?.as_ref()?;
                 Some((cluster, Arc::clone(comm), Arc::clone(plans)))
             })
             .collect();
@@ -8132,7 +8167,6 @@ impl BusCore {
 
     fn model_can_cycle_us(&self, ch: u8, id: u32) -> Option<u64> {
         let comm = self.model_comms.get(ch as usize)?.as_ref()?;
-        self.model_dbs.get(ch as usize)?.as_ref()?;
         let cluster = *self.can_cluster_ids.get(ch as usize)?;
         comm.frames_in_cluster(cluster)
             .find(|frame| frame.address.can_id() == Some(id))

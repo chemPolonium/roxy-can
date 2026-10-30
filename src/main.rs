@@ -5,7 +5,6 @@ mod app;
 mod block;
 mod bus;
 mod can;
-mod can_arxml;
 mod channel;
 mod cli;
 mod config;
@@ -46,9 +45,6 @@ mod workspace;
 #[cfg(test)]
 #[path = "headless_tests.rs"]
 mod headless_tests;
-
-#[cfg(test)]
-mod can_arxml_tests;
 
 #[cfg(test)]
 mod test_assets;
