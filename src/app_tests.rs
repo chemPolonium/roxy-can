@@ -582,6 +582,102 @@ fn two_arxml_clusters_share_one_can_bus_and_survive_reopen() {
     );
 }
 
+/// Acceptance with the bundled cantools/canmatrix corpus: one CAN bus takes
+/// the DBC starter plus cantools' `system-4.2.arxml` cluster, and one FlexRay
+/// bus takes both FIBEX exports. Both remain merged after a project round
+/// trip, which is the multi-supplier shape the bus-first binding exists for.
+#[test]
+fn cantools_corpus_binds_several_descriptions_to_each_bus() {
+    let arxml = crate::test_assets::path("system-4.2.arxml");
+    let fibex_a = crate::test_assets::path("PowerTrain_v2.xml");
+    let fibex_b = crate::test_assets::path("PowerTrain2_v2.xml");
+
+    let mut app = App::headless();
+    app.load_can_arxml_on_bus(arxml, "Cluster0", 0)
+        .expect("cantools CAN cluster binds to CAN1");
+    app.settle();
+    let model = app.model_comms[0].as_ref().expect("the merged CAN model");
+    assert!(
+        model
+            .frames
+            .values()
+            .any(|frame| frame.name == "EngineStatus"),
+        "the DBC starter is still decoded on the bus"
+    );
+    let message1 = model
+        .frames
+        .values()
+        .find(|frame| frame.name == "Message1")
+        .expect("the cantools frame is merged in");
+    assert!(
+        !model.signals_in_frame(message1).is_empty(),
+        "the cantools frame keeps its signals: {:?}",
+        message1.name
+    );
+    let cluster = model.clusters.values().next().expect("one bus cluster");
+    assert!(
+        cluster.sources.iter().any(|source| matches!(
+            source,
+            crate::model::ClusterSource::Dbc { path } if path == "builtin:sample.dbc"
+        )) && cluster.sources.iter().any(|source| matches!(
+            source,
+            crate::model::ClusterSource::Arxml { path, .. } if path == arxml
+        )),
+        "the bus lists both the DBC and the ARXML: {:?}",
+        cluster.sources
+    );
+
+    let fr_bus = app.add_flexray_bus().expect("a FlexRay bus");
+    app.add_fr_description(fr_bus, crate::channel::description_source(fibex_a, None))
+        .expect("the first FIBEX binds");
+    let one_file = app
+        .fr_db(fr_bus)
+        .expect("the first description")
+        .frames
+        .len();
+    app.add_fr_description(fr_bus, crate::channel::description_source(fibex_b, None))
+        .expect("the second FIBEX shares the schedule");
+    let merged_frames = app.fr_db(fr_bus).expect("the merged schedule").frames.len();
+    assert!(
+        merged_frames >= one_file,
+        "merging never loses the first file's frames ({one_file} -> {merged_frames})"
+    );
+    assert_eq!(app.fr_sources.get(&fr_bus).map(Vec::len), Some(2));
+
+    let dir = std::env::temp_dir().join("roxy_can_cantools_corpus");
+    std::fs::create_dir_all(&dir).unwrap();
+    let project = dir.join("corpus.rxproj");
+    assert!(app.save_project(Some(project.clone())));
+    let mut restored = App::headless();
+    restored.open_project_path(&project);
+    restored.settle();
+    let can = restored
+        .snap
+        .channels
+        .iter()
+        .position(|channel| channel.name == "CAN1")
+        .expect("CAN1 survives");
+    let model = restored.model_comms[can].as_ref().expect("the CAN model");
+    assert!(
+        model.frames.values().any(|frame| frame.name == "Message1")
+            && model
+                .frames
+                .values()
+                .any(|frame| frame.name == "EngineStatus"),
+        "both descriptions are rebound on open"
+    );
+    assert_eq!(
+        restored.fr_sources.get(&fr_bus).map(Vec::len),
+        Some(2),
+        "both FIBEX files are rebound on open"
+    );
+    assert_eq!(
+        restored.fr_db(fr_bus).map(|db| db.frames.len()),
+        Some(merged_frames),
+        "the merged FlexRay schedule survives the round trip"
+    );
+}
+
 /// Ethernet matrices merge per bus; a renamed second file adds a second
 /// cluster and its frame rather than replacing the first.
 #[test]

@@ -270,7 +270,11 @@ impl FrDb {
     /// agree; duplicate ECUs/PDUs/frames keep the first file's copy and are
     /// reported back as warnings.
     pub fn merge(&mut self, other: FrDb) -> Result<Vec<String>, String> {
-        if self.params != other.params {
+        // Suppliers describe the same physical bus with their own cluster
+        // name and derived parameters; what must agree is the wire schedule.
+        let same_timing = self.params.speed_kbps == other.params.speed_kbps
+            && (self.params.cycle_time_ms - other.params.cycle_time_ms).abs() < 1e-9;
+        if !same_timing {
             return Err(format!(
                 "FlexRay timing differs ({} kbit/s / {} ms vs {} kbit/s / {} ms)",
                 self.params.speed_kbps,
@@ -3019,10 +3023,18 @@ mod multi_description_tests {
     #[test]
     fn merging_clusters_with_the_same_timing_keeps_both_ecus() {
         let mut base = db(10_000, 5.0);
+        base.params.name = "SupplierA".to_string();
         base.ecus.push("ECU_A".to_string());
         let mut other = db(10_000, 5.0);
+        other.params.name = "SupplierB".to_string();
+        other.params.macrotick_duration_us = 1.0;
         other.ecus.push("ECU_B".to_string());
-        base.merge(other).expect("same timing merges");
+        base.merge(other)
+            .expect("the cluster name and derived params are not timing");
         assert_eq!(base.ecus, ["ECU_A", "ECU_B"]);
+        assert_eq!(
+            base.params.name, "SupplierA",
+            "the first description names it"
+        );
     }
 }
