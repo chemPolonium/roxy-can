@@ -1,6 +1,6 @@
 # roxy-can
 
-基于 Rust 的 CAN / FlexRay 总线分析工具，使用本地 Web UI（axum + Preact，见 [web/README.md](web/README.md)）。多总线、每条总线各加载一份 DBC，覆盖经典 CAN、CAN FD、错误帧与远程帧，支持 Vector 硬件连接、与 Vector 工具链兼容的 ASC / BLF 录制与回放，以及类 CAPL 的仿真节点脚本。Windows x64 可执行文件见 [Releases](https://github.com/chemPolonium/roxy-can/releases)。
+基于 Rust 的 CAN / FlexRay 总线分析工具，使用本地 Web UI（axum + Preact，见 [web/README.md](web/README.md)）。多总线、每条总线可加载 DBC 或 AUTOSAR ARXML（同一总线可叠加多份 DBC），覆盖经典 CAN、CAN FD、错误帧与远程帧，支持 Vector 硬件连接、与 Vector 工具链兼容的 ASC / BLF 录制与回放，以及类 CAPL 的仿真节点脚本。Windows x64 可执行文件见 [Releases](https://github.com/chemPolonium/roxy-can/releases)。
 
 ![roxy-can](screenshot.png)
 
@@ -13,7 +13,7 @@ Rate/Signals/Monitor/Data/State 标签页、下栏 Statistics/Bus/Spec/Write，
 入口与操作见 [web/README.md](web/README.md)。下文的“窗口”指 core 的
 观测模型，Web 用对应标签页呈现。
 
-- **动态总线**：数量不固定，在 Buses 窗口增删、改名，每条总线单独加载 DBC；删除总线时观测器、过滤器与生成器条目自动跟着重映射。
+- **动态总线**：数量不固定，在 Buses 窗口增删、改名，每条总线单独加载 DBC / ARXML（可再叠加多份 DBC）；删除总线时观测器、过滤器与生成器条目自动跟着重映射。
 - **DBC 解码**：复用报文只解当前那一组；值表显示枚举文本；浮点信号按位模式解码并带类型标记；信号量程与 `CM_` 注释进入目录，`VFrameFormat` 让短 CAN FD 帧也能标出来。
 - **帧模型**：经典 CAN、CAN FD（变长载荷至 64 字节、BRS / ESI）、错误帧、远程帧。Trace 的 Flags 列统一给帧类型，错误行与远程行有底色。
 - **观测面板**：Trace、Messages、Statistics、Signals、Data、State、Monitor 各有独立过滤与选择；Data/Signals 可跨总线勾选信号，Signals 还支持 **Read**（只订阅、不画 lane，游标处读数；游标值按报文保持值取样，稀疏窗口直接画方点样本），Y 轴按信号右键选择 **Auto / Memory / DBC range**，Messages 行可展开查看解码信号（按需解码）。
