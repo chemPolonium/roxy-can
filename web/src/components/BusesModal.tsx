@@ -60,6 +60,18 @@ function fileName(path: string): string {
   return cut >= 0 ? path.slice(cut + 1) : path;
 }
 
+function slotLabel(cluster: Cluster): string {
+  return cluster.kind === "flexray"
+    ? `FR${cluster.bus}`
+    : cluster.kind === "ethernet"
+      ? `ETH${cluster.bus}`
+      : `CAN${cluster.bus + 1}`;
+}
+
+function clusterKey(cluster: Cluster): string {
+  return `${cluster.kind}:${cluster.bus}`;
+}
+
 function rateOptions(standard: number[], current: number): number[] {
   const values = standard.includes(current)
     ? [...standard]
@@ -142,10 +154,11 @@ function BusCard({
       : "No hardware";
 
   return (
-    <section class="bus-card">
+    <section class="bus-card" id={`bus-card-${bus.index}`}>
       <div class="bus-head">
         <input
           class="bus-name-input"
+          id={`bus-name-${bus.index}`}
           value={name}
           aria-label="Bus name"
           onInput={(event) => {
@@ -320,6 +333,7 @@ function BusCard({
       ) : (
         <div class="bus-attach">
           <select
+            id={`bus-attach-${bus.index}`}
             value={channelChoice}
             disabled={channels.length === 0 || loading}
             title={
@@ -409,6 +423,61 @@ export function BusesModal({
 }: Props) {
   const [addOpen, setAddOpen] = useState(false);
   const addRef = useRef<HTMLDivElement>(null);
+  const [selected, setSelected] = useState<string | null>(null);
+  const [rowMenu, setRowMenu] = useState<string | null>(null);
+  const [menuPos, setMenuPos] = useState({ top: 0, left: 0 });
+  const rowMenuRef = useRef<HTMLDivElement>(null);
+  const selectedCluster = clusters.find((cluster) => clusterKey(cluster) === selected) ?? null;
+  const selectedCanBus =
+    selectedCluster?.kind === "can"
+      ? (buses.find((bus) => bus.index === selectedCluster.bus) ?? null)
+      : null;
+
+  useEffect(() => {
+    if (clusters.length === 0) {
+      setSelected(null);
+      return;
+    }
+    if (!clusters.some((cluster) => clusterKey(cluster) === selected)) {
+      setSelected(clusterKey(clusters[0]));
+    }
+  }, [clusters, selected]);
+
+  const selectCluster = (cluster: Cluster) => {
+    const key = clusterKey(cluster);
+    setSelected(key);
+    setRowMenu(null);
+    setTimeout(() => {
+      const id =
+        cluster.kind === "can"
+          ? `bus-card-${cluster.bus}`
+          : `proto-${key}`;
+      document.getElementById(id)?.scrollIntoView({ block: "nearest" });
+    }, 0);
+  };
+
+  useEffect(() => {
+    if (!rowMenu) return;
+    rowMenuRef.current
+      ?.querySelector<HTMLButtonElement>('[role="menuitem"]')
+      ?.focus();
+  }, [rowMenu]);
+
+  useEffect(() => {
+    if (!rowMenu) return;
+    const close = (event: MouseEvent) => {
+      if (!rowMenuRef.current?.contains(event.target as Node)) setRowMenu(null);
+    };
+    const escape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setRowMenu(null);
+    };
+    document.addEventListener("mousedown", close);
+    document.addEventListener("keydown", escape);
+    return () => {
+      document.removeEventListener("mousedown", close);
+      document.removeEventListener("keydown", escape);
+    };
+  }, [rowMenu]);
   useEffect(() => {
     if (!addOpen) return;
     const close = (event: MouseEvent) => {
@@ -444,7 +513,8 @@ export function BusesModal({
           <h2>Buses</h2>
           <div class="picker-head-right">
             <span>
-              {buses.length} buses · {attachedCount} attached
+              {clusters.length} cluster{clusters.length === 1 ? "" : "s"} ·{" "}
+              {attachedCount} attached
             </span>
             <div class="add-cluster" ref={addRef}>
               <button
@@ -520,31 +590,167 @@ export function BusesModal({
             <table>
               <thead>
                 <tr>
-                  <th>ID</th>
                   <th>Kind</th>
                   <th>Cluster</th>
-                  <th>Bus</th>
                   <th>Frames</th>
                   <th>Source</th>
+                  <th aria-label="Actions" />
                 </tr>
               </thead>
               <tbody>
-                {clusters.map((cluster) => (
-                  <tr key={`${cluster.kind}:${cluster.bus}`}>
-                    <td>#{cluster.id}</td>
-                    <td>{cluster.kind === "flexray" ? "FlexRay" : cluster.kind === "ethernet" ? "Ethernet" : "CAN"}</td>
-                    <td>{cluster.name}</td>
-                    <td>
-                      {cluster.kind === "flexray"
-                        ? `FR${cluster.bus}`
-                        : cluster.kind === "ethernet"
-                          ? `ETH${cluster.bus}`
-                          : `CAN${cluster.bus + 1}`}
-                    </td>
-                    <td>{cluster.frames}</td>
-                    <td title={cluster.source}>{fileName(cluster.source)}</td>
-                  </tr>
-                ))}
+                {clusters.map((cluster) => {
+                  const key = clusterKey(cluster);
+                  const isSelected = key === selected;
+                  return (
+                    <tr
+                      key={key}
+                      class={isSelected ? "selected" : ""}
+                      tabIndex={0}
+                      aria-selected={isSelected}
+                      title={`cluster #${cluster.id}`}
+                      onClick={() => selectCluster(cluster)}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter" || event.key === " ") {
+                          event.preventDefault();
+                          selectCluster(cluster);
+                        }
+                      }}
+                    >
+                      <td>
+                        {cluster.kind === "flexray"
+                          ? "FlexRay"
+                          : cluster.kind === "ethernet"
+                            ? "Ethernet"
+                            : "CAN"}
+                      </td>
+                      <td>
+                        {cluster.name}
+                        {slotLabel(cluster) !== cluster.name && (
+                          <span class="cluster-slot">{slotLabel(cluster)}</span>
+                        )}
+                      </td>
+                      <td>{cluster.frames}</td>
+                      <td title={cluster.source}>{fileName(cluster.source)}</td>
+                      <td class="row-actions">
+                        <button
+                          type="button"
+                          class="row-menu-button"
+                          aria-haspopup="menu"
+                          aria-expanded={rowMenu === key}
+                          aria-label={`Actions for ${cluster.name}`}
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            setSelected(key);
+                            const rect = (
+                              event.currentTarget as HTMLButtonElement
+                            ).getBoundingClientRect();
+                            setMenuPos({
+                              top: rect.bottom + 2,
+                              left: Math.max(8, rect.right - 140),
+                            });
+                            setRowMenu(rowMenu === key ? null : key);
+                          }}
+                        >
+                          ⋯
+                        </button>
+                        {rowMenu === key && (
+                          <div
+                            class="row-menu"
+                            role="menu"
+                            ref={rowMenuRef}
+                            style={{ top: `${menuPos.top}px`, left: `${menuPos.left}px` }}
+                            onClick={(event) => event.stopPropagation()}
+                            onKeyDown={(event) => {
+                              const menu = event.currentTarget;
+                              const items = [
+                                ...menu.querySelectorAll<HTMLButtonElement>(
+                                  '[role="menuitem"]',
+                                ),
+                              ];
+                              const at = items.indexOf(
+                                document.activeElement as HTMLButtonElement,
+                              );
+                              if (event.key === "Escape") {
+                                event.preventDefault();
+                                event.stopPropagation();
+                                setRowMenu(null);
+                                menu.parentElement
+                                  ?.querySelector<HTMLButtonElement>(
+                                    ".row-menu-button",
+                                  )
+                                  ?.focus();
+                                return;
+                              }
+                              const next =
+                                event.key === "ArrowDown"
+                                  ? (at + 1) % items.length
+                                  : event.key === "ArrowUp"
+                                    ? (at - 1 + items.length) % items.length
+                                    : event.key === "Home"
+                                      ? 0
+                                      : event.key === "End"
+                                        ? items.length - 1
+                                        : -1;
+                              if (next >= 0) {
+                                event.preventDefault();
+                                event.stopPropagation();
+                                items[next]?.focus();
+                              }
+                            }}
+                          >
+                            {cluster.kind === "can" && (
+                              <button
+                                type="button"
+                                role="menuitem"
+                                onClick={() => {
+                                  setRowMenu(null);
+                                  document
+                                    .getElementById(`bus-name-${cluster.bus}`)
+                                    ?.focus();
+                                }}
+                              >
+                                Rename
+                              </button>
+                            )}
+                            {cluster.kind === "can" && (
+                              <button
+                                type="button"
+                                role="menuitem"
+                                onClick={() => {
+                                  setRowMenu(null);
+                                  document
+                                    .getElementById(`bus-attach-${cluster.bus}`)
+                                    ?.focus();
+                                }}
+                              >
+                                Attach…
+                              </button>
+                            )}
+                            <button
+                              type="button"
+                              role="menuitem"
+                              class="danger"
+                              onClick={() => {
+                                setRowMenu(null);
+                                const message =
+                                  cluster.kind === "can"
+                                    ? `Remove ${cluster.name}? Its attachments, signals and trace rows for this bus are removed.`
+                                    : `Remove ${cluster.name}?`;
+                                if (window.confirm(message)) {
+                                  if (cluster.kind === "can") onRemoveBus(cluster.bus);
+                                  else if (cluster.kind === "flexray") onRemoveFr(cluster.bus);
+                                  else onRemoveEth(cluster.bus);
+                                }
+                              }}
+                            >
+                              Remove
+                            </button>
+                          </div>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </section>
@@ -582,10 +788,10 @@ export function BusesModal({
               <span>Add a bus or load a project.</span>
             </div>
           )}
-          {buses.map((bus) => (
+          {selectedCanBus && (
             <BusCard
-              key={bus.index}
-              bus={bus}
+              key={selectedCanBus.index}
+              bus={selectedCanBus}
               channels={channels}
               realBus={realBus}
               loading={loading}
@@ -598,12 +804,17 @@ export function BusesModal({
               onSetNodeRole={onSetNodeRole}
               onError={onError}
             />
-          ))}
+          )}
 
           <section class="bus-proto">
             <h3>FlexRay</h3>
             {frBuses.map((bus) => (
-              <div class="proto-row" key={bus.bus}>
+              <div
+                class={`proto-row${selected === `flexray:${bus.bus}` ? " selected" : ""}`}
+                id={`proto-flexray:${bus.bus}`}
+                key={bus.bus}
+                onClick={() => setSelected(`flexray:${bus.bus}`)}
+              >
                 <strong>{bus.name}</strong>
                 <span>{bus.cluster || "unnamed cluster"}</span>
                 <em>{bus.frames} frames</em>
@@ -668,7 +879,12 @@ export function BusesModal({
           <section class="bus-proto">
             <h3>Ethernet</h3>
             {ethBuses.map((bus) => (
-              <div class="proto-row" key={bus.bus}>
+              <div
+                class={`proto-row${selected === `ethernet:${bus.bus}` ? " selected" : ""}`}
+                id={`proto-ethernet:${bus.bus}`}
+                key={bus.bus}
+                onClick={() => setSelected(`ethernet:${bus.bus}`)}
+              >
                 <strong>{bus.name}</strong>
                 <span>
                   {bus.clusters} clusters · {bus.frames} frames

@@ -6715,3 +6715,86 @@ button.danger:hover:not(:disabled) {
   color: var(--text);
   border-color: var(--accent);
 }
+
+.buses-clusters tbody tr {
+  cursor: pointer;
+}
+
+.buses-clusters tbody tr:hover {
+  background: var(--accent-soft);
+}
+
+.buses-clusters tbody tr.selected {
+  background: var(--accent-soft);
+}
+
+.buses-clusters tbody tr:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+}
+
+.cluster-slot {
+  margin-left: 6px;
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.buses-clusters td.row-actions {
+  position: relative;
+  width: 1%;
+  overflow: visible;
+  text-align: right;
+}
+
+.row-menu-button {
+  padding: 0 6px;
+  min-width: 22px;
+  line-height: 18px;
+  background: transparent;
+  border: 0;
+  color: var(--muted);
+}
+
+.row-menu-button:hover {
+  color: var(--text);
+}
+
+.row-menu {
+  position: fixed;
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  min-width: 140px;
+  padding: 4px;
+  background: #161c24;
+  border: 1px solid #2b3542;
+  border-radius: 5px;
+  box-shadow: 0 12px 30px rgb(0 0 0 / 45%);
+}
+
+.row-menu button {
+  width: 100%;
+  padding: 6px 8px;
+  text-align: left;
+  color: #d6e2ef;
+  background: transparent !important;
+  border: 0 !important;
+  border-radius: 3px;
+  box-shadow: none;
+}
+
+.row-menu button:hover {
+  background: #223040 !important;
+}
+
+.row-menu button.danger {
+  color: #ff9a9a;
+}
+
+.proto-row {
+  cursor: pointer;
+}
+
+.proto-row.selected {
+  background: var(--accent-soft);
+}
