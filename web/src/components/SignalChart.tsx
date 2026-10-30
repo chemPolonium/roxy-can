@@ -375,6 +375,25 @@ export function fitText(
   return cut > 0 ? `${text.slice(0, cut)}…` : "…";
 }
 
+/// Middle of the covered range, nudged in small steps until it clears every
+/// existing cursor. Returns null when the range is empty or every slot is
+/// taken (a cursor is never dropped exactly on top of another one).
+export function freeCursorTime(
+  from: number,
+  to: number,
+  existing: number[],
+  tolerance: number,
+): number | null {
+  if (!(to > from)) return null;
+  const step = Math.max(tolerance * 2, (to - from) * 0.05);
+  const center = (from + to) / 2;
+  for (const k of [0, 1, -1, 2, -2, 3, -3, 4, -4]) {
+    const t = Math.min(to, Math.max(from, center + k * step));
+    if (!existing.some((e) => Math.abs(e - t) <= tolerance)) return t;
+  }
+  return null;
+}
+
 /// Stacked signal lanes on one canvas. Curves are min/max decimated to the
 /// pixel columns, so a 12k-point series costs one vertical span per column
 /// instead of one line segment per sample.
@@ -498,11 +517,18 @@ export function SignalChart({
   const addCursor = () => {
     if (series.length === 0 && !hasReadout) return;
     const { start, end } = viewWindow();
-    // Keep successive cursors apart; dropping every one at the exact centre
-    // would stack their lines and labels.
-    const slots = [0.5, 0.7, 0.3, 0.6, 0.4, 0.8, 0.2, 0.9];
-    const fraction = slots[cursors.length % slots.length];
-    onAddCursor(start + (end - start) * fraction);
+    // Only count the part of the window that actually holds samples, so a
+    // freshly started run does not drop the cursor into empty time.
+    const from = Math.max(start, timeBounds.first);
+    const to = Math.min(end, timeBounds.last);
+    const tolerance = Math.max(1e-9, (view.windowS / plotWidth()) * 2);
+    const t = freeCursorTime(
+      from,
+      to,
+      cursors.map((cursor) => cursor.t),
+      tolerance,
+    );
+    if (t !== null) onAddCursor(t);
   };
 
   const cursorAt = (clientX: number, clientY: number): number | null => {
@@ -1458,7 +1484,7 @@ export function SignalChart({
         <button
           type="button"
           disabled={series.length === 0 && !hasReadout}
-          title="Add a time cursor at the middle of the view"
+          title="Add a time cursor at the middle of the visible data"
           onClick={addCursor}
         >
           + Cursor
