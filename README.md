@@ -36,7 +36,7 @@ Rate/Signals/Monitor/Data/State 标签页、下栏 Statistics/Bus/Spec/Write，
 - **State Tracker**：对订阅信号的历史做状态分段——枚举标签、二进制方波、会话稳定配色，支持自定义区间与固定颜色，短区段按最短显示时长合并，区段表可导出 CSV。
 - **Write 窗口**：整系统一条滚动输出——节点 `print`、装配层检查与告警、节点停止的错误、命令事件分色带时间戳；可按类别过滤、导出文本。
 - **录制与回放**：读写 Vector ASC 与 BLF（经典 / FD / 错误 / 远程帧，以及 FlexRay 收帧），自家录的文件放回去是同一批帧；`--convert` 纯流式转码。播放器式控制——倍速增减、as-fast-as-possible、按步长单步、播放指定时长或到指定时间后自动暂停（都只向前）；按时间戳顺序调度，不做进度条随机跳转。别人的日志只带通道编号，Buses 窗口底部的**回放通道映射**把那些编号指到本工程的各路（CAN、FlexRay、以太网各一张表；表项存 cluster id，删/加路不重编号，随工程保存）。录制支持按 id 过滤（CAN 写 hex、FlexRay 写 `FR0:13`）。
-- **工程文件（.rxproj）**：总线与 DBC、观测窗口及过滤、信号选择、生成器配置、触发器、窗口布局全存一个 JSON（schema v2，cluster 带持久化 id；回放映射表项存 cluster id、播放时再解析成路，generator 与 trigger 行也按 cluster id 记录，旧工程打开时一次性迁移）；DBC 路径相对工程目录，工程文件夹可整体移动。
+- **工程文件（.rxproj）**：总线与 DBC、观测窗口及过滤、信号选择、生成器配置、触发器、窗口布局全存一个 JSON（schema v2，cluster 带持久化 id；回放映射表项存 cluster id、播放时再解析成路，generator 与 trigger 行也按 cluster id 记录）；DBC 路径相对工程目录，工程文件夹可整体移动。只读写 v2，不兼容早期开发快照。
 - **中文字体**：Web UI 跟随系统中文输入与显示。
 
 ## Web 快捷键

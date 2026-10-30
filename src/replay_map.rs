@@ -81,39 +81,6 @@ impl ReplayMap {
         }
     }
 
-    /// Rebases a v1 map, whose targets are bus indexes, onto the cluster ids
-    /// the project now uses. Called only while opening an old project file;
-    /// a bus that no longer exists becomes an explicit "don't replay".
-    pub fn rebase_buses(&mut self, can: &[u32], fr: &BTreeMap<u8, u32>, eth: &BTreeMap<u8, u32>) {
-        let to_cluster = |bus: u8, from_can: bool, from_fr: bool| -> Option<ClusterId> {
-            let id = if from_can {
-                can.get(bus as usize).copied()
-            } else if from_fr {
-                fr.get(&bus).copied()
-            } else {
-                eth.get(&bus).copied()
-            };
-            id.map(ClusterId)
-        };
-        for (kind, from_can, from_fr) in [
-            (LogBusKind::Can, true, false),
-            (LogBusKind::Fr, false, true),
-            (LogBusKind::Eth, false, false),
-        ] {
-            let table = self.table_mut(kind);
-            for target in table.values_mut() {
-                if let Some(ClusterId(bus)) = *target {
-                    *target = to_cluster(bus as u8, from_can, from_fr);
-                }
-            }
-        }
-    }
-
-    /// 一条都没配过。工程文件用它决定要不要写这一项。
-    pub fn is_empty(&self) -> bool {
-        self.can.is_empty() && self.fr.is_empty() && self.eth.is_empty()
-    }
-
     /// 配过的通道（编号升序），目标为 cluster 或 `None`（不回放）。
     pub fn configured(&self, kind: LogBusKind) -> Vec<(u8, Option<ClusterId>)> {
         self.table(kind)
@@ -243,30 +210,6 @@ mod tests {
             vec![(0, Some(ClusterId(13)))]
         );
         assert_eq!(map.target(LogBusKind::Can, 4), ReplayTarget::Drop);
-    }
-
-    #[test]
-    fn a_v1_map_rebases_bus_numbers_onto_clusters() {
-        let mut map = ReplayMap::default();
-        map.set(LogBusKind::Can, 1, Some(ClusterId(1)));
-        map.set(LogBusKind::Fr, 0, Some(ClusterId(0)));
-        map.set(LogBusKind::Eth, 3, Some(ClusterId(3)));
-        let fr = [(0u8, 9u32)].into_iter().collect();
-        let eth = [(1u8, 5u32)].into_iter().collect();
-        map.rebase_buses(&[7, 8], &fr, &eth);
-        assert_eq!(
-            map.target(LogBusKind::Can, 1),
-            ReplayTarget::Cluster(ClusterId(8))
-        );
-        assert_eq!(
-            map.target(LogBusKind::Fr, 0),
-            ReplayTarget::Cluster(ClusterId(9))
-        );
-        assert_eq!(
-            map.target(LogBusKind::Eth, 3),
-            ReplayTarget::Drop,
-            "a bus the project no longer has becomes an explicit drop"
-        );
     }
 
     #[test]

@@ -5,23 +5,20 @@ use std::path::Path;
 use super::apply_profile;
 use super::parse;
 use crate::app::{App, NodeRole};
-use crate::config::{Config, ProjectFile};
 
 /// Fixture: a directory with `net.rxproj` (saved from the default
 /// headless workspace: CAN1 + sample DBC, CAN2 + motbus) and the given
 /// profile text at `profiles/<name>.toml`. Returns a fresh app with the
 /// project already open and the snapshot settled.
 fn fixture(dir: &Path, name: &str, profile: &str) -> App {
-    let fresh = App::headless();
-    let proj = ProjectFile {
-        config: Config::from_app(&fresh, None),
-    };
+    let mut fresh = App::headless();
+    fresh.settle();
     std::fs::create_dir_all(dir.join("profiles")).unwrap();
-    std::fs::write(
-        dir.join("net.rxproj"),
-        serde_json::to_string_pretty(&proj).expect("project serializes"),
-    )
-    .unwrap();
+    assert!(
+        fresh.save_project(Some(dir.join("net.rxproj"))),
+        "fixture project saves: {}",
+        fresh.status
+    );
     std::fs::write(dir.join("profiles").join(format!("{name}.toml")), profile).unwrap();
 
     let mut app = App::headless();

@@ -161,7 +161,7 @@ fn imports_can_frame_pdu_and_signal() {
 
     let key = comm.signal_key(signal).unwrap();
     assert_eq!(
-        SignalRef::parse(&key.text(), &comm, None).unwrap(),
+        SignalRef::parse(&key.text(), &comm).unwrap(),
         SignalRef::Signal(key)
     );
     assert_eq!(key.display(&comm), "[CanCluster:EngineFrame:Speed]");

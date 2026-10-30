@@ -108,8 +108,9 @@ CAN/FlexRay/Ethernet 的首选描述来源，DBC/FIBEX 只作为导入适配器�
 - `FrameId` / `PduId` / `SignalId`：由模型导入时分配并持久化；重命名不改 id。
 - `SigKey` 最终形态：`cluster + frame + pdu? + signal`，编译/保存为稳定文本
   key；脚本与触发器的显示别名保留，但解析以 id 为准。
-- 旧 key（`0:256:Name`、`fr:0:25:X`、`eth:0:Frame:X`、`derived:id`）在迁移期
-  解析为 v2 id；迁移完成后只写 v2。
+- 旧 key（`0:256:Name`、`fr:0:25:X`、`eth:0:Frame:X`）不再解析；只接受
+  `sig:` 文本与 `[Cluster:Frame:Signal]` 别名。软件开发期没有对外工程，
+  因此不提供 v1 迁移。
 
 ### 运行时
 
@@ -118,7 +119,7 @@ CAN/FlexRay/Ethernet 的首选描述来源，DBC/FIBEX 只作为导入适配器�
 - **采样与订阅**：沿用现有 `SampleCache` / `SigKey` 订阅模型，只替换 key 与
   帧路由。
 - **编码**：统一 Frame/PDU/Signal 编码器；Generator、脚本、Panel、触发器共用。
-- **持久化**：工程 schema v2；`clusters` 为唯一总线列表，兼容字段只读迁移。
+- **持久化**：工程 schema v2；`clusters` 为唯一总线列表，v2 专用，无迁移层。
 
 ## 6. 阶段计划
 
@@ -173,13 +174,13 @@ CAN/FlexRay/Ethernet 的首选描述来源，DBC/FIBEX 只作为导入适配器�
 
 - 退出：每项有真实样本、位级 golden 测试、明确的不支持报错与性能数据。
 
-### 7. Buses UI 与工程迁移
+### 7. Buses UI 与工程文件
 
 - 统一 Cluster 列表（Kind 列）、**Add cluster**、按扩展名自动选 importer；
   每类 cluster 的详情仍按 kind 展示。
-- 工程 v1 → v2 迁移器与迁移报告；旧字段只读后不再写回。
+- 工程只写 v2：`clusters` 带名称/描迹源/位率/节点角色，bus 映射与 typed 段随文件保存。
 - 明暗主题、1024×768 / 1280×800、弹窗与主标签页复核。
-- 退出：旧工程打开/保存/再打开一致；Buses 不再有三套并列入口。
+- 退出：保存/再打开一致；Buses 不再有三套并列入口。
 
 ### 8. 收尾与发布
 
@@ -219,7 +220,7 @@ M4–M5 可与 M7 的 Buses UI 部分并行，但模型与 key 迁移必须先�
 1. **ClusterId 策略**：全局持久化 id（推荐）还是 kind+序号；决定持久化与硬件映射。
 2. **SigKey 文本**：是否保留旧别名解析；决定脚本/触发器/工程迁移成本。
 3. **高级特性深度**：SecOC/E2E/Transformation 做到“只读校验”还是“可发送”。
-4. **旧工程兼容**：按现有规则可不兼容旧版，但必须提供一次性迁移与报告。
+4. **旧工程兼容**：不兼容；开发期没有对外工程，直接删掉 v1 读取与迁移。
 5. **性能**：PDU/Container 展开缓存必须从第 4 阶段起就有基准，否则后期难补。
 
 ## 10. 起始批次

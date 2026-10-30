@@ -1,59 +1,27 @@
-//! v1 project → schema v2 migration.
-//!
-//! The first slice converts the three parallel bus lists into the single
-//! `clusters` list and records the old bus-index → cluster-id map. Window
-//! signal references, generators and triggers still ride `rest` until their
-//! v2 shapes are frozen; the report says what was carried over verbatim.
+//! Builds the schema-v2 project sections from the live workspace config.
+//! The editor and the core hand over the same `Config`; this module only
+//! reshapes it into `clusters` and the compatibility blob that `open` feeds
+//! back into the same apply path.
 
 use serde_json::Value;
 
 use super::*;
 use crate::config::{CanArxmlFile, ChannelCfg, Config, EthBusFile, FrBusFile};
 
-pub struct MigrationReport {
-    pub issues: Vec<Issue>,
-    pub legacy_buses: LegacyBusMap,
-}
-
-/// Converts the bus half of a v1 config. `next_cluster_id` is one past the
-/// highest id assigned here; CAN channels keep their old order, then FlexRay,
-/// then Ethernet.
-pub fn migrate_v1_clusters(config: &Config) -> (ProjectV2, MigrationReport) {
+/// Reshapes the bus lists into the single `clusters` list. Ids are assigned
+/// in order here; the caller replaces them with the live cluster ids.
+pub fn project_from_config(config: &Config) -> ProjectV2 {
     let mut clusters = Vec::new();
-    let mut issues = Vec::new();
     let mut next_id = 1u32;
 
-    let mut can_ids = Vec::with_capacity(config.channels.len());
     for channel in &config.channels {
-        let id = next_id;
+        clusters.push(can_cluster_cfg(next_id, channel, &config.can_arxml));
         next_id += 1;
-        can_ids.push(ClusterId(id));
-        clusters.push(can_cluster_cfg(id, channel, &config.can_arxml));
-    }
-    if !config.can_arxml.is_empty() {
-        for arxml in &config.can_arxml {
-            if arxml.bus as usize >= config.channels.len() {
-                issues.push(Issue::warning(
-                    IssueKind::DanglingRef,
-                    format!(
-                        "CAN ARXML cluster '{}' names bus {}, which no channel uses",
-                        arxml.cluster, arxml.bus
-                    ),
-                ));
-            }
-        }
     }
 
-    let mut fr_ids = Vec::new();
     let mut fr_buses: Vec<&FrBusFile> = config.fr_buses.iter().collect();
     fr_buses.sort_by_key(|bus| bus.bus);
     for bus in fr_buses {
-        let id = next_id;
-        next_id += 1;
-        while fr_ids.len() <= bus.bus as usize {
-            fr_ids.push(ClusterId(0));
-        }
-        fr_ids[bus.bus as usize] = ClusterId(id);
         let alias = config
             .fr_names
             .iter()
@@ -61,7 +29,7 @@ pub fn migrate_v1_clusters(config: &Config) -> (ProjectV2, MigrationReport) {
             .map(|(_, name)| name.clone())
             .unwrap_or_else(|| format!("FR{}", bus.bus));
         clusters.push(ClusterCfg {
-            id,
+            id: next_id,
             kind: ClusterKind::FlexRay,
             name: alias,
             aliases: Vec::new(),
@@ -71,20 +39,14 @@ pub fn migrate_v1_clusters(config: &Config) -> (ProjectV2, MigrationReport) {
             ether: None,
             node_roles: Default::default(),
         });
+        next_id += 1;
     }
 
-    let mut eth_ids = Vec::new();
     let mut eth_buses: Vec<&EthBusFile> = config.eth_buses.iter().collect();
     eth_buses.sort_by_key(|bus| bus.bus);
     for bus in eth_buses {
-        let id = next_id;
-        next_id += 1;
-        while eth_ids.len() <= bus.bus as usize {
-            eth_ids.push(ClusterId(0));
-        }
-        eth_ids[bus.bus as usize] = ClusterId(id);
         clusters.push(ClusterCfg {
-            id,
+            id: next_id,
             kind: ClusterKind::Ethernet,
             name: format!("ETH{}", bus.bus),
             aliases: Vec::new(),
@@ -98,24 +60,13 @@ pub fn migrate_v1_clusters(config: &Config) -> (ProjectV2, MigrationReport) {
             }),
             node_roles: Default::default(),
         });
+        next_id += 1;
     }
 
-    let legacy_buses = LegacyBusMap {
-        can: can_ids,
-        flexray: fr_ids,
-        ethernet: eth_ids,
-    };
     let mut project = ProjectV2::new(clusters);
     project.next_cluster_id = next_id;
-    project.rest = rest_from_v1(config);
-    project.legacy_bus_map = Some(legacy_buses.clone());
-    (
-        project,
-        MigrationReport {
-            issues,
-            legacy_buses,
-        },
-    )
+    project.rest = rest_from_config(config);
+    project
 }
 
 fn can_cluster_cfg(id: u32, channel: &ChannelCfg, arxml: &[CanArxmlFile]) -> ClusterCfg {
@@ -168,7 +119,7 @@ fn source_for_path(path: &str, cluster: Option<&String>) -> ClusterSource {
     }
 }
 
-fn rest_from_v1(config: &Config) -> serde_json::Map<String, Value> {
+fn rest_from_config(config: &Config) -> serde_json::Map<String, Value> {
     let mut value = serde_json::to_value(config).unwrap_or(Value::Null);
     let Some(object) = value.as_object_mut() else {
         return serde_json::Map::new();
@@ -181,7 +132,6 @@ fn rest_from_v1(config: &Config) -> serde_json::Map<String, Value> {
         "eth_buses",
         "can_arxml",
         "eth_frame_length_includes_header",
-        // Now written as typed v2 sections with cluster ids.
         "triggers",
         "generators",
     ] {

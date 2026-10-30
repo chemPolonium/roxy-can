@@ -948,12 +948,6 @@ impl App {
         });
     }
 
-    /// 把整张回放通道映射交回核心。Buses 窗口里每一行的下拉框改的都是
-    /// 快照那份表的一个拷贝，改完整张发回去。
-    pub fn set_replay_map(&mut self, map: crate::replay_map::ReplayMap) {
-        self.send(crate::bus::BusCommand::SetReplayMap(map));
-    }
-
     /// Changes replay speed; takes effect immediately if a replay is
     /// running. The remembered choice is frontend state -- the combo
     /// displays it and a fresh replay starts at it -- while the applied

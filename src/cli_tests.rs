@@ -702,14 +702,11 @@ fn a_profile_overlay_drives_a_muted_project() {
         on: true,
     });
     app.settle();
-    let proj = crate::config::ProjectFile {
-        config: crate::config::Config::from_app(&app, None),
-    };
-    fs::write(
-        &project,
-        serde_json::to_string_pretty(&proj).expect("project serializes"),
-    )
-    .unwrap();
+    assert!(
+        app.save_project(Some(project.clone())),
+        "fixture project saves: {}",
+        app.status
+    );
     fs::write(
         dir.join("profiles").join("ci.toml"),
         "[[node]]\nbus = \"CAN1\"\nnode = \"EngineECU\"\nrole = \"Simulated\"\n",
@@ -753,15 +750,12 @@ fn a_bad_profile_aborts_the_run_before_traffic() {
     let dir = std::env::temp_dir().join("roxy_can_cli_prof_bad");
     fs::create_dir_all(dir.join("profiles")).unwrap();
     let project = dir.join("net.rxproj");
-    let app = crate::app::App::headless();
-    let proj = crate::config::ProjectFile {
-        config: crate::config::Config::from_app(&app, None),
-    };
-    fs::write(
-        &project,
-        serde_json::to_string_pretty(&proj).expect("project serializes"),
-    )
-    .unwrap();
+    let mut app = crate::app::App::headless();
+    assert!(
+        app.save_project(Some(project.clone())),
+        "fixture project saves: {}",
+        app.status
+    );
     fs::write(
         dir.join("profiles").join("typo.toml"),
         "[[node]]\nbus = \"CAN1\"\nnode = \"EngineEcu\"\nrole = \"Simulated\"\n",

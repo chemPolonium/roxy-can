@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use crate::config::{Config, PROJECT_EXT, ProjectFile};
+use crate::config::{Config, PROJECT_EXT};
 
 use crate::app::App;
 
@@ -130,11 +130,17 @@ impl App {
                 "web",
                 "triggers",
                 "replay_map",
+                "channels",
+                "fr_buses",
+                "fr_names",
+                "eth_buses",
+                "can_arxml",
+                "eth_frame_length_includes_header",
             ] {
                 object.remove(key);
             }
         }
-        let (mut project, _report) = crate::model::migrate_v1_clusters(&config);
+        let mut project = crate::model::project_from_config(&config);
         let ids = &self.snap.cluster_ids;
         let mut fr_order: Vec<u8> = config.fr_buses.iter().map(|bus| bus.bus).collect();
         fr_order.sort_unstable();
@@ -171,7 +177,7 @@ impl App {
         }
         if !ids.can.is_empty() || !ids.fr.is_empty() || !ids.eth.is_empty() {
             project.next_cluster_id = ids.next;
-            project.legacy_bus_map = Some(crate::model::LegacyBusMap {
+            project.bus_map = Some(crate::model::BusMap {
                 can: ids
                     .can
                     .iter()
@@ -413,15 +419,18 @@ impl App {
                     return;
                 }
             };
-            // v2 的 generator 段以 cluster id 记路，打开时换回旧配置里的
-            // 路号：`config` 兼容段只是同一批行的一份拷贝，以 v2 段为准。
+            // The typed `clusters` section is the authority for bus
+            // descriptions; the config blob no longer carries them.
+            restore_buses_from_clusters(&project, &mut cfg);
+
+            // generator 段以 cluster id 记路，打开时换回路号。
             if let Some(generators) = &project.generators {
                 let bus_of = |ids: &[crate::model::ClusterId], cluster: u32| {
                     ids.iter()
                         .position(|id| id.0 == cluster)
                         .map(|bus| bus as u8)
                 };
-                let map = project.legacy_bus_map.as_ref();
+                let map = project.bus_map.as_ref();
                 cfg.tx.clear();
                 cfg.fr_tx.clear();
                 for generator in generators {
@@ -480,7 +489,7 @@ impl App {
             // rule whose cluster is gone is dropped rather than pointed at a
             // different bus.
             if let Some(triggers) = &project.triggers {
-                let map = project.legacy_bus_map.as_ref();
+                let map = project.bus_map.as_ref();
                 let bus_of = |ids: Option<&Vec<crate::model::ClusterId>>, cluster: u32| {
                     ids?.iter()
                         .position(|id| id.0 == cluster)
@@ -561,7 +570,7 @@ impl App {
             }
             // Window picks saved by cluster id turn back into the bus indexes
             // the trace tables use.
-            if let Some(map) = &project.legacy_bus_map {
+            if let Some(map) = &project.bus_map {
                 for window in &mut cfg.trace_windows {
                     if !window.manual_clusters.is_empty() {
                         window.manual = window
@@ -592,7 +601,9 @@ impl App {
             self.reset_to_defaults();
             cfg.resolve_paths(path.parent());
             let problems = cfg.apply(self);
-            if let Some(map) = &project.legacy_bus_map {
+            self.settle();
+
+            if let Some(map) = &project.bus_map {
                 self.send(crate::bus::BusCommand::SetClusterIds {
                     next: project.next_cluster_id,
                     can: map.can.iter().map(|id| id.0).collect(),
@@ -645,25 +656,10 @@ impl App {
             self.report_load_problems(problems);
             return;
         }
-        match serde_json::from_str::<ProjectFile>(&text) {
-            Ok(proj) => {
-                self.reset_to_defaults();
-                let mut cfg = proj.config;
-                cfg.resolve_paths(path.parent());
-                let problems = cfg.apply(self);
-                self.workspace_rev = self.workspace_rev.wrapping_add(1);
-                self.project_path = Some(path.to_path_buf());
-                self.retarget_record_draft();
-                self.baseline = self.config_snapshot();
-                self.push_recent_project(path.to_string_lossy().to_string());
-                self.status = format!("project loaded: {}", path.display());
-                // After the "loaded" line: a half-restored project has to say
-                // so on the bar the user is looking at, and keep the detail
-                // where it can still be read.
-                self.report_load_problems(problems);
-            }
-            Err(e) => self.fail(format!("project ignored: {e}")),
-        }
+        self.fail(
+            "project ignored: unsupported project schema; this build reads v2 projects only"
+                .to_string(),
+        );
     }
 
     /// Resets the record draft to its default file name. The recording
@@ -697,4 +693,83 @@ impl App {
         self.baseline = self.config_snapshot();
         self.status = "new project".to_string();
     }
+}
+
+/// Rebuilds the bus description lists from the project's typed clusters.
+/// The config blob deliberately carries no channels, so this is the only
+/// place bus names, paths, bitrates and node roles come back on open.
+fn restore_buses_from_clusters(project: &crate::model::ProjectV2, cfg: &mut Config) {
+    use crate::model::{ClusterKind, ClusterSource};
+    cfg.channels.clear();
+    cfg.can_arxml.clear();
+    cfg.fr_buses.clear();
+    cfg.fr_names.clear();
+    cfg.eth_buses.clear();
+    let (mut can, mut fr, mut eth) = (0u8, 0u8, 0u8);
+    for cluster in &project.clusters {
+        match cluster.kind {
+            ClusterKind::Can => {
+                let mut paths = Vec::new();
+                for source in &cluster.sources {
+                    match source {
+                        ClusterSource::Dbc { path } => paths.push(path.clone()),
+                        ClusterSource::Arxml { path, cluster } => {
+                            cfg.can_arxml.push(crate::config::CanArxmlFile {
+                                bus: can,
+                                path: path.clone(),
+                                cluster: cluster.clone(),
+                            });
+                        }
+                        _ => {}
+                    }
+                }
+                let can_cfg = cluster.can.as_ref();
+                cfg.channels.push(crate::config::ChannelCfg {
+                    name: cluster.name.clone(),
+                    dbc_path: paths.first().cloned().unwrap_or_default(),
+                    dbc_paths_extra: paths.into_iter().skip(1).collect(),
+                    node_roles: cluster.node_roles.clone(),
+                    bitrate_kbps: can_cfg
+                        .map(|params| params.bitrate_kbps)
+                        .unwrap_or(crate::model::CanParams::DEFAULT_BITRATE_KBPS),
+                    fd_data_kbps: can_cfg
+                        .map(|params| params.fd_data_kbps)
+                        .unwrap_or(crate::model::CanParams::DEFAULT_FD_DATA_KBPS),
+                });
+                can += 1;
+            }
+            ClusterKind::FlexRay => {
+                let (path, name) = description_source(&cluster.sources);
+                cfg.fr_buses.push(crate::config::FrBusFile {
+                    bus: fr,
+                    path,
+                    cluster: name,
+                });
+                cfg.fr_names.push((fr, cluster.name.clone()));
+                fr += 1;
+            }
+            ClusterKind::Ethernet => {
+                let (path, name) = description_source(&cluster.sources);
+                cfg.eth_buses.push(crate::config::EthBusFile {
+                    bus: eth,
+                    path,
+                    cluster: name,
+                });
+                eth += 1;
+            }
+        }
+    }
+}
+
+fn description_source(sources: &[crate::model::ClusterSource]) -> (String, String) {
+    for source in sources {
+        match source {
+            crate::model::ClusterSource::Arxml { path, cluster } => {
+                return (path.clone(), cluster.clone());
+            }
+            crate::model::ClusterSource::Fibex { path } => return (path.clone(), String::new()),
+            _ => {}
+        }
+    }
+    (String::new(), String::new())
 }

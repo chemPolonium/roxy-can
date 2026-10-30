@@ -1792,12 +1792,18 @@ fn panel_presets_write_each_signal_and_report_failures() {
     };
     laps(&mut app, 1, &mut now);
     let (fr_before, eth_before) = (app.snap.fr_trace.len(), app.snap.eth_trace.len());
+    let can_cluster = app.snap.cluster_ids.can[0];
+    let fr_cluster = app.snap.cluster_ids.fr.get(&0).copied().expect("FR0");
+    let eth_cluster = app.snap.cluster_ids.eth.get(&0).copied().expect("ETH0");
 
     app.send(crate::bus::BusCommand::PanelWriteSignals {
         writes: vec![
-            ("0:256:EngineSpeed".to_string(), 1234.0),
-            ("fr:0:25:EngSpeed".to_string(), 2000.0),
-            ("eth:0:EthFrame:Sig".to_string(), 4.5),
+            (
+                format!("sig:can:{can_cluster}:256:false:EngineSpeed"),
+                1234.0,
+            ),
+            (format!("sig:fr:{fr_cluster}:25:EngSpeed"), 2000.0),
+            (format!("sig:eth:{eth_cluster}:EthFrame:Sig"), 4.5),
             ("nope".to_string(), 1.0),
             ("derived:Test".to_string(), 1.0),
         ],

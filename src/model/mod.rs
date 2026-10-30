@@ -10,8 +10,8 @@ mod dbc_import;
 mod id;
 mod key;
 mod legacy_import;
-mod migrate;
 mod plan;
+mod project_cfg;
 mod registry;
 mod runtime;
 mod schema;
@@ -22,8 +22,6 @@ mod arxml_tests;
 mod dbc_tests;
 #[cfg(test)]
 mod legacy_tests;
-#[cfg(test)]
-mod migrate_tests;
 #[cfg(test)]
 mod plan_tests;
 #[cfg(test)]
@@ -44,15 +42,15 @@ pub use dbc_import::{
 #[allow(unused_imports)]
 pub use id::{ClusterIds, ElementIds, ElementKind};
 #[allow(unused_imports)]
-pub use key::{KeyError, LegacyBusMap, SignalKey, SignalRef};
+pub use key::{BusMap, KeyError, SignalKey, SignalRef};
 #[allow(unused_imports)]
 pub use legacy_import::{
     EthernetDbImporter, FibexImporter, import_eth_db, import_eth_db_obj, import_fibex, import_fr_db,
 };
 #[allow(unused_imports)]
-pub use migrate::{MigrationReport, migrate_v1_clusters};
-#[allow(unused_imports)]
 pub use plan::{PlanCache, build_decode_plan};
+#[allow(unused_imports)]
+pub use project_cfg::project_from_config;
 #[allow(unused_imports)]
 pub use registry::{ClusterEntry, ClusterRegistry};
 #[allow(unused_imports)]

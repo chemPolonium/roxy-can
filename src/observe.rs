@@ -525,9 +525,7 @@ impl SigKey {
     }
 
     /// Parses [`Self::text`]. A derived key carries only its id here; callers
-    /// that need the display name resolve it from the definition list. The
-    /// legacy bus-numbered forms need the core's bus map and are handled by
-    /// [`crate::bus::BusCore::resolve_key_text`] instead.
+    /// that need the display name resolve it from the definition list.
     pub fn from_text(text: &str) -> Option<Self> {
         if let Some(rest) = text.strip_prefix("derived:") {
             return (!rest.is_empty()).then(|| Self::derived(rest, ""));

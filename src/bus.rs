@@ -2281,9 +2281,11 @@ impl BusCore {
                     }
                 }
                 for index in 0..self.can_count() {
-                    self.model_comms.resize(index + 1, None);
-                    self.model_plans.resize(index + 1, None);
-                    self.model_dbs.resize(index + 1, None);
+                    while self.model_comms.len() <= index {
+                        self.model_comms.push(None);
+                        self.model_plans.push(None);
+                        self.model_dbs.push(None);
+                    }
                     let id = self.can_cluster_ids[index];
                     if let Some(comm) = self.model_comms[index].as_mut() {
                         Arc::make_mut(comm).rebind_cluster(id);
@@ -4569,33 +4571,11 @@ impl BusCore {
         self.key_bus(&key).map(|_| key)
     }
 
-    /// Text from a panel/script/derived source: canonical `sig:` keys and the
-    /// legacy spellings both resolve, the latter through the bus maps the
-    /// core owns.
+    /// Text from a panel/script/derived source: a canonical `sig:` key, with
+    /// the cluster resolved against the live bus list.
     pub(crate) fn resolve_key_text(&self, text: &str) -> Option<SigKey> {
         let text = text.trim();
-        if let Some(key) = SigKey::from_text(text) {
-            return self.bind_key(key);
-        }
-        if let Some(rest) = text.strip_prefix("fr:") {
-            let mut parts = rest.splitn(3, ':');
-            let bus = parts.next()?.parse().ok()?;
-            let slot = parts.next()?.parse().ok()?;
-            let cluster = *self.fr_cluster_ids.get(&bus)?;
-            return Some(SigKey::fr_in(cluster, slot, parts.next()?));
-        }
-        if let Some(rest) = text.strip_prefix("eth:") {
-            let mut parts = rest.splitn(3, ':');
-            let bus = parts.next()?.parse().ok()?;
-            let frame = parts.next()?;
-            let cluster = *self.eth_cluster_ids.get(&bus)?;
-            return Some(SigKey::eth_in(cluster, frame, parts.next()?));
-        }
-        let mut parts = text.splitn(3, ':');
-        let ch: u8 = parts.next()?.parse().ok()?;
-        let id = parts.next()?.parse().ok()?;
-        let cluster = *self.can_cluster_ids.get(ch as usize)?;
-        Some(SigKey::can_in(cluster, id, false, parts.next()?))
+        SigKey::from_text(text).and_then(|key| self.bind_key(key))
     }
 
     pub(crate) fn subscribe_signal(&mut self, key: SigKey) {
@@ -10043,7 +10023,7 @@ BA_ "GenSigStartValue" SG_ 512 Temp 80;
     }
 
     #[test]
-    fn a_canonical_key_binds_its_bus_and_keeps_the_legacy_alias_working() {
+    fn a_canonical_key_binds_its_live_bus() {
         let mut core = BusCore::new(Vec::new());
         let db = std::sync::Arc::new(
             crate::dbc::load_dbc_str(crate::sample_data::SAMPLE_DBC).expect("sample DBC"),
@@ -10054,13 +10034,9 @@ BA_ "GenSigStartValue" SG_ 512 Temp 80;
         let key = core.resolve_key_text(&canonical).expect("canonical key");
         assert_eq!(key.text(), canonical, "cluster survives the round trip");
         assert_eq!(key.cluster(), Some(cluster));
-        let legacy = core
-            .resolve_key_text("0:256:EngineSpeed")
-            .expect("legacy alias");
-        assert_eq!(
-            legacy.text(),
-            canonical,
-            "a legacy key upgrades to the canonical text when bound"
+        assert!(
+            core.resolve_key_text("0:256:EngineSpeed").is_none(),
+            "bus-numbered text is gone: there are no v1 keys to upgrade"
         );
     }
 

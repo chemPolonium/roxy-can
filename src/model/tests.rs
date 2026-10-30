@@ -351,7 +351,7 @@ fn canonical_signal_key_roundtrips() {
         signal: SignalId(42),
     };
     assert_eq!(key.text(), "sig:1:17:42");
-    let parsed = SignalRef::parse(&key.text(), &comm, None).unwrap();
+    let parsed = SignalRef::parse(&key.text(), &comm).unwrap();
     assert_eq!(parsed, SignalRef::Signal(key));
     assert_eq!(key.display(&comm), "[CAN1:EngineData:Speed]");
 }
@@ -370,11 +370,7 @@ fn alias_resolves_names_ids_and_cluster_aliases() {
         "[CAN1:0x100:Speed]",
         "[CAN1:256:Speed]",
     ] {
-        assert_eq!(
-            SignalRef::parse(text, &comm, None).unwrap(),
-            expected,
-            "{text}"
-        );
+        assert_eq!(SignalRef::parse(text, &comm).unwrap(), expected, "{text}");
     }
 }
 
@@ -391,7 +387,7 @@ fn fixture_with_shared_can_id() -> Comm {
 #[test]
 fn alias_reports_ambiguity_instead_of_guessing() {
     let comm = fixture_with_shared_can_id();
-    let error = SignalRef::parse("[CAN1:0x100:Speed]", &comm, None).unwrap_err();
+    let error = SignalRef::parse("[CAN1:0x100:Speed]", &comm).unwrap_err();
     assert!(matches!(error, KeyError::Ambiguous(_, 2)), "{error}");
     assert!(error.to_string().contains("matches 2"));
 }
@@ -400,83 +396,24 @@ fn alias_reports_ambiguity_instead_of_guessing() {
 fn alias_reports_unknown_parts() {
     let comm = fixture();
     assert!(matches!(
-        SignalRef::parse("[Nope:EngineData:Speed]", &comm, None),
+        SignalRef::parse("[Nope:EngineData:Speed]", &comm),
         Err(KeyError::UnknownCluster(_))
     ));
     assert!(matches!(
-        SignalRef::parse("[CAN1:Nope:Speed]", &comm, None),
+        SignalRef::parse("[CAN1:Nope:Speed]", &comm),
         Err(KeyError::UnknownFrame(_))
     ));
     assert!(matches!(
-        SignalRef::parse("[CAN1:EngineData:Nope]", &comm, None),
+        SignalRef::parse("[CAN1:EngineData:Nope]", &comm),
         Err(KeyError::UnknownSignal(_))
     ));
-    assert!(matches!(
-        SignalRef::parse("", &comm, None),
-        Err(KeyError::Empty)
-    ));
-}
-
-#[test]
-fn legacy_keys_resolve_through_the_migration_map() {
-    let comm = fixture_with_shared_can_id();
-    let map = LegacyBusMap {
-        can: vec![ClusterId(1)],
-        flexray: vec![],
-        ethernet: vec![],
-    };
-    let expected = SignalRef::Signal(SignalKey {
-        cluster: ClusterId(1),
-        frame: FrameId(17),
-        signal: SignalId(42),
-    });
-    assert_eq!(
-        SignalRef::parse("0:256:Speed", &comm, Some(&map)).unwrap(),
-        expected
-    );
-    // The extended frame shares the id, but a v1 key meant the standard one.
-    assert_eq!(
-        SignalRef::parse("0:0x100:Speed", &comm, Some(&map)).unwrap(),
-        expected
-    );
-    assert!(matches!(
-        SignalRef::parse("1:256:Speed", &comm, Some(&map)),
-        Err(KeyError::UnknownCluster(_))
-    ));
-    assert!(matches!(
-        SignalRef::parse("0:256:Speed", &comm, None),
-        Err(KeyError::Malformed(_))
-    ));
-}
-
-#[test]
-fn legacy_ethernet_keys_resolve() {
-    let comm = eth_comm();
-    let map = LegacyBusMap {
-        ethernet: vec![ClusterId(2)],
-        ..LegacyBusMap::default()
-    };
-    let parsed = SignalRef::parse("eth:0:CamFrame:Speed", &comm, Some(&map)).unwrap();
-    assert_eq!(
-        parsed,
-        SignalRef::Signal(SignalKey {
-            cluster: ClusterId(2),
-            frame: FrameId(30),
-            signal: SignalId(60),
-        })
-    );
-    assert_eq!(
-        SignalRef::parse("[ETH1:CamFrame:Speed]", &comm, None)
-            .unwrap()
-            .display(&comm),
-        "[ETH1:CamFrame:Speed]"
-    );
+    assert!(matches!(SignalRef::parse("", &comm), Err(KeyError::Empty)));
 }
 
 #[test]
 fn derived_refs_keep_their_id() {
     let comm = fixture();
-    let parsed = SignalRef::parse("derived:brake_pressure", &comm, None).unwrap();
+    let parsed = SignalRef::parse("derived:brake_pressure", &comm).unwrap();
     assert_eq!(parsed.text(), "derived:brake_pressure");
     assert_eq!(parsed.display(&comm), "[derived:brake_pressure]");
 }
@@ -484,7 +421,7 @@ fn derived_refs_keep_their_id() {
 #[test]
 fn canonical_keys_reject_a_signal_from_another_frame() {
     let comm = fixture();
-    let error = SignalRef::parse("sig:1:17:44", &comm, None).unwrap_err();
+    let error = SignalRef::parse("sig:1:17:44", &comm).unwrap_err();
     assert!(matches!(error, KeyError::UnknownSignal(_)));
 }
 

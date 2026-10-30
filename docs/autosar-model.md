@@ -475,7 +475,7 @@ pub enum FrameMatchKey {
 - `ClusterId(u32)` 在工程内全局唯一，单调分配，删除后不复用。
 - kind、名称、序号都不是身份。`CAN1` 改名为 `Powertrain`、删除后再加一条
   CAN，都不会让旧 key 指到新总线。
-- 工程文件保存 `nextClusterId`；旧工程迁移时按固定顺序分配（§4.3）。
+- 工程文件保存 `nextClusterId`；开发期没有对外工程，因此不读 v1、不做迁移。
 - 硬件通道、回放文件通道、录制通道都通过**独立映射表**指向 `ClusterId`，
   不再把“第几路”当身份。
 
@@ -520,17 +520,11 @@ derived:{definition_id}                     例：derived:brk_pressure
    CAN ID / FR slot / ETH 帧名。
 3. 解析成功后立即规范化为 `sig:...` 写回工程；显示时再还原别名。
 
-旧 v1 key 只读解析，不再写出：
+旧 v1 key 文本已移除：`0:256:Name`、`fr:0:25:X`、`eth:0:Frame:X` 不再解析，
+`derived:id` 仍保留。只接受 `sig:` 文本与 `[Cluster:Frame:Signal]` 别名。
 
-| v1 文本 | v2 迁移 |
-| --- | --- |
-| `0:256:Speed` | CAN 旧第 0 路 → 该 cluster；ID + 名字定位 frame；`sig:...` |
-| `fr:0:25:Speed` | 旧 FR 第 0 路 → cluster；slot 25 → frame |
-| `eth:0:Frame:Speed` | 旧 ETH 第 0 路 → cluster；帧名 → frame |
-| `derived:id` | 原样保留 |
-
-脚本源码里继续接受旧 key，编译时解析成 v2；解析失败给编译诊断，不静默
-指向同名的另一条总线。工程文件迁移后只写 v2。
+脚本源码只接受 cluster 文本与别名；解析失败给编译诊断，不静默指向同名的
+另一条总线。工程文件只写 v2。
 
 ### 3.3 决策 1 的配套：实体 ID 分配
 
@@ -551,8 +545,8 @@ derived:{definition_id}                     例：derived:brk_pressure
 
 ### 4.1 顶层
 
-v1 文件只有 `{ "config": ... }`。v2 增加 `format` 与 `version`，并把总线
-描述从三套并列字段收成 `clusters`。
+工程文件只有 v2（`format` + `version` + `clusters` + typed 段），不再接受
+早期的 `{ "config": ... }` 快照。
 
 ```json
 {
@@ -609,7 +603,7 @@ v1 文件只有 `{ "config": ... }`。v2 增加 `format` 与 `version`，并把�
     { "kind": "can", "fileChannel": 0, "cluster": 1 },
     { "kind": "flexray", "fileChannel": 1, "cluster": 2 }
   ],
-  "legacyBusMap": {
+  "busMap": {
     "can": [1, 2],
     "flexray": [3],
     "ethernet": [4]
@@ -648,56 +642,12 @@ v1 文件只有 `{ "config": ... }`。v2 增加 `format` 与 `version`，并把�
 
 ---
 
-## 4.3 v1 → v2 迁移映射
+## 4.3 工程只读写 v2
 
-迁移在打开 v1 时一次性完成，写回 v2；原文件不原地改写，保存时另存或覆盖
-由用户决定。迁移报告列出未映射项。
-
-| v1 字段 | v2 落点 | 规则 |
-| --- | --- | --- |
-| `config.channels[i]` | `clusters[] kind=can` + `can` | 按数组顺序分配 id；`name`、`bitrate_kbps`、`fd_data_kbps` |
-| `channels[i].dbc_path` + `dbc_paths_extra` | `clusters[i].sources` | 依次生成 `{kind:"dbc",path}` |
-| `channels[i].node_roles` | `clusters[i].nodeRoles` | 原样 |
-| `config.fr_buses[]` | `clusters[] kind=flexray` | 按 `bus` 升序分配 id；`path`+`cluster` 成 source |
-| `config.fr_names[]` | `clusters[id].name` | 有名字用名字，否则 `FR{n}` |
-| `config.eth_buses[]` | `clusters[] kind=ethernet` | 按 `bus` 升序；`path`+`cluster` 成 source |
-| `config.can_arxml[]` | 对应 CAN cluster 的 `sources` | 已有同 path 则不重复；`cluster` 名保留 |
-| `config.eth_frame_length_includes_header` | `clusters[kind=ethernet].ether.frameLengthIncludesHeader` | 单个布尔值复制到所有 ETH cluster |
-| `config.tx[]` | `generators[] kind=can` | `channel`→cluster id；`id`+`fd`→frame key |
-| `config.fr_tx[]` | `generators[] kind=flexray` | `bus`→cluster id；`slot`→frame |
-| `config.triggers[].ch/id/ext/signal` | `views.triggers[].signalRef` | `SignalCfg` 同样的映射；`send_ch/send_id` 映射成目标 generator 的 cluster+frame |
-| `config.nodes[].channel` / `blocks[].channel` | `nodes[].cluster` / `blocks[].cluster` | 编号→cluster id |
-| `config.replay_map` | `replay[]` | `(kind, raw) → cluster id`；丢弃目标不存在或重复的条目并报告 |
-| `SignalCfg {ch,id,ext,fr_slot,eth_frame,derived,signal}` | `signalRef` 字符串 | CAN：cluster+id+ext+signal；FR：cluster+slot+signal；ETH：cluster+frame name+signal；derived 原样 |
-| `TraceCfg.manual` / `fr_manual` / `eth_manual` | `views.*.picks[]` | 每个 pick 变成 `{cluster, frame}`；EthFlowKey 保留为 flow 选择 |
-| `config.web` | `web` | 原样保留，由前端迁移器按 core 给的 `legacyBusMap` 重写 |
-| `config.derived[]` | `derived[]` | `source` 里的旧 key 改写为 `sig:`；解析失败保留原文 + 报告 |
-| `config.monitor_rows[]` / `graphics[]` / `data_windows[]` / `state_trackers[]` | 同名窗口 | 每个 `SignalCfg` 改成 `signalRef` |
-
-`legacyBusMap` 在迁移后仍暴露给前端：
-
-```json
-{
-  "can": [1, 2],
-  "flexray": [3],
-  "ethernet": [4]
-}
-```
-
-数组下标就是旧 `ch`/`bus`。第 8 阶段删除。
-
-### 4.4 Web 工作区迁移
-
-前端 `web` 是 opaque JSON，但其中含：
-
-- `panelBook` 的 frame action：`bus`、`source`、`frameId`、`ext`、`values[].signal`；
-- Trace/Messages 列与筛选里的 bus 编号；
-- Signals 选择、Monitor/Data/State 行；
-- 曲线 Y 模式、游标等不涉及总线身份，原样保留。
-
-迁移器在 core 完成 v1→v2 后，由前端用 `legacyBusMap` 重写上述字段。无法
-解析的 frame action 标记为 `disabled` 并提示，不删除页面。
-
+软件开发期没有对外发布的工程文件，因此**没有 v1 读取或迁移**：版本不是
+`2` 的文件直接报 unsupported。`clusters` 是唯一的总线列表，CAN/FR/ETH 的
+名称、sources、位率和节点角色都由它恢复；gen/trigger 行用 cluster id 记录，
+`busMap` 只负责在打开时换回路号。
 ---
 
 ## 5. 现有代码引用图（第 4 阶段迁移面）
@@ -728,7 +678,7 @@ v1 文件只有 `{ "config": ... }`。v2 增加 `format` 与 `version`，并把�
 | `src/state_seg.rs` | 状态分段按 `SigKey` 键 | `SignalKey` | 4 |
 | `src/workspace.rs` | `Pick::{Can,Fr,Eth}` | `Pick::{Frame,Flow}` + cluster id | 4-7 |
 | `src/hw/vector.rs` / `src/hw/kvaser.rs` | CAN 通道序号 | 会话级 cluster→硬件通道绑定 | 5 |
-| `src/web.rs:4420-4457` | `WebState.buses/fr_buses/eth_buses` 三份 | `WebState.clusters` + `legacyBusMap` | 4-7 |
+| `src/web.rs:4420-4457` | `WebState.buses/fr_buses/eth_buses` 三份 | `WebState.clusters` + `busMap` | 4-7 |
 | `src/web.rs:5359-5376` | `WebFrBus` / `WebEthBus` 序列化 | 统一 `WebCluster` | 7 |
 | `src/web.rs:4166` | `WebCatalogChannel` 三类拼接 | 统一 catalog（cluster+frame+signal） | 4-7 |
 
@@ -736,7 +686,7 @@ v1 文件只有 `{ "config": ... }`。v2 增加 `format` 与 `version`，并把�
 
 | 位置 | 现状 | v2 替换 | 阶段 |
 | --- | --- | --- | --- |
-| [`web/src/types.ts:41`](../web/src/types.ts#L41) | `frBuses`、`ethBuses` 与 `channels` 并列 | `clusters` + `legacyBusMap` | 7 |
+| [`web/src/types.ts:41`](../web/src/types.ts#L41) | `frBuses`、`ethBuses` 与 `channels` 并列 | `clusters` + `busMap` | 7 |
 | `web/src/types.ts:131-147` | `FrBus`、`EthBus` | `Cluster`（kind 字段区分） | 7 |
 | `web/src/types.ts:477-482` | `Channel` 只有 CAN | `Cluster` + `Network` | 7 |
 | `web/src/components/BusesModal.tsx:14-15,378-612` | 三套加载入口 | **Add cluster** + 按扩展名/importer 选择；详情按 kind | 7 |
@@ -745,7 +695,7 @@ v1 文件只有 `{ "config": ... }`。v2 增加 `format` 与 `version`，并把�
 | `web/src/components/SignalPicker.tsx` | `ch/id/ext/fr_slot/eth_frame` | `signalRef` | 7 |
 | `web/src/components/PagePanel.tsx` / `panelPage.ts` | frame action 的 `bus/source/frameId/ext` | `cluster/source/key` | 7 |
 | `web/src/components/TraceTable.tsx` / `SignalChart.tsx` | 行/曲线按 bus 编号 | cluster id + key | 4-7 |
-| `web/src/app.tsx` | workspace、选择、命令拼接 bus 字段 | `legacyBusMap` 迁移后全部用 cluster | 7 |
+| `web/src/app.tsx` | workspace、选择、命令拼接 bus 字段 | `busMap` 迁移后全部用 cluster | 7 |
 
 ### 5.3 测试与夹具
 
@@ -797,7 +747,7 @@ v1 文件只有 `{ "config": ... }`。v2 增加 `format` 与 `version`，并把�
 ### 7.2 决策 2：SigKey 文本（冻结）
 
 运行时 `SignalKey{cluster,frame,signal}`；持久化 `sig:{cluster}:{frame}:{signal}`；
-显示别名 `[Cluster:Frame:Signal]`；旧 v1 文本只读解析。理由见 §3.2。
+显示别名 `[Cluster:Frame:Signal]`；旧 v1 文本已移除。理由见 §3.2。
 
 保留旧解析器的成本很低（一个 resolver），但不再写出；这样用户脚本不会
 在升级当天全部失效，而工程文件只有一个规范形态。
@@ -818,9 +768,8 @@ v1 文件只有 `{ "config": ... }`。v2 增加 `format` 与 `version`，并把�
 
 ### 7.4 决策 4：旧工程（冻结）
 
-v1 工程在打开时一次性迁移到内存 v2，保存时写 v2；原文件不自动覆盖，
-首次保存弹出另存提示。迁移报告列出每条未映射的 key、pick、generator。
-不承诺 v2 工程能被旧版本打开。
+不兼容也不迁移：工程只读写 v2。开发期没有对外工程，保留 v1 读取只会把
+旧字段带进每条新路径。
 
 ### 7.5 决策 5：性能（冻结）
 
@@ -871,7 +820,7 @@ SecOC 没有逐帧的额外校验：头、secured area 与认证长度在建计�
 | 决策 4–5 有明确规则 | 完成（§7.4–7.5） |
 | 现有 `SigKey` / `Channel` / `FrBusCfg` / `EthBusCfg` 引用图 | 完成（§5） |
 | schema v2 JSON 草案 | 完成（§4.1–4.2） |
-| v1 → v2 迁移映射 | 完成（§4.3–4.4） |
+| 工程只读写 v2 | 完成（§4.3，无迁移层） |
 | 多协议 / Container-Mux / SecOC-E2E 语料 | 部分：多协议待生成，Container/Mux 有参考夹具，SecOC/E2E 缺真实样本（§6.2） |
 | 能逐项回答“该元素在 roxy-can 中对应什么/不支持时如何报错” | 完成（§1） |
 
@@ -887,7 +836,7 @@ SecOC 没有逐帧的额外校验：头、secured area 与认证长度在建计�
 | --- | --- |
 | `src/model/mod.rs` | 实体、ID newtype、Comm 查询/完整性检查、导入器 trait |
 | `src/model/id.rs` | 确定性元素 ID、改名绑定、集群 ID 分配 |
-| `src/model/key.rs` | `SignalKey` / `SignalRef`、`sig:` 文本、`[Cluster:Frame:Signal]`、v1 旧 key 解析 |
+| `src/model/key.rs` | `SignalKey` / `SignalRef`、`sig:` 文本、`[Cluster:Frame:Signal]` 别名（无旧 key 解析） |
 | `src/model/schema.rs` | schema v2 DTO、字段校验、`idAliases`、帧覆盖、回放映射 |
 | `src/model/arxml.rs` | 统一 ARXML 读取器（三协议 cluster/帧触发/PDU/信号/compu/ECU/端口/高级 PDU 模型） |
 | `src/model/dbc_import.rs` | DBC → CAN cluster 适配器 |
@@ -895,9 +844,9 @@ SecOC 没有逐帧的额外校验：头、secured area 与认证长度在建计�
 | `src/model/plan.rs` | `DecodePlan` / `PlanCache`：Frame→PDU→Signal 展开，含 Container/Mux/Secured 偏移 |
 | `src/model/runtime.rs` | 按计划解码/编码：物理值、符号、float、mux 选择器门控 |
 | `src/model/registry.rs` | 工程级 cluster 注册表：全局 id、按源去重、三协议共存、导出 schema v2、从 schema v2 重新导入 |
-| `src/model/migrate.rs` | v1 `channels/fr_buses/eth_buses/can_arxml` → v2 `clusters`，生成旧 bus 索引映射 |
+| `src/model/project_cfg.rs` | `Config` 总线列表 → v2 `clusters`，供保存写入 |
 | `src/bus.rs` | CAN/FR/ETH 分配全局 `ClusterId`；订阅、三协议 Messages 展开、CAN/FR 触发器、脚本节点输入、三协议 Panel 物理编码、CAN/FR Generator 与三协议脚本发送走统一模型，旧实现仅作无模型时回退 |
-| `src/project.rs` | `.rxproj` 保存 schema v2（`clusters`/`legacyBusMap`/`config`），打开时恢复 ClusterId；v1 文件兼容读取 |
+| `src/project.rs` | `.rxproj` 保存 schema v2（`clusters`/`busMap`/`config`），打开时恢复 ClusterId；只读 v2，v1 文件直接拒绝 |
 | `src/web.rs` + `web/src/components/BusesModal.tsx` | Web 状态输出统一 `clusters`；Buses 顶部渲染 Cluster 表，单一 **Add cluster** 菜单按来源分流 CAN/ARXML/FIBEX；编辑仍按 kind 分卡 |
 
 单测：
@@ -919,12 +868,12 @@ SecOC 没有逐帧的额外校验：头、secured area 与认证长度在建计�
 | 2 统一 ARXML 导入 | 已接入实际导入路径 | CAN/FR/ETH、compu/初始值/量程（含 `DATA-CONSTR`）、PDU 周期、ECU 端口/信号组、Container/Mux/Secured 模型；真实 FR 矩阵、ETH 夹具、多协议单文件通过；Buses 的 ARXML 导入与工程重开都把文档模型直接送进核心（`SetChannelModel` / `SetFrModel` / `SetEthModel`，核心按全局 cluster id 重绑），FlexRay 计划按日志口径把 PDU 起点重定位到帧首 PDU；cantools `system-4.2.arxml` 验证了 SecOC 的 `PAYLOAD-REF`→`PDU-TRIGGERING`→`I-PDU-REF` 间接引用，以及 `DATA-TRANSFORMATION-SET` 里按组声明的 E2E profile/Data ID；组级声明不含 counter/CRC 位置，计划明确报 unsupported 而不是静默丢弃。另在本地只读验证了一套厂商 CAN 矩阵（24 帧 / 37 PDU / 100 信号、2 个真实 Transformation，含 `SOMEIP_E2E_Transformer_PROFILE_04_B` 与 SOME/IP 默认链）：导入无错误，信号到变换对象的链接正确，未知类别保持显式 unsupported |
 | 3 DBC/FIBEX 适配器 | 首版 | DBC、FIBEX、Ethernet DB → Cluster；一条 DBC↔ARXML 等价性测试；大规模等价语料待补 |
 | 4 运行时切换 | 订阅已切 | BusCore 为 CAN/FR/ETH 分配全局 `ClusterId` 并各自构建 `Comm`/`PlanCache`；三类订阅值都走统一展开计划，CAN 复用报文也已按模型 mux 条件解码，三类 Messages 展开行由核心用模型解码后随快照下发；CAN/FR 信号触发器、脚本节点输入与 `set_sig/get_sig` buffer 内建、订阅折叠、Messages/Trace 展开、Reference 回放与 CLI CSV 导出都只走模型计划，生产代码已没有旧解码调用；Messages 与 Statistics 的 CAN 帧名与信号数、以及 FR/ETH Messages 的信号数都从模型快照读取（标准/扩展同号可分，容器子 PDU 也计数），生产路径不再查描述表；SignalPicker 的 catalog 三协议都从统一模型生成（含初始物理值与容器/mux 成员），键一律写 `sig:can|fr|eth:<cluster>:…`。观测键只带 `ClusterId`：生成键、相等/排序、工程文本都以 cluster 为准，bus 索引由核心的 cluster→bus 映射在需要路由时解析；旧 `ch:id:name` / `fr:` / `eth:` 文本仍由 `BusCore::resolve_key_text` 按旧总线表读入并换成 cluster 键。CAN 报文聚合（Messages/Statistics 的计数、周期、抖动与规格检查）也按 `ClusterId` 键控，删/加路时只在键里去掉被删 cluster，存活路不重编号。生成器的帧名、发送 ECU、长度与周期、节点发送表以及 Replay Block 的节点过滤都优先取模型的 FRAME-PORT/PDU-PORT 关系；帧注释进模型的 Frame.comment（DBC 的 CM_ 由适配器写入），catalog 不再读描述表；规格检查与 Messages/Trace/Statistics/CSV 的帧名、声明周期与 DLC 都先取模型（含 dbc_only 过滤）；描述表不再参与生产读取：帧名、规格判定、触发超时、Trace 的值过滤与 profile 的节点校验都从模型解析 |
-| 5 发送/硬件/回放 | 首个切片 | Panel 三协议物理值发送、Generator 的 CAN/FR 驱动信号、脚本 `send_frame` 的三协议编码均走统一编码器；触发器的反应发送也走模型计划（镜像按模型信号 id 编码，模型不认识该帧时发条目原字节）；Generator 的 CAN/FR 载荷与脚本 `set_fr_sig` 写入也只走模型编码（模型不认识的帧发送条目原字节，不再回退旧表），Panel Setpoint 的三协议写入同样按模型编码并保留条目其余字节，模型缺失时直接拒绝编码，不再回退描述表；脚本 `send_frame` 的 FR/ETH 帧同样只按模型编码，帧不在模型里就报错（描述表的旧编码器只剩测试用途，Ethernet 的那个已删除）；回放映射运行时也以 cluster 为目标（表项是 ClusterId，三个协议各一张表），删路只把指向它的表项变成「不回放」；schema v2 的 ReplayCfg 增加显式 disabled，旧 v1 的路号表在打开时一次性重绑到 cluster。硬件端口按物理路号寻址，附件随通道（即簇）移动并有测试锁定；VN1610 双口 CAN/FD 双向收发已由 `vector_bench_loops_classic_and_fd_both_ways` 自动验收（经典 500 kbit/s + FD 2/5/8 Mbit/s BRS） |
+| 5 发送/硬件/回放 | 首个切片 | Panel 三协议物理值发送、Generator 的 CAN/FR 驱动信号、脚本 `send_frame` 的三协议编码均走统一编码器；触发器的反应发送也走模型计划（镜像按模型信号 id 编码，模型不认识该帧时发条目原字节）；Generator 的 CAN/FR 载荷与脚本 `set_fr_sig` 写入也只走模型编码（模型不认识的帧发送条目原字节，不再回退旧表），Panel Setpoint 的三协议写入同样按模型编码并保留条目其余字节，模型缺失时直接拒绝编码，不再回退描述表；脚本 `send_frame` 的 FR/ETH 帧同样只按模型编码，帧不在模型里就报错（描述表的旧编码器只剩测试用途，Ethernet 的那个已删除）；回放映射运行时也以 cluster 为目标（表项是 ClusterId，三个协议各一张表），删路只把指向它的表项变成「不回放」；schema v2 的 ReplayCfg 增加显式 disabled，ReplayCfg 的 disabled 显式表达「不回放」。硬件端口按物理路号寻址，附件随通道（即簇）移动并有测试锁定；VN1610 双口 CAN/FD 双向收发已由 `vector_bench_loops_classic_and_fd_both_ways` 自动验收（经典 500 kbit/s + FD 2/5/8 Mbit/s BRS） |
 | 6 高级特性执行 | 首个切片 | Multiplexed（ARXML 动态部分 + DBC `mux_when`）、Secured PDU payload 链接、E2E profile 与 SystemSignal/PDU 的结构关联已进模型；Container 展开按短/长头里的 PDU ID 与长度门控 contained PDU 的读取与写入（头未标注 ID 时保持旧行为）；`TRANSFORMATION-PROP-SET` 读取 packing byte order，identity/linear 变换已在解码/编码计划里执行（linear 按 `app = scale·net + offset` 及其逆运算），TextTable/未知类别只报 `UnsupportedTransformation` 并保留原值；导入与计划的 Warning/Error 现在写进 Write 窗口（按消息去重，重建模型不重复刷屏）；ARXML 的 I-SIGNAL/DATA-TRANSFORMATIONS 引用现已链接到模型里的变换对象；SignalPicker 在信号名旁显示 I-SIGNAL-GROUP 徽标，点击徽标选中该组全部信号；UPDATE-INDICATION-BIT-POSITION 进入 SignalRead/SignalWrite，解码只在置位时输出该信号、编码写值后置位；未知链在计划里报 UnsupportedTransformation 并保留原值（没有真实链语料，暂不解释数值）。SecOC 的 `SECURED-AREA-OFFSET/LENGTH` 与引用对象上的 `AUTH-INFO-TX-LENGTH` 已读入模型，计划会检查头+载荷、secured area、authenticator 是否超出 PDU 并报 `LengthConvention`。E2E 做结构校验（保护引用存在、声明了 profile、需要传送 Data ID 的 profile 配了值）；E2E 计数器位置进入 `E2ePlan`：文档声明 `COUNTER-OFFSET/LENGTH` 时按声明，Profile 1/2 缺省按固定布局；核心对 CAN、FlexRay 与 Ethernet 逐帧统计 counter/repeat/gap/jump，并随 Messages 行发布 `e2e` 徽标。认证/CRC 仍为 `Unverified`（不做 CMAC/密钥），其余 profile 的帧级校验与真实语料 golden 未做；Mux/Container/Transformation/E2E/SecOC 的性能已在 §7.5 量化。真实语料方面，cantools `system-4.2.arxml` 已用于验证 SecOC payload 间接引用与组级 E2E（`PROFILE-NAME` + `DATA-ID`）；组级 E2E 没有 counter/CRC 位置，导入时写一条 Unsupported 警告。该语料的 Secured 帧已有位级 golden：无头时内层 CRC 在 byte 0、4 位 SeqCounter 在 bit 8，解码 0xAA/0xB、编码写回 0x55 |
-| 7 Buses UI 与迁移 | 列表与入口已统一 | `.rxproj` 保存 schema v2 并恢复 ClusterId，generator 与 trigger 行分别以 `GeneratorCfg` / `TriggerCfgV2` 的 cluster id 写入，打开时换回 路号（条件与反应发送都走映射，映射缺失的规则丢弃而不是改指别的路）；Buses 顶部统一 Cluster 表（ID/Kind/Name/Bus/Frames/Source，Name/Source/Frames 优先取模型 cluster 与帧数），原 Add bus / Import ARXML / FR / ETH 四个入口收成一个 **Add cluster** 菜单（CAN / ARXML / FlexRay FIBEX / Ethernet ARXML）。每类详情仍按 kind 分卡；窗口/nodes/blocks/sysvars/derived/web 已从兼容 `config` 段迁为 typed v2 字段（保存时不再写回旧键，旧 v2 文件仍可读）；Trace 窗口的 CAN/FR 手选同时以 cluster id 保存，打开时换回路号 |
+| 7 Buses UI 与工程文件 | 列表与入口已统一 | `.rxproj` 保存 schema v2 并恢复 ClusterId，generator 与 trigger 行分别以 `GeneratorCfg` / `TriggerCfgV2` 的 cluster id 写入，打开时换回 路号（条件与反应发送都走映射，映射缺失的规则丢弃而不是改指别的路）；Buses 顶部统一 Cluster 表（ID/Kind/Name/Bus/Frames/Source，Name/Source/Frames 优先取模型 cluster 与帧数），原 Add bus / Import ARXML / FR / ETH 四个入口收成一个 **Add cluster** 菜单（CAN / ARXML / FlexRay FIBEX / Ethernet ARXML）。每类详情仍按 kind 分卡；窗口/nodes/blocks/sysvars/derived/web 全部是 typed v2 段，总线描述从 `clusters` 恢复；Trace 窗口的 CAN/FR 手选以 cluster id 保存，打开时换回路号 |
 | 8 清理与发布 | 清理完成（v0.30.0 已发布，本批待发版） | 生产解码已全部走模型（含 Reference、CLI CSV 与脚本 `set_sig/get_sig`）；描述表的旧编码/解码方法只在测试里保留（生产路径没有回退）；`FrBusCfg`/`EthBusCfg` 已删除，`fr_buses`/`eth_buses` 直接存 `Arc<FrDb>`/`Arc<EthDb>`，描述源路径进核心并写进模型 `Cluster.sources`；CAN 的 `Channel` 也已删除：通道就是模型里的 cluster，名称/位率/描述路径落在 cluster 与 network 参数上，节点角色与 DBC 内容校验和按 `ClusterId` 存在核心映射，`BusCore` 没有并行的总线配置向量，Buses 快照由模型/映射现算；SecOC 与 4.2 组级 E2E 已用真实语料验证并有 Secured 帧位级 golden，带 counter 偏移的 E2E 真实 golden 仍待补；VN1610 在 2026-10-30 首轮 8/8 通过，同日复跑 FD 配置被驱动拒绝（`XL_ERR_WRONG_PARAMETER`，经典仍通过），台架复位后需复验；物理拔插人工项除外 |
 
-验证状态（2026-10-30）：`cargo fmt --check`、`cargo clippy --all-targets`、`cargo test --all-targets`（895 通过，12 项台架/性能探针显式 ignored）、前端 71 测试与 `npm run build` 全绿；release 包 0.30.0（2026-10-30 从代码 head `f5c99ab` 重建）在空目录启动 `--web` 返回 200，第二次占用同一端口按预期报错退出（exit 1）且首个进程仍存活后被显式停止；远端 CI（windows-latest）在 `f5c99ab`（真实语料与位级 golden 之后）上 fmt/build/clippy -D warnings/test 全绿；2026-10-30 用 headless Edge 在 1280×800/1024×768、明暗两套主题复核 Trace 主视图，文档宽度与视口一致、无横向溢出。Buses 已在 headless Chromium + CDP 下按 1024×768 与 1280×800、明暗两套主题复核（统一 Cluster 表、Add cluster、各 kind 详情无横向溢出）；2026-10-30 在 VN1610（sn=320097）双口对连上运行 `vector_bench_loops_classic_and_fd_both_ways`：首轮经典 500 kbit/s 与 FD 500/2000、500/5000、500/8000 kbit/s（64 字节、BRS）双向 8/8 通过；同日复跑时 FD 配置被驱动拒绝（`XL_ERR_WRONG_PARAMETER`，经典仍通过），台架/驱动复位后需复验；物理拔插恢复仍需人工复核。
+验证状态（2026-10-30）：`cargo fmt --check`、`cargo clippy --all-targets`、`cargo test --all-targets`（887 通过，12 项台架/性能探针显式 ignored）、前端 71 测试与 `npm run build` 全绿；release 包 0.30.0（2026-10-30 从代码 head `f5c99ab` 重建）在空目录启动 `--web` 返回 200，第二次占用同一端口按预期报错退出（exit 1）且首个进程仍存活后被显式停止；远端 CI（windows-latest）在 `f5c99ab`（真实语料与位级 golden 之后）上 fmt/build/clippy -D warnings/test 全绿；2026-10-30 用 headless Edge 在 1280×800/1024×768、明暗两套主题复核 Trace 主视图，文档宽度与视口一致、无横向溢出。Buses 已在 headless Chromium + CDP 下按 1024×768 与 1280×800、明暗两套主题复核（统一 Cluster 表、Add cluster、各 kind 详情无横向溢出）；2026-10-30 在 VN1610（sn=320097）双口对连上运行 `vector_bench_loops_classic_and_fd_both_ways`：首轮经典 500 kbit/s 与 FD 500/2000、500/5000、500/8000 kbit/s（64 字节、BRS）双向 8/8 通过；同日复跑时 FD 配置被驱动拒绝（`XL_ERR_WRONG_PARAMETER`，经典仍通过），台架/驱动复位后需复验；物理拔插恢复仍需人工复核。
 
 剩余工作按计划顺序：重跑 VN1610 复验（硬件端口按物理路号寻址、附件跟随通道/簇已有测试锁定）；补真实多协议/SecOC/E2E/Transformation 语料与位级 golden，E2E 帧级校验与 CRC/CMAC 仍按设计保持 `Unverified`。旧运行时路径与兼容层（`Channel`/`FrBusCfg`/`EthBusCfg`）已删除；当前 ARXML 文档模型直接进核心，`SigKey` 与 Messages/Statistics 聚合都以 cluster 为身份、bus 只按映射解析；回放映射以 cluster 为目标、硬件端口仍按路号。
 

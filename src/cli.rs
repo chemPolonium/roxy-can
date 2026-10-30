@@ -363,14 +363,29 @@ pub fn run(opts: &CliOpts) -> Result<String, String> {
         // saved as active, from the file itself.
         let file =
             std::fs::read_to_string(project).map_err(|e| format!("project read failed: {e}"))?;
-        let cfg: crate::config::ProjectFile =
+        let file_project: crate::model::ProjectV2 =
             serde_json::from_str(&file).map_err(|e| format!("project parse failed: {e}"))?;
         app.start_virtual();
-        for t in &cfg.config.tx {
-            if t.active {
+        for generator in file_project.generators.clone().unwrap_or_default() {
+            let crate::model::GeneratorCfg::Can {
+                cluster,
+                id,
+                active: true,
+                ..
+            } = generator
+            else {
+                continue;
+            };
+            if let Some(bus) = app
+                .snap
+                .cluster_ids
+                .can
+                .iter()
+                .position(|candidate| *candidate == cluster)
+            {
                 app.send(crate::bus::BusCommand::SetEntryActive {
-                    ch: t.channel,
-                    id: t.id,
+                    ch: bus as u8,
+                    id,
                     on: true,
                 });
             }

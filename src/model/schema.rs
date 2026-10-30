@@ -10,7 +10,7 @@ use serde_json::Value;
 use std::collections::BTreeMap;
 
 use super::{
-    ClusterId, ClusterKind, ClusterSource, ElementIds, ElementKind, FrameOverride, LegacyBusMap,
+    BusMap, ClusterId, ClusterKind, ClusterSource, ElementIds, ElementKind, FrameOverride,
 };
 
 pub const PROJECT_FORMAT: &str = "roxy-can-project";
@@ -308,7 +308,7 @@ pub struct ProjectV2 {
     /// Old bus index → cluster id, kept so the frontend can rewrite its
     /// opaque `web` workspace during the v1→v2 migration.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub legacy_bus_map: Option<LegacyBusMap>,
+    pub bus_map: Option<BusMap>,
     /// Workspace sections the Phase 7 migration rewrites: windows, triggers,
     /// generators, `web`, derived definitions. Kept verbatim until then.
     #[serde(flatten)]
@@ -339,7 +339,7 @@ impl Default for ProjectV2 {
             sysvars: Vec::new(),
             derived: Vec::new(),
             workspace: None,
-            legacy_bus_map: None,
+            bus_map: None,
             rest: serde_json::Map::new(),
         }
     }
@@ -532,14 +532,6 @@ impl ProjectV2 {
                 problems.push(format!(
                     "{} channel {} is mapped more than once",
                     replay.kind, replay.file_channel
-                ));
-            }
-        }
-
-        for key in ["channels", "fr_buses", "fr_names", "eth_buses", "can_arxml"] {
-            if self.rest.contains_key(key) {
-                problems.push(format!(
-                    "v1 field '{key}' must be migrated before saving schema v2"
                 ));
             }
         }

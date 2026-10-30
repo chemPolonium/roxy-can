@@ -131,6 +131,14 @@ pub fn apply_profile(app: &mut App, project_dir: &Path, name: &str) -> Result<St
                 ov.bus
             ));
         };
+        eprintln!(
+            "channels {:?}",
+            app.snap
+                .channels
+                .iter()
+                .map(|c| (&c.name, &c.dbc_paths))
+                .collect::<Vec<_>>()
+        );
         let known = app
             .can_comm(ch)
             .is_some_and(|comm| comm.ecus.values().any(|ecu| ecu.name == ov.node));
