@@ -32,19 +32,6 @@ pub(crate) const MAX_CACHED_ROWS: usize = 200_000;
 /// can never collide with a frame's own signals.
 pub const EMITTED_ID_BASE: u32 = 0x8000_0000;
 
-/// One FlexRay bus the tool knows about: the cluster description file it was
-/// configured from and the database parsed out of it. Kept together so a bus
-/// can never end up displaying one file's frames and configuring the port from
-/// another's.
-pub struct FrBusCfg {
-    pub db: std::sync::Arc<crate::fr_db::FrDb>,
-}
-
-/// One Ethernet bus and the AUTOSAR communication matrix that describes it.
-/// Ethernet has its own bus index space; it never shares a CAN channel.
-pub struct EthBusCfg {
-    pub db: std::sync::Arc<crate::eth::db::EthDb>,
-}
 /// The replay speed ladder. The last entry is "as fast as possible":
 /// infinity makes the replay clock jump to the end immediately while the
 /// UI keeps stepping between polls, so every observer updates in chunks.
@@ -259,7 +246,7 @@ pub struct App {
     /// clusters, so a frame's identity is `(bus, slot)` and every lookup goes
     /// through the bus the row arrived on. The core is handed the same `Arc`s,
     /// so no file is read or parsed twice.
-    pub fr_buses: std::collections::BTreeMap<u8, FrBusCfg>,
+    pub fr_buses: std::collections::BTreeMap<u8, std::sync::Arc<crate::fr_db::FrDb>>,
     /// What the user calls each FlexRay 路. Apart from [`Self::fr_buses`] on
     /// purpose: a name is not a description, so a cluster seen only in a
     /// replayed log -- which is exactly the case where `FR0`/`FR1` say nothing
@@ -267,7 +254,7 @@ pub struct App {
     pub fr_names: std::collections::BTreeMap<u8, String>,
     /// Ethernet buses and the ARXML matrices loaded for them. Separate index
     /// space from CAN and FlexRay.
-    pub eth_buses: std::collections::BTreeMap<u8, EthBusCfg>,
+    pub eth_buses: std::collections::BTreeMap<u8, std::sync::Arc<crate::eth::db::EthDb>>,
     /// CAN buses whose database came from one named cluster of an ARXML
     /// matrix: bus -> (file path, cluster). The parsed table lives on the
     /// channel like a DBC's; this is the source identity the project saves and
@@ -1266,7 +1253,7 @@ impl App {
     /// bus is watched without a description: rows still reach the Trace
     /// window, they just stay undecoded.
     pub fn fr_db(&self, bus: u8) -> Option<&crate::fr_db::FrDb> {
-        self.fr_buses.get(&bus).map(|c| &*c.db)
+        self.fr_buses.get(&bus).map(|db| &**db)
     }
 
     /// Every latched spec violation, CAN and FlexRay alike: what the report
@@ -1701,14 +1688,14 @@ impl App {
         let fr_dbs: Vec<(u8, usize)> = self
             .fr_buses
             .iter()
-            .map(|(b, c)| (*b, std::sync::Arc::as_ptr(&c.db) as usize))
+            .map(|(b, c)| (*b, std::sync::Arc::as_ptr(c) as usize))
             .collect();
         // And the same swap check for the Ethernet matrices behind names and
         // decoded signal conditions.
         let eth_dbs: Vec<(u8, usize)> = self
             .eth_buses
             .iter()
-            .map(|(b, c)| (*b, std::sync::Arc::as_ptr(&c.db) as usize))
+            .map(|(b, c)| (*b, std::sync::Arc::as_ptr(c) as usize))
             .collect();
         let since = match (
             &self.trace_windows[i].rows_build,

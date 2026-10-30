@@ -562,7 +562,7 @@ fn script_frame_instances_send_flexray_and_ethernet() {
         .iter()
         .find(|row| row.bus == 0)
         .expect("the Ethernet frame instance reached the trace");
-    let eth_db = std::sync::Arc::clone(&app.eth_buses.get(&0).expect("matrix").db);
+    let eth_db = std::sync::Arc::clone(app.eth_buses.get(&0).expect("matrix"));
     let flow = crate::eth::db::EthFlow {
         vlan: eth.vlan,
         dst: eth.dst,
@@ -1953,7 +1953,7 @@ fn panel_buttons_send_raw_flexray_and_ethernet_frames() {
     let eth = app.snap.eth_trace.last().expect("the ETH row");
     assert_eq!((eth.bus, eth.len(), eth.vlan), (0, 22, Some(100)));
     assert_eq!(eth.payload[0], 0x5A);
-    let db = std::sync::Arc::clone(&app.eth_buses.get(&0).expect("matrix").db);
+    let db = std::sync::Arc::clone(app.eth_buses.get(&0).expect("matrix"));
     let flow = crate::eth::db::EthFlow {
         vlan: eth.vlan,
         dst: eth.dst,
@@ -2157,7 +2157,7 @@ fn panel_setpoints_write_an_ethernet_signal() {
         crate::eth::EthFrame::SESSION_ETHERTYPE,
         "no declared EtherType, so the session value is used"
     );
-    let db = std::sync::Arc::clone(&app.eth_buses.get(&0).expect("matrix").db);
+    let db = std::sync::Arc::clone(app.eth_buses.get(&0).expect("matrix"));
     let flow = crate::eth::db::EthFlow {
         vlan: row.vlan,
         dst: row.dst,

@@ -456,12 +456,7 @@ impl App {
         let persist_cluster = cluster
             .map(str::to_string)
             .or_else(|| (db.clusters.len() == 1).then(|| db.clusters[0].name.clone()));
-        self.eth_buses.insert(
-            bus,
-            crate::app::EthBusCfg {
-                db: std::sync::Arc::new(db),
-            },
-        );
+        self.eth_buses.insert(bus, std::sync::Arc::new(db));
         match persist_cluster {
             Some(name) => {
                 self.eth_clusters.insert(bus, name);
@@ -842,7 +837,7 @@ impl App {
         let dbs: std::collections::BTreeMap<u8, _> = self
             .eth_buses
             .iter()
-            .map(|(b, c)| (*b, std::sync::Arc::clone(&c.db)))
+            .map(|(b, c)| (*b, std::sync::Arc::clone(c)))
             .collect();
         let paths: std::collections::BTreeMap<u8, String> = self
             .eth_buses
@@ -871,7 +866,7 @@ impl App {
     }
 
     pub fn eth_db(&self, bus: u8) -> Option<&crate::eth::db::EthDb> {
-        self.eth_buses.get(&bus).map(|cfg| cfg.db.as_ref())
+        self.eth_buses.get(&bus).map(|cfg| cfg.as_ref())
     }
 
     /// The index a new FlexRay 路 takes: the first one with no description on
@@ -967,12 +962,7 @@ impl App {
         let cluster_name = cluster
             .map(str::to_string)
             .or_else(|| (!db.params.name.is_empty()).then(|| db.params.name.clone()));
-        self.fr_buses.insert(
-            bus,
-            crate::app::FrBusCfg {
-                db: std::sync::Arc::new(db),
-            },
-        );
+        self.fr_buses.insert(bus, std::sync::Arc::new(db));
         match cluster_name {
             Some(name) => {
                 self.fr_clusters.insert(bus, name);
@@ -1007,7 +997,7 @@ impl App {
         let dbs: std::collections::BTreeMap<u8, _> = self
             .fr_buses
             .iter()
-            .map(|(b, c)| (*b, std::sync::Arc::clone(&c.db)))
+            .map(|(b, c)| (*b, std::sync::Arc::clone(c)))
             .collect();
         let paths: std::collections::BTreeMap<u8, String> = self
             .fr_buses

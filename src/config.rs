@@ -1710,12 +1710,7 @@ impl Config {
                     } else {
                         file.cluster.clone()
                     };
-                    app.fr_buses.insert(
-                        file.bus,
-                        crate::app::FrBusCfg {
-                            db: std::sync::Arc::new(db),
-                        },
-                    );
+                    app.fr_buses.insert(file.bus, std::sync::Arc::new(db));
                     if !cluster.is_empty() {
                         app.fr_clusters.insert(file.bus, cluster);
                     }
@@ -1739,12 +1734,7 @@ impl Config {
                 });
             match parsed {
                 Ok(db) => {
-                    app.eth_buses.insert(
-                        file.bus,
-                        crate::app::EthBusCfg {
-                            db: std::sync::Arc::new(db),
-                        },
-                    );
+                    app.eth_buses.insert(file.bus, std::sync::Arc::new(db));
                     if !file.cluster.is_empty() {
                         app.eth_clusters.insert(file.bus, file.cluster.clone());
                     }
@@ -2037,12 +2027,7 @@ mod tests {
                 Some(db.frame_index(ix)?.triggering.slot_id as u16)
             })
             .expect("the asset binds a slot to a sending ECU");
-        app.fr_buses.insert(
-            0,
-            crate::app::FrBusCfg {
-                db: std::sync::Arc::new(db),
-            },
-        );
+        app.fr_buses.insert(0, std::sync::Arc::new(db));
         app.push_fr_db_to_core_paths([(0, arxml.to_string())].into_iter().collect());
         app.add_fr_tx(0, slot);
         // The width the schedule gives this slot, read before anything is typed

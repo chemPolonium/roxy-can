@@ -4247,7 +4247,7 @@ fn channel_signature(app: &App) -> String {
             format!(
                 "fr{bus}:{}:{}",
                 app.fr_description_path(*bus).unwrap_or_default(),
-                Arc::as_ptr(&cfg.db) as usize
+                Arc::as_ptr(cfg) as usize
             )
         })
         .collect();
@@ -4258,7 +4258,7 @@ fn channel_signature(app: &App) -> String {
             format!(
                 "eth{bus}:{}:{}",
                 app.eth_description_path(*bus).unwrap_or_default(),
-                Arc::as_ptr(&cfg.db) as usize
+                Arc::as_ptr(cfg) as usize
             )
         })
         .collect();
@@ -5463,7 +5463,7 @@ fn build_state(app: &App, series: &VecDeque<WebSeriesPoint>, fps: f64) -> WebSta
                 path: app.fr_description_path(*bus).unwrap_or_default(),
                 cluster: model
                     .map(|cluster| cluster.name.clone())
-                    .unwrap_or_else(|| cfg.db.params.name.clone()),
+                    .unwrap_or_else(|| cfg.params.name.clone()),
                 frames: model
                     .map(|cluster| {
                         app.fr_models
@@ -5472,7 +5472,7 @@ fn build_state(app: &App, series: &VecDeque<WebSeriesPoint>, fps: f64) -> WebSta
                             .unwrap_or(0)
                     })
                     .filter(|count| *count > 0)
-                    .unwrap_or(cfg.db.frames.len()),
+                    .unwrap_or(cfg.frames.len()),
                 attached: watch.is_some(),
                 channel: watch.map(|watch| watch.channel_index).unwrap_or(-1),
             }
@@ -5489,7 +5489,7 @@ fn build_state(app: &App, series: &VecDeque<WebSeriesPoint>, fps: f64) -> WebSta
                 .eth_models
                 .get(bus)
                 .map(|comm| comm.clusters.len())
-                .unwrap_or(cfg.db.clusters.len()),
+                .unwrap_or(cfg.clusters.len()),
             frames: app
                 .eth_models
                 .get(bus)
@@ -5502,7 +5502,7 @@ fn build_state(app: &App, series: &VecDeque<WebSeriesPoint>, fps: f64) -> WebSta
                         .count()
                 })
                 .filter(|count| *count > 0)
-                .unwrap_or(cfg.db.frames.len()),
+                .unwrap_or(cfg.frames.len()),
         })
         .collect();
     let mut clusters: Vec<WebCluster> = Vec::new();
@@ -6012,9 +6012,8 @@ fn build_state(app: &App, series: &VecDeque<WebSeriesPoint>, fps: f64) -> WebSta
             .eth_buses
             .get(&a.key.bus)
             .map(|config| {
-                let count = match config.db.match_flow(&flow, app.eth_length_includes_header) {
+                let count = match config.match_flow(&flow, app.eth_length_includes_header) {
                     crate::eth::db::EthMatch::Unique(index) => config
-                        .db
                         .frames
                         .get(index)
                         .map(|frame| {
@@ -6059,9 +6058,9 @@ fn build_state(app: &App, series: &VecDeque<WebSeriesPoint>, fps: f64) -> WebSta
                 .get(&a.key.bus)
                 .and_then(|config| {
                     let flow = a.key.flow();
-                    match config.db.match_flow(&flow, app.eth_length_includes_header) {
+                    match config.match_flow(&flow, app.eth_length_includes_header) {
                         crate::eth::db::EthMatch::Unique(index) => {
-                            Some(config.db.frames[index].name.clone())
+                            Some(config.frames[index].name.clone())
                         }
                         _ => None,
                     }

@@ -8108,12 +8108,7 @@ fn the_messages_window_lists_each_occupant_of_a_repeated_slot() {
         );
     };
     let db = crate::fr_db::FrDb::parse(&crate::dbc::text_from_bytes(bytes)).expect("parses");
-    app.fr_buses.insert(
-        0,
-        crate::app::FrBusCfg {
-            db: std::sync::Arc::new(db),
-        },
-    );
+    app.fr_buses.insert(0, std::sync::Arc::new(db));
     app.push_fr_db_to_core();
     let q = app.hw.attach_fr_mock(0, 5);
     app.start_virtual();
@@ -8171,12 +8166,7 @@ fn an_empty_flexray_message_row_names_its_reason() {
         .into_iter()
         .find(|(_, _, names)| names.is_empty())
         .map(|(slot, _, _)| slot);
-    app.fr_buses.insert(
-        0,
-        crate::app::FrBusCfg {
-            db: std::sync::Arc::new(db),
-        },
-    );
+    app.fr_buses.insert(0, std::sync::Arc::new(db));
     // The row's frame is resolved where the row is counted, so the core needs
     // the description too -- a frontend-only copy used to be enough because the
     // name was re-resolved at draw time.
@@ -8989,8 +8979,7 @@ fn the_trace_row_cache_extends_in_place_without_losing_rows() {
         !drive.is_empty(),
         "the asset has no static frame with signals to expand"
     );
-    app.fr_buses
-        .insert(0, crate::app::FrBusCfg { db: Arc::new(db) });
+    app.fr_buses.insert(0, Arc::new(db));
     app.push_fr_db_to_core();
     let q = app.hw.attach_fr_mock(0, 5);
     app.start_virtual();
@@ -9176,12 +9165,7 @@ fn a_flexray_cluster_reports_its_static_segment_occupancy() {
     use crate::hw::vector::flexray::FrFrame;
     let mut app = quiet_app();
     app.tx_list.retain(|t| t.channel != 0);
-    app.fr_buses.insert(
-        0,
-        crate::app::FrBusCfg {
-            db: one_slot_db(&["One"], 40.0),
-        },
-    );
+    app.fr_buses.insert(0, one_slot_db(&["One"], 40.0));
     app.push_fr_db_to_core();
     let q = app.hw.attach_fr_mock(0, 5);
     app.start_virtual();
@@ -9217,12 +9201,7 @@ fn an_undescribed_flexray_cluster_counts_frames_but_no_occupancy() {
     use crate::hw::vector::flexray::FrFrame;
     let mut app = quiet_app();
     app.tx_list.retain(|t| t.channel != 0);
-    app.fr_buses.insert(
-        0,
-        crate::app::FrBusCfg {
-            db: one_slot_db(&["One"], 0.0),
-        },
-    );
+    app.fr_buses.insert(0, one_slot_db(&["One"], 0.0));
     app.push_fr_db_to_core();
     let q = app.hw.attach_fr_mock(0, 5);
     app.start_virtual();
@@ -9253,12 +9232,7 @@ fn a_node_script_reads_a_flexray_signal() {
     use crate::hw::vector::flexray::FrFrame;
     let mut app = quiet_app();
     app.tx_list.retain(|t| t.channel != 0);
-    app.fr_buses.insert(
-        0,
-        crate::app::FrBusCfg {
-            db: one_slot_db(&["One"], 40.0),
-        },
-    );
+    app.fr_buses.insert(0, one_slot_db(&["One"], 40.0));
     app.push_fr_db_to_core();
     // The node lives on a CAN channel and names the cluster by index: a FlexRay
     // bus is not a channel a node could belong to.
@@ -9322,12 +9296,7 @@ fn a_flexray_arrival_drives_a_script_reaction() {
     use crate::hw::vector::flexray::FrFrame;
     let mut app = quiet_app();
     app.tx_list.retain(|t| t.channel != 0);
-    app.fr_buses.insert(
-        0,
-        crate::app::FrBusCfg {
-            db: one_slot_db(&["One"], 40.0),
-        },
-    );
+    app.fr_buses.insert(0, one_slot_db(&["One"], 40.0));
     app.push_fr_db_to_core();
     app.send(crate::bus::BusCommand::AddNode {
         name: "gw".to_string(),
@@ -9392,12 +9361,7 @@ fn a_script_frame_enters_the_session_like_any_arrival() {
     use crate::hw::vector::flexray::FrFrame;
     let mut app = quiet_app();
     app.tx_list.retain(|t| t.channel != 0);
-    app.fr_buses.insert(
-        0,
-        crate::app::FrBusCfg {
-            db: one_slot_db(&["One"], 40.0),
-        },
-    );
+    app.fr_buses.insert(0, one_slot_db(&["One"], 40.0));
     app.push_fr_db_to_core();
     app.send(crate::bus::BusCommand::AddNode {
         name: "gw".to_string(),
@@ -9476,12 +9440,7 @@ fn a_script_frame_wider_than_its_slot_is_dropped_with_the_reason() {
     use crate::hw::vector::flexray::FrFrame;
     let mut app = quiet_app();
     app.tx_list.retain(|t| t.channel != 0);
-    app.fr_buses.insert(
-        0,
-        crate::app::FrBusCfg {
-            db: one_slot_db(&["One"], 40.0),
-        },
-    );
+    app.fr_buses.insert(0, one_slot_db(&["One"], 40.0));
     app.push_fr_db_to_core();
     app.send(crate::bus::BusCommand::AddNode {
         name: "wide".to_string(),
@@ -9548,12 +9507,7 @@ fn a_script_frame_for_an_unconfigured_bus_is_refused() {
     use crate::hw::vector::flexray::FrFrame;
     let mut app = quiet_app();
     app.tx_list.retain(|t| t.channel != 0);
-    app.fr_buses.insert(
-        0,
-        crate::app::FrBusCfg {
-            db: one_slot_db(&["One"], 40.0),
-        },
-    );
+    app.fr_buses.insert(0, one_slot_db(&["One"], 40.0));
     app.push_fr_db_to_core();
     app.send(crate::bus::BusCommand::AddNode {
         name: "typo".to_string(),
@@ -9637,12 +9591,7 @@ fn a_script_writes_a_flexray_signal_into_its_entry() {
     // and wide enough that the raw number is representable at all.
     let want = crate::decode::to_physical(5, sig.size, sig.signed, sig.factor, sig.offset);
     let db = std::sync::Arc::new(parsed);
-    app.fr_buses.insert(
-        0,
-        crate::app::FrBusCfg {
-            db: std::sync::Arc::clone(&db),
-        },
-    );
+    app.fr_buses.insert(0, std::sync::Arc::clone(&db));
     app.push_fr_db_to_core();
     app.add_fr_tx(0, slot);
     app.settle();
@@ -9712,12 +9661,7 @@ fn a_script_writes_a_flexray_signal_into_its_entry() {
 fn a_flexray_signal_write_without_its_entry_is_refused() {
     let mut app = quiet_app();
     app.tx_list.retain(|t| t.channel != 0);
-    app.fr_buses.insert(
-        0,
-        crate::app::FrBusCfg {
-            db: one_slot_db(&["One"], 40.0),
-        },
-    );
+    app.fr_buses.insert(0, one_slot_db(&["One"], 40.0));
     app.push_fr_db_to_core();
     app.send(crate::bus::BusCommand::AddNode {
         name: "ghost".to_string(),
@@ -9859,12 +9803,7 @@ fn a_generated_flexray_slot_fills_the_session_on_its_schedule() {
     let one_lsb = (phys(1) - phys(0)).abs() * 1.5;
     assert!(declared_us > 0, "the cluster declares a cycle time");
     let db = std::sync::Arc::new(db);
-    app.fr_buses.insert(
-        0,
-        crate::app::FrBusCfg {
-            db: std::sync::Arc::clone(&db),
-        },
-    );
+    app.fr_buses.insert(0, std::sync::Arc::clone(&db));
     app.push_fr_db_to_core();
     app.settle();
 
@@ -9991,12 +9930,7 @@ fn fr_bound_slot(app: &mut App) -> (u16, String) {
         Some((db.frame_index(ix)?.triggering.slot_id as u16, ecu))
     });
     let (slot, ecu) = found.expect("the asset binds a slot with signals to a sending ECU");
-    app.fr_buses.insert(
-        0,
-        crate::app::FrBusCfg {
-            db: std::sync::Arc::new(db),
-        },
-    );
+    app.fr_buses.insert(0, std::sync::Arc::new(db));
     app.push_fr_db_to_core();
     app.settle();
     (slot, ecu)
@@ -10253,8 +10187,7 @@ fn the_spec_monitor_judges_flexray_frames_against_their_schedule() {
         )
     };
     assert!(declared_us > 0, "the cluster declares a cycle time");
-    app.fr_buses
-        .insert(0, crate::app::FrBusCfg { db: db.into() });
+    app.fr_buses.insert(0, db.into());
     app.push_fr_db_to_core();
     let q = app.hw.attach_fr_mock(0, 5);
     app.start_virtual();
@@ -10335,12 +10268,7 @@ fn clearing_the_message_counters_clears_the_flexray_tallies_too() {
     use crate::hw::vector::flexray::FrFrame;
     let mut app = quiet_app();
     app.tx_list.retain(|t| t.channel != 0);
-    app.fr_buses.insert(
-        0,
-        crate::app::FrBusCfg {
-            db: one_slot_db(&["One"], 40.0),
-        },
-    );
+    app.fr_buses.insert(0, one_slot_db(&["One"], 40.0));
     app.push_fr_db_to_core();
     let q = app.hw.attach_fr_mock(0, 5);
     app.start_virtual();
@@ -10399,12 +10327,7 @@ fn a_new_cluster_description_rebuilds_the_expanded_rows() {
     let mut app = quiet_app();
     app.tx_list.retain(|t| t.channel != 0);
     let describe = |app: &mut App, signals: &[&str]| {
-        app.fr_buses.insert(
-            0,
-            crate::app::FrBusCfg {
-                db: one_slot_db(signals, 40.0),
-            },
-        );
+        app.fr_buses.insert(0, one_slot_db(signals, 40.0));
         app.push_fr_db_to_core();
     };
     describe(&mut app, &["One"]);
@@ -10470,12 +10393,7 @@ fn dbc_only_keeps_the_flexray_rows_a_description_covers() {
     let ix = db
         .frame_ix_at(slot, cycle, 0)
         .expect("the first frame resolves at its own slot and phase");
-    app.fr_buses.insert(
-        0,
-        crate::app::FrBusCfg {
-            db: std::sync::Arc::new(db),
-        },
-    );
+    app.fr_buses.insert(0, std::sync::Arc::new(db));
     let row = |bus: u8, at: u16| crate::trace::FrRow {
         bus,
         t_us: 1_000,
@@ -10571,12 +10489,7 @@ fn the_trace_text_filter_matches_fr_frame_names() {
     let mut app = quiet_app();
     let text = read_fr_asset(crate::test_assets::path("PowerTrain.arxml"));
     let db = crate::fr_db::FrDb::parse(&text).expect("PowerTrain.arxml parses");
-    app.fr_buses.insert(
-        0,
-        crate::app::FrBusCfg {
-            db: std::sync::Arc::new(db),
-        },
-    );
+    app.fr_buses.insert(0, std::sync::Arc::new(db));
     // The database's first frame defines the identity the filter must
     // match: its name and its slot number.
     let first = &app.fr_db(0).expect("bus 0 has a description").frames[0];
@@ -11250,8 +11163,8 @@ fn removing_a_flexray_bus_takes_everything_keyed_on_it() {
     use crate::workspace::{Pick, SigScope};
     let mut app = quiet_app();
     let (slot, _) = fr_bound_slot(&mut app);
-    let db = std::sync::Arc::clone(&app.fr_buses[&0].db);
-    app.fr_buses.insert(1, crate::app::FrBusCfg { db });
+    let db = std::sync::Arc::clone(&app.fr_buses[&0]);
+    app.fr_buses.insert(1, db);
     app.push_fr_db_to_core();
     let q0 = app.hw.attach_fr_mock(0, 5);
     let q1 = app.hw.attach_fr_mock(1, 6);
@@ -11694,12 +11607,7 @@ fn the_frame_length_convention_renames_trace_rows() {
             }],
         }],
     };
-    app.eth_buses.insert(
-        0,
-        crate::app::EthBusCfg {
-            db: std::sync::Arc::new(db),
-        },
-    );
+    app.eth_buses.insert(0, std::sync::Arc::new(db));
     app.ingest_eth(crate::eth::EthFrame::new(
         1_000,
         0,
@@ -11915,12 +11823,7 @@ fn an_ethernet_signal_drives_a_dotted_script_read() {
             }],
         }],
     };
-    app.eth_buses.insert(
-        0,
-        crate::app::EthBusCfg {
-            db: std::sync::Arc::new(db),
-        },
-    );
+    app.eth_buses.insert(0, std::sync::Arc::new(db));
     app.push_eth_db_to_core();
     app.send(crate::bus::BusCommand::AddNode {
         name: "eth-reader".to_string(),

@@ -93,7 +93,7 @@ fn build_targets(app: &App, keys: &[SigKey]) -> Vec<Target> {
                 let Some(cfg) = app.fr_buses.get(&bus) else {
                     continue;
                 };
-                let Some(signal) = cfg.db.slot_signal(*slot, name) else {
+                let Some(signal) = cfg.slot_signal(*slot, name) else {
                     continue;
                 };
                 targets.push(Target {
@@ -329,7 +329,6 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
-    use crate::app::EthBusCfg;
     use crate::can::frame::Direction;
     use crate::log::AscWriter;
 
@@ -357,8 +356,7 @@ mod tests {
             .expect("a scheduled frame declares a signal");
         let length = db.frames[frame_ix].length as usize;
         let bytes = (signal.bit + signal.size).div_ceil(8) as usize;
-        app.fr_buses
-            .insert(0, crate::app::FrBusCfg { db: Arc::new(db) });
+        app.fr_buses.insert(0, Arc::new(db));
         app.push_fr_db_to_core();
         let db = app.fr_db(0).expect("bus 0 has a description");
         let log =
@@ -405,7 +403,7 @@ mod tests {
         let path = crate::test_assets::path("EthSample.arxml");
         let text = std::fs::read_to_string(path).unwrap();
         let db = crate::eth::db::EthDb::parse(&text).expect("EthSample.arxml parses");
-        app.eth_buses.insert(0, EthBusCfg { db: Arc::new(db) });
+        app.eth_buses.insert(0, Arc::new(db));
         app.push_eth_db_to_core();
         let key = app.eth_key(0, "EthFrame".to_string(), "Sig".to_string());
         let mut targets = build_targets(&app, std::slice::from_ref(&key));

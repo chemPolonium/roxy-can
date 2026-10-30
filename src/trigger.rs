@@ -393,7 +393,7 @@ impl App {
     /// to ask -- the popup still lets the user type a slot.
     fn fr_default_slot(&self) -> (u8, u16, Vec<String>) {
         for (bus, cfg) in self.fr_buses.iter() {
-            if let Some((slot, _, names)) = cfg.db.slot_signals().into_iter().next() {
+            if let Some((slot, _, names)) = cfg.slot_signals().into_iter().next() {
                 return (*bus, slot, names);
             }
         }
