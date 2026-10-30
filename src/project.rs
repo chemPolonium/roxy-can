@@ -112,35 +112,16 @@ impl App {
         };
         let base = path.parent().map(|d| d.to_path_buf());
         let config = Config::from_app(self, base.as_deref());
-        let mut config_value = serde_json::to_value(&config).unwrap_or_default();
-        // Sections that are now typed v2 fields leave the compat blob.
-        if let Some(object) = config_value.as_object_mut() {
-            for key in [
-                "trace_windows",
-                "msg_windows",
-                "stats_windows",
-                "graphics",
-                "data_windows",
-                "monitor_rows",
-                "state_trackers",
-                "nodes",
-                "blocks",
-                "sysvars",
-                "derived",
-                "web",
-                "triggers",
-                "replay_map",
-                "channels",
-                "fr_buses",
-                "fr_names",
-                "eth_buses",
-                "can_arxml",
-                "eth_frame_length_includes_header",
-            ] {
-                object.remove(key);
-            }
-        }
         let mut project = crate::model::project_from_config(&config);
+        project.replay_speed = config.replay_speed;
+        project.replay_fastest = config.replay_fastest;
+        project.text_rate_hz = config.text_rate_hz;
+        project.trace_limit = config.trace_limit;
+        project.counters = config.counters.clone();
+        project.recent_dbc = config.recent_dbc.clone();
+        project.recent_log = config.recent_log.clone();
+        project.spec = config.spec;
+        project.limits = config.limits;
         let ids = &self.snap.cluster_ids;
         let mut fr_order: Vec<u8> = config.fr_buses.iter().map(|bus| bus.bus).collect();
         fr_order.sort_unstable();
@@ -212,7 +193,6 @@ impl App {
                 },
             });
         }
-        project.rest.insert("config".to_string(), config_value);
         project.replay.clear();
         for (raw, target) in self
             .snap
@@ -342,23 +322,6 @@ impl App {
         project.sysvars = config.sysvars.clone();
         project.derived = config.derived.clone();
         project.workspace = config.web.clone();
-        for key in [
-            "trace_windows",
-            "msg_windows",
-            "stats_windows",
-            "graphics",
-            "data_windows",
-            "monitor_rows",
-            "state_trackers",
-            "nodes",
-            "blocks",
-            "sysvars",
-            "derived",
-            "web",
-            "triggers",
-        ] {
-            project.rest.remove(key);
-        }
         let written = serde_json::to_string_pretty(&project)
             .map_err(|e| e.to_string())
             .and_then(|j| std::fs::write(&path, j).map_err(|e| e.to_string()));
@@ -404,24 +367,31 @@ impl App {
                     return;
                 }
             };
-            let Some(legacy) = project
-                .rest
-                .get("legacyConfig")
-                .or_else(|| project.rest.get("config"))
-            else {
-                self.fail("project ignored: schema v2 file has no legacyConfig yet");
-                return;
-            };
-            let mut cfg: Config = match serde_json::from_value(legacy.clone()) {
-                Ok(cfg) => cfg,
-                Err(e) => {
-                    self.fail(format!("project ignored: legacyConfig: {e}"));
-                    return;
-                }
-            };
-            // The typed `clusters` section is the authority for bus
-            // descriptions; the config blob no longer carries them.
+            // The project is the whole on-disk schema: build the apply DTO
+            // from its typed sections, never from a compat blob.
+            let mut cfg = Config::default();
             restore_buses_from_clusters(&project, &mut cfg);
+            cfg.replay_speed = project.replay_speed;
+            cfg.replay_fastest = project.replay_fastest;
+            cfg.text_rate_hz = project.text_rate_hz;
+            cfg.trace_limit = project.trace_limit;
+            cfg.counters = project.counters.clone();
+            cfg.recent_dbc = project.recent_dbc.clone();
+            cfg.recent_log = project.recent_log.clone();
+            cfg.spec = project.spec;
+            cfg.limits = project.limits;
+            cfg.trace_windows = project.trace_windows.clone();
+            cfg.msg_windows = project.msg_windows.clone();
+            cfg.stats_windows = project.stats_windows.clone();
+            cfg.graphics = project.graphics.clone();
+            cfg.data_windows = project.data_windows.clone();
+            cfg.monitor_rows = project.monitor_rows.clone();
+            cfg.state_trackers = project.state_trackers.clone();
+            cfg.nodes = project.nodes.clone();
+            cfg.blocks = project.blocks.clone();
+            cfg.sysvars = project.sysvars.clone();
+            cfg.derived = project.derived.clone();
+            cfg.web = project.workspace.clone();
 
             // generator 段以 cluster id 记路，打开时换回路号。
             if let Some(generators) = &project.generators {

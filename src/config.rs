@@ -470,7 +470,7 @@ fn cycle_default() -> u64 {
     100_000
 }
 
-#[derive(Serialize, Deserialize, Default)]
+#[derive(Serialize, Deserialize, Default, Clone, Debug, PartialEq)]
 pub struct Counters {
     #[serde(default)]
     pub trace: usize,
@@ -843,6 +843,44 @@ fn sig_keys(maps: &KeyMaps<'_>, signals: &[SignalCfg]) -> Vec<GfxSignal> {
             y_mode: YMode::from_u8(s.y_mode),
         })
         .collect()
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            channels: Vec::new(),
+            bus_counter: 0,
+            fr_buses: Vec::new(),
+            fr_names: Vec::new(),
+            eth_buses: Vec::new(),
+            can_arxml: Vec::new(),
+            eth_frame_length_includes_header: false,
+            replay_speed: 1.0,
+            replay_fastest: false,
+            text_rate_hz: 10,
+            trace_limit: crate::app::TRACE_LIMIT,
+            trace_windows: Vec::new(),
+            msg_windows: Vec::new(),
+            stats_windows: Vec::new(),
+            graphics: Vec::new(),
+            data_windows: Vec::new(),
+            monitor_rows: Vec::new(),
+            state_trackers: Vec::new(),
+            nodes: Vec::new(),
+            blocks: Vec::new(),
+            sysvars: Vec::new(),
+            tx: Vec::new(),
+            fr_tx: Vec::new(),
+            counters: Counters::default(),
+            recent_dbc: Vec::new(),
+            recent_log: Vec::new(),
+            spec: SpecCfg::default(),
+            triggers: Vec::new(),
+            web: None,
+            limits: LimitsCfg::default(),
+            derived: Vec::new(),
+        }
+    }
 }
 
 impl Config {

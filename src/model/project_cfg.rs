@@ -3,8 +3,6 @@
 //! reshapes it into `clusters` and the compatibility blob that `open` feeds
 //! back into the same apply path.
 
-use serde_json::Value;
-
 use super::*;
 use crate::config::{CanArxmlFile, ChannelCfg, Config, EthBusFile, FrBusFile};
 
@@ -65,7 +63,6 @@ pub fn project_from_config(config: &Config) -> ProjectV2 {
 
     let mut project = ProjectV2::new(clusters);
     project.next_cluster_id = next_id;
-    project.rest = rest_from_config(config);
     project
 }
 
@@ -117,25 +114,4 @@ fn source_for_path(path: &str, cluster: Option<&String>) -> ClusterSource {
             path: path.to_string(),
         }
     }
-}
-
-fn rest_from_config(config: &Config) -> serde_json::Map<String, Value> {
-    let mut value = serde_json::to_value(config).unwrap_or(Value::Null);
-    let Some(object) = value.as_object_mut() else {
-        return serde_json::Map::new();
-    };
-    for field in [
-        "channels",
-        "bus_counter",
-        "fr_buses",
-        "fr_names",
-        "eth_buses",
-        "can_arxml",
-        "eth_frame_length_includes_header",
-        "triggers",
-        "generators",
-    ] {
-        object.remove(field);
-    }
-    object.clone()
 }

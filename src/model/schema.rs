@@ -28,6 +28,18 @@ fn one_u32() -> u32 {
     1
 }
 
+fn one_f64() -> f64 {
+    1.0
+}
+
+fn ten_u32() -> u32 {
+    10
+}
+
+fn trace_limit_default() -> usize {
+    crate::app::TRACE_LIMIT
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CanCfg {
@@ -309,10 +321,24 @@ pub struct ProjectV2 {
     /// opaque `web` workspace during the v1→v2 migration.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bus_map: Option<BusMap>,
-    /// Workspace sections the Phase 7 migration rewrites: windows, triggers,
-    /// generators, `web`, derived definitions. Kept verbatim until then.
-    #[serde(flatten)]
-    pub rest: serde_json::Map<String, Value>,
+    #[serde(default = "one_f64")]
+    pub replay_speed: f64,
+    #[serde(default)]
+    pub replay_fastest: bool,
+    #[serde(default = "ten_u32")]
+    pub text_rate_hz: u32,
+    #[serde(default = "trace_limit_default")]
+    pub trace_limit: usize,
+    #[serde(default)]
+    pub counters: crate::config::Counters,
+    #[serde(default)]
+    pub recent_dbc: Vec<String>,
+    #[serde(default)]
+    pub recent_log: Vec<String>,
+    #[serde(default)]
+    pub spec: crate::config::SpecCfg,
+    #[serde(default)]
+    pub limits: crate::config::LimitsCfg,
 }
 
 impl Default for ProjectV2 {
@@ -340,7 +366,15 @@ impl Default for ProjectV2 {
             derived: Vec::new(),
             workspace: None,
             bus_map: None,
-            rest: serde_json::Map::new(),
+            replay_speed: 1.0,
+            replay_fastest: false,
+            text_rate_hz: 10,
+            trace_limit: crate::app::TRACE_LIMIT,
+            counters: Default::default(),
+            recent_dbc: Vec::new(),
+            recent_log: Vec::new(),
+            spec: Default::default(),
+            limits: Default::default(),
         }
     }
 }

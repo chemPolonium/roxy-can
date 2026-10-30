@@ -528,18 +528,15 @@ fn cluster_cfg(id: u32, kind: ClusterKind, name: &str) -> ClusterCfg {
 }
 
 #[test]
-fn schema_v2_roundtrips_and_preserves_unknown_sections() {
+fn schema_v2_roundtrips_the_workspace_section() {
     let mut project = ProjectV2::new(vec![
         cluster_cfg(1, ClusterKind::Can, "CAN1"),
         cluster_cfg(2, ClusterKind::Ethernet, "ETH1"),
     ]);
-    project.rest.insert(
-        "views".to_string(),
-        json!({ "graphics": [{ "signals": ["sig:1:17:42"] }] }),
-    );
-    project
-        .rest
-        .insert("web".to_string(), json!({ "panelBook": { "pages": [] } }));
+    project.workspace = Some(json!({
+        "graphics": [{ "signals": ["sig:1:17:42"] }],
+        "panelBook": { "pages": [] }
+    }));
 
     let text = serde_json::to_string_pretty(&project).unwrap();
     let value: Value = serde_json::from_str(&text).unwrap();
@@ -547,7 +544,10 @@ fn schema_v2_roundtrips_and_preserves_unknown_sections() {
     assert_eq!(value["version"], 2);
     assert_eq!(value["nextClusterId"], 3);
     assert_eq!(value["clusters"][1]["kind"], "ethernet");
-    assert_eq!(value["views"]["graphics"][0]["signals"][0], "sig:1:17:42");
+    assert_eq!(
+        value["workspace"]["graphics"][0]["signals"][0],
+        "sig:1:17:42"
+    );
 
     let parsed: ProjectV2 = serde_json::from_value(value).unwrap();
     assert_eq!(parsed, project);
