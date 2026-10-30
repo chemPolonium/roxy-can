@@ -2487,7 +2487,6 @@ export function App() {
           paused={state?.tracePaused ?? false}
           reference={reference}
           onOpenReference={() => setReferenceOpen(true)}
-          onOpenDerived={() => openVariables("computed")}
           overlay={signalOverlay}
           onToggleOverlay={() => setSignalOverlay((value) => !value)}
           yModes={chartYModes}
@@ -3665,7 +3664,6 @@ export function App() {
                   paused={state?.tracePaused ?? false}
                   reference={reference}
                   onOpenReference={() => setReferenceOpen(true)}
-                  onOpenDerived={() => openVariables("computed")}
                   overlay={signalOverlay}
                   onToggleOverlay={() => setSignalOverlay((value) => !value)}
                   yModes={chartYModes}

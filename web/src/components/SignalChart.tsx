@@ -395,7 +395,6 @@ export function SignalChart({
   paused,
   reference = null,
   onOpenReference,
-  onOpenDerived,
   overlay = false,
   onToggleOverlay,
   hasReadout = false,
@@ -421,7 +420,6 @@ export function SignalChart({
   paused: boolean;
   reference?: ReferenceOverlay | null;
   onOpenReference?: () => void;
-  onOpenDerived?: () => void;
   overlay?: boolean;
   onToggleOverlay?: () => void;
   /// Read-only signals exist: keep a cursor usable on an otherwise empty
@@ -1495,15 +1493,6 @@ export function SignalChart({
           >
             Δt {Math.abs(cursorB.t - cursorA.t).toFixed(3)}s
           </span>
-        )}
-        {onOpenDerived && (
-          <button
-            type="button"
-            title="Manage computed channels in the Variables window"
-            onClick={onOpenDerived}
-          >
-            Channels…
-          </button>
         )}
         {onOpenReference && (
           <button
