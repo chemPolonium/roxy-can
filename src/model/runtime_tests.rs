@@ -460,3 +460,222 @@ fn update_bit_gates_decoding_and_is_set_by_encoding() {
     );
     assert_eq!(payload[2] & 1, 1, "encode marks the signal as updated");
 }
+
+// ---- advanced-feature performance ----
+//
+// Phase 6 wants a number for each advanced structure, not just a passing
+// test. Run with:
+// `cargo test --release perf_advanced_feature_paths -- --ignored --nocapture`
+
+fn measure(label: &str, iterations: u32, mut run: impl FnMut()) {
+    for _ in 0..iterations / 10 {
+        run();
+    }
+    let mut batches = Vec::with_capacity(25);
+    for _ in 0..25 {
+        let start = std::time::Instant::now();
+        for _ in 0..iterations {
+            run();
+        }
+        batches.push(start.elapsed().as_nanos() as f64 / f64::from(iterations));
+    }
+    batches.sort_by(f64::total_cmp);
+    let p50 = batches[batches.len() / 2];
+    let p99 = batches[batches.len() * 99 / 100];
+    println!("{label}: p50 {p50:.1} ns/op, p99 {p99:.1} ns/op");
+}
+
+fn mux_fixture() -> (Comm, DecodePlan) {
+    let mut comm = base_comm();
+    let mut mux = comm.pdus.get(&PduId(10)).expect("base pdu").clone();
+    mux.id = PduId(30);
+    mux.kind = PduKind::Multiplexed;
+    mux.selector = Some(SelectorField {
+        start_bit: 0,
+        length: 8,
+        byte_order: ByteOrder::LittleEndian,
+        signal: Some(SignalId(101)),
+    });
+    comm.pdus.insert(PduId(30), mux);
+    let mut selector = signal(101, 0, 8);
+    selector.pdu = PduId(30);
+    add_signal(&mut comm, selector);
+    let mut part = signal(100, 8, 8);
+    part.pdu = PduId(10);
+    add_signal(&mut comm, part);
+    comm.multiplexed_parts.insert(
+        MappingId(30),
+        MultiplexedPduPart {
+            id: MappingId(30),
+            mux: PduId(30),
+            part: PduId(10),
+            selector_code: Some(2),
+            initial: false,
+        },
+    );
+    comm.frame_pdu_mappings.insert(
+        MappingId(1),
+        FramePduMapping {
+            id: MappingId(1),
+            frame: FrameId(1),
+            pdu: PduId(30),
+            start_bit: 0,
+            byte_order: ByteOrder::LittleEndian,
+        },
+    );
+    let plan = plan(&comm);
+    (comm, plan)
+}
+
+fn container_fixture() -> (Comm, DecodePlan) {
+    let mut comm = base_comm();
+    add_signal(&mut comm, signal(100, 0, 16));
+    comm.pdus.insert(
+        PduId(20),
+        Pdu {
+            id: PduId(20),
+            name: "Container".to_string(),
+            length: 8,
+            kind: PduKind::Container,
+            header_type: ContainerHeaderType::Short,
+            cycle_us: None,
+            selector: None,
+            secured: None,
+            transformation: None,
+            e2e: None,
+        },
+    );
+    comm.contained_pdu_mappings.insert(
+        MappingId(20),
+        ContainedPduMapping {
+            id: MappingId(20),
+            container: PduId(20),
+            pdu: PduId(10),
+            header_id: 1,
+            offset: 4,
+        },
+    );
+    comm.frame_pdu_mappings.insert(
+        MappingId(1),
+        FramePduMapping {
+            id: MappingId(1),
+            frame: FrameId(1),
+            pdu: PduId(20),
+            start_bit: 0,
+            byte_order: ByteOrder::LittleEndian,
+        },
+    );
+    let plan = plan(&comm);
+    (comm, plan)
+}
+
+#[test]
+#[ignore = "measurement probe"]
+fn perf_advanced_feature_paths() {
+    const FRAMES: u32 = 20_000;
+
+    let mut plain = base_comm();
+    let mut speed = signal(100, 0, 16);
+    speed.factor = 0.1;
+    add_signal(&mut plain, speed);
+    let plain_plan = plan(&plain);
+    let plain_payload = [0x34, 0x12, 0, 0, 0, 0, 0, 0];
+    measure("plain decode", FRAMES, || {
+        std::hint::black_box(decode_payload(&plain, &plain_plan, &plain_payload));
+    });
+
+    let (mux, mux_plan) = mux_fixture();
+    let mux_payload = [2, 0x55, 0, 0, 0, 0, 0, 0];
+    measure("mux decode", FRAMES, || {
+        std::hint::black_box(decode_payload(&mux, &mux_plan, &mux_payload));
+    });
+
+    let (container, container_plan) = container_fixture();
+    let container_payload = [0, 0, 1, 4, 0x34, 0x12, 0, 0];
+    measure("container decode", FRAMES, || {
+        std::hint::black_box(decode_payload(
+            &container,
+            &container_plan,
+            &container_payload,
+        ));
+    });
+
+    let mut transformed = base_comm();
+    transformed.transformations.insert(
+        TransformationId(1),
+        Transformation {
+            id: TransformationId(1),
+            name: "T1".to_string(),
+            kind: TransformationKind::Linear {
+                scale: 2.0,
+                offset: -10.0,
+            },
+        },
+    );
+    let mut speed = signal(100, 0, 16);
+    speed.transformation = Some(TransformationId(1));
+    add_signal(&mut transformed, speed);
+    let transform_plan = plan(&transformed);
+    let transform_payload = [0, 5, 0, 0, 0, 0, 0, 0];
+    measure("linear transformation decode", FRAMES, || {
+        std::hint::black_box(decode_payload(
+            &transformed,
+            &transform_plan,
+            &transform_payload,
+        ));
+    });
+
+    let mut e2e_plan = plain_plan.clone();
+    e2e_plan.e2e.push(E2ePlan {
+        profile: 1,
+        counter_bit_offset: 0,
+        counter_bits: 4,
+        data_id: Some(291),
+    });
+    measure("E2E counter read", FRAMES, || {
+        std::hint::black_box(decode_e2e(&e2e_plan, &plain_payload));
+    });
+
+    // SecOC's own cost is at plan time: header/area/authenticator bounds are
+    // checked once, and the frame still decodes through its inner PDU plan.
+    let mut secured = base_comm();
+    add_signal(&mut secured, signal(100, 0, 16));
+    secured.pdus.insert(
+        PduId(40),
+        Pdu {
+            id: PduId(40),
+            name: "Secured".to_string(),
+            length: 16,
+            kind: PduKind::Secured,
+            header_type: ContainerHeaderType::Short,
+            cycle_us: None,
+            selector: None,
+            secured: Some(SecuredPduMeta {
+                header: SecuredPduHeader::Header16,
+                payload: Some(PduId(10)),
+                data_id: Some(291),
+                freshness_value_id: None,
+                secured_area: Some((0, 64)),
+                auth_info_length: Some(4),
+                verification: SecVerification::default(),
+            }),
+            transformation: None,
+            e2e: None,
+        },
+    );
+    secured.frames.get_mut(&FrameId(1)).unwrap().length = 16;
+    secured.frame_pdu_mappings.insert(
+        MappingId(1),
+        FramePduMapping {
+            id: MappingId(1),
+            frame: FrameId(1),
+            pdu: PduId(40),
+            start_bit: 0,
+            byte_order: ByteOrder::LittleEndian,
+        },
+    );
+    let frame = secured.frames.get(&FrameId(1)).expect("frame").clone();
+    measure("SecOC plan build", FRAMES / 10, || {
+        std::hint::black_box(build_decode_plan(&secured, &frame, 1));
+    });
+}
