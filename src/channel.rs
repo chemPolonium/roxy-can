@@ -2,6 +2,7 @@
 //! A bus itself is a model cluster; its configuration lives in `Comm` and in
 //! core maps keyed by `ClusterId`, not in a parallel struct here.
 
+#[cfg(test)]
 use crate::dbc::SymbolTable;
 
 /// Who plays a DBC node on this bus -- and there are exactly two
@@ -56,9 +57,9 @@ use crate::workspace::SigScope;
 pub const DETACH_LABEL: &str = "Detach";
 
 impl App {
-    /// The bus's database, from this frame's snapshot. This inherent method
-    /// shadows the live-table lookup on `BusCore` for every `App` receiver,
-    /// so the frontend's DBC reads never touch bus state directly.
+    /// The bus's database, from this frame's snapshot. Test-only: production
+    /// reads go through the model.
+    #[cfg(test)]
     pub fn channel_dbc(&self, ch: u8) -> Option<&SymbolTable> {
         self.snap
             .channels

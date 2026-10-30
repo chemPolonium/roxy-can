@@ -834,27 +834,17 @@ impl App {
             return false;
         }
         // Signal-value conditions written into the filter box, like
-        // `EngineSpeed>100` (operators: > >= < <= == !=). A frame whose
-        // database decodes to no matching signal value is dropped. Frames
-        // without a database skip decoding entirely.
+        // `EngineSpeed>100` (operators: > >= < <= == !=). The value is the one
+        // the observers plot, decoded from the frame's model plan; a frame
+        // nothing decodes is dropped, exactly as the FlexRay side does.
         for cond in &flt.value_conds {
-            let Some(db) = self.channel_dbc(f.channel) else {
+            let Some(decoded) = self.model_can_decoded(f, false) else {
                 return false;
             };
-            let Some(m) = db.messages.get(&(f.id, f.extended)) else {
+            let Some(entry) = decoded.iter().find(|entry| entry.name == cond.signal) else {
                 return false;
             };
-            let Some(sig) = m.signals.iter().find(|s| s.name == cond.signal) else {
-                return false;
-            };
-            let raw = crate::decode::extract_raw(
-                &f.data[..f.len as usize],
-                sig.start_bit,
-                sig.size,
-                sig.big_endian,
-            );
-            let v = crate::decode::to_physical(raw, sig.size, sig.signed, sig.factor, sig.offset);
-            if !cond.op.holds(v, cond.value) {
+            if !cond.op.holds(entry.phys, cond.value) {
                 return false;
             }
         }

@@ -5413,7 +5413,7 @@ impl BusCore {
         self.model_can_decoded(f, false)
     }
 
-    fn model_can_decoded(
+    pub(crate) fn model_can_decoded(
         &self,
         f: &CanFrame,
         only_subscribed: bool,
@@ -6882,7 +6882,7 @@ impl BusCore {
             Some(tx) => tx.data,
             None => return false,
         };
-        let Some(table) = self.channel_dbc(ch) else {
+        let Some(table) = self.model_dbs.get(ch as usize).and_then(|db| db.as_deref()) else {
             return false;
         };
         if !table.encode_signal(id, name, phys, &mut data) {
@@ -7987,8 +7987,8 @@ impl BusCore {
         for agg in self.aggs.values() {
             let (ch, id, ext) = (agg.channel, agg.id, agg.extended);
             seen.push(((ch, id, ext), agg.last_t_us));
-            // The model names the frame and states its period/length; the
-            // description table is only consulted for a bus without a model.
+            // The model names the frame and states its period/length; a
+            // channel without a database contributes no verdict at all.
             let model_decl = self.can_codec(ch).and_then(|(comm, _, cluster)| {
                 comm.frame_by_can_id(cluster, id)
                     .into_iter()
@@ -8000,16 +8000,13 @@ impl BusCore {
                     })
                     .map(|frame| (frame.timing.cycle_us, u64::from(frame.length)))
             });
-            let (declared, dlc) = if let Some((declared, dlc)) = model_decl {
-                (declared, dlc)
-            } else if let Some(db) = self.channel_dbc(ch) {
-                let Some(m) = db.messages.get(&(id, ext)) else {
+            let (declared, dlc) = match model_decl {
+                Some(decl) => decl,
+                None if self.model_dbs.get(ch as usize).is_some_and(Option::is_some) => {
                     hits.push(((ch, id, ext, Kind::Unknown), 0.0, 0.0));
                     continue;
-                };
-                (m.cycle_us, m.dlc)
-            } else {
-                continue;
+                }
+                None => continue,
             };
             // A declaration of 0 is event-triggered, which the two timing
             // predicates below reject on their own; `None` is the database
@@ -8134,18 +8131,10 @@ impl BusCore {
         }
     }
 
-    /// The database loaded on bus `ch`, if any.
-    pub(crate) fn channel_dbc(&self, ch: u8) -> Option<&crate::dbc::SymbolTable> {
-        self.model_dbs.get(ch as usize)?.as_deref()
-    }
-
-    /// What the database declares for this message: `Some(0)` for an
+    /// What the model declares for this message: `Some(0)` for an
     /// event-triggered one, `None` when it says nothing at all.
     pub(crate) fn dbc_cycle_us(&self, ch: u8, id: u32) -> Option<u64> {
-        self.channel_dbc(ch)
-            .and_then(|db| db.message_of(id))
-            .and_then(|m| m.cycle_us)
-            .or_else(|| self.model_can_cycle_us(ch, id))
+        self.model_can_cycle_us(ch, id)
     }
 
     /// The CAN ids a model-declared sender ECU puts on `ch`, from the frame

@@ -132,8 +132,8 @@ pub fn apply_profile(app: &mut App, project_dir: &Path, name: &str) -> Result<St
             ));
         };
         let known = app
-            .channel_dbc(ch as u8)
-            .is_some_and(|db| db.nodes.iter().any(|n| n == &ov.node));
+            .can_comm(ch)
+            .is_some_and(|comm| comm.ecus.values().any(|ecu| ecu.name == ov.node));
         if !known {
             return Err(format!(
                 "profile `{name}`: bus `{}` has no DBC node `{}`",
