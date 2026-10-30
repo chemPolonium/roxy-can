@@ -7060,7 +7060,8 @@ fn e2e_counter_continuity_is_published_per_message() {
     );
     app.send(crate::bus::BusCommand::SetChannelModel {
         ch: 0,
-        comm: std::sync::Arc::new(comm),
+        comm: Some(std::sync::Arc::new(comm)),
+        sources: Vec::new(),
     });
     app.settle();
     let frame = |t: u64, counter: u8| {

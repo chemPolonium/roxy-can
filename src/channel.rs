@@ -379,7 +379,11 @@ impl App {
             .ok_or_else(|| format!("{path}: cluster `{cluster}` has no frames"))?;
         self.send(crate::bus::BusCommand::SetChannelModel {
             ch: bus,
-            comm: std::sync::Arc::new(comm),
+            comm: Some(std::sync::Arc::new(comm)),
+            sources: vec![crate::model::ClusterSource::Arxml {
+                path: path.to_string(),
+                cluster: cluster.to_string(),
+            }],
         });
         self.can_arxml
             .insert(bus, (path.to_string(), cluster.to_string()));
@@ -489,7 +493,11 @@ impl App {
                 if let Some(comm) = Self::can_arxml_comm(&text, &path, &cluster) {
                     self.send(crate::bus::BusCommand::SetChannelModel {
                         ch: bus,
-                        comm: std::sync::Arc::new(comm),
+                        comm: Some(std::sync::Arc::new(comm)),
+                        sources: vec![crate::model::ClusterSource::Arxml {
+                            path: path.clone(),
+                            cluster: cluster.clone(),
+                        }],
                     });
                 }
             }
@@ -579,11 +587,16 @@ impl App {
                     match Self::can_arxml_comm(&text, path, &info.name) {
                         Some(comm) => {
                             let comm = std::sync::Arc::new(comm);
+                            let source = crate::model::ClusterSource::Arxml {
+                                path: path.to_string(),
+                                cluster: info.name.clone(),
+                            };
                             let bus = match existing {
                                 Some(bus) => {
                                     self.send(crate::bus::BusCommand::SetChannelModel {
                                         ch: bus,
-                                        comm: comm.clone(),
+                                        comm: Some(comm.clone()),
+                                        sources: vec![source],
                                     });
                                     updated += 1;
                                     bus
@@ -593,6 +606,7 @@ impl App {
                                     self.send(crate::bus::BusCommand::AddChannelWithModel {
                                         name: info.name.clone(),
                                         comm: comm.clone(),
+                                        sources: vec![source],
                                     });
                                     next_can += 1;
                                     added += 1;

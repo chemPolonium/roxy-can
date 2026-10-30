@@ -39,6 +39,9 @@ pub fn relativize(p: &str, base: &Path) -> String {
 /// but only when the file really exists there; otherwise the path is kept
 /// as-is (it may be relative to the working directory).
 pub fn resolve_dbc(p: &str, base: Option<&Path>) -> String {
+    if p.trim().is_empty() {
+        return String::new();
+    }
     if p.starts_with("builtin:") {
         return p.to_string();
     }

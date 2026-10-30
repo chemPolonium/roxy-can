@@ -215,6 +215,7 @@ pub enum BusCommand {
     AddChannelWithModel {
         name: String,
         comm: Arc<crate::model::Comm>,
+        sources: Vec<crate::model::ClusterSource>,
     },
     /// Replace one CAN bus's database from a parsed ARXML cluster.
     #[cfg(test)]
@@ -262,7 +263,8 @@ pub enum BusCommand {
     /// the table.
     SetChannelModel {
         ch: u8,
-        comm: Arc<crate::model::Comm>,
+        comm: Option<Arc<crate::model::Comm>>,
+        sources: Vec<crate::model::ClusterSource>,
     },
     /// The same for a FlexRay bus, whose document also carries structure the
     /// FIBEX-shaped database cannot hold.
@@ -1254,6 +1256,8 @@ pub struct BusCore {
     /// of the table (tests, or a path that bypasses the load helpers) must
     /// drop the plans rather than decode with a stale model.
     pub(crate) model_dbs: Vec<Option<Arc<crate::dbc::SymbolTable>>>,
+    /// ARXML-derived CAN models, merged with the DBC table on rebuild.
+    pub(crate) can_xml_models: Vec<Option<Arc<crate::model::Comm>>>,
     /// Global cluster ids for the CAN channels, aligned with `channels`; and
     /// per-bus ids for the FR/ETH maps. Allocated once and never reused.
     pub(crate) cluster_ids: crate::model::ClusterIds,
@@ -1640,6 +1644,7 @@ impl BusCore {
             model_comms: Vec::new(),
             model_plans: Vec::new(),
             model_dbs: Vec::new(),
+            can_xml_models: Vec::new(),
             cluster_ids: Default::default(),
             can_cluster_ids: Vec::new(),
             fr_cluster_ids: Default::default(),
@@ -1936,9 +1941,11 @@ impl BusCore {
             BusCommand::ClearAggregates => self.clear_aggregates(status),
             BusCommand::SetRunMode(mode) => self.run_mode = mode,
             BusCommand::AddChannel => self.add_channel(status),
-            BusCommand::AddChannelWithModel { name, comm } => {
-                self.add_channel_with_model(name, comm, status)
-            }
+            BusCommand::AddChannelWithModel {
+                name,
+                comm,
+                sources,
+            } => self.add_channel_with_model(name, comm, sources, status),
             #[cfg(test)]
             BusCommand::SetChannelDbc { ch, dbc } => self.set_channel_dbc(ch, dbc, status),
             BusCommand::RemoveChannel { ch } => self.remove_channel(ch, status),
@@ -2247,7 +2254,9 @@ impl BusCore {
                 }
             }
             BusCommand::SetEthLengthIncludesHeader(on) => self.eth_length_includes_header = on,
-            BusCommand::SetChannelModel { ch, comm } => self.set_channel_model(ch, comm),
+            BusCommand::SetChannelModel { ch, comm, sources } => {
+                self.set_channel_model(ch, comm, sources)
+            }
             BusCommand::SetFrModel { bus, comm } => self.set_fr_model(bus, comm),
             BusCommand::SetEthModel { bus, comm } => self.set_eth_model(bus, comm),
             BusCommand::SetClusterIds { next, can, fr, eth } => {
@@ -2282,6 +2291,7 @@ impl BusCore {
                         self.model_comms.push(None);
                         self.model_plans.push(None);
                         self.model_dbs.push(None);
+                        self.can_xml_models.push(None);
                     }
                     let id = self.can_cluster_ids[index];
                     if let Some(comm) = self.model_comms[index].as_mut() {
@@ -4403,6 +4413,7 @@ impl BusCore {
                 .collect();
             cluster.sources = paths
                 .iter()
+                .filter(|path| !path.trim().is_empty())
                 .map(|path| crate::model::ClusterSource::Dbc { path: path.clone() })
                 .chain(keep)
                 .collect();
@@ -4418,6 +4429,7 @@ impl BusCore {
             self.model_comms.push(None);
             self.model_plans.push(None);
             self.model_dbs.push(None);
+            self.can_xml_models.push(None);
         }
         if self.model_comms[ch].is_none() {
             let (bitrate, fd) = self.can_bitrates(ch);
@@ -4852,6 +4864,7 @@ impl BusCore {
             ))));
         self.model_plans.push(None);
         self.model_dbs.push(None);
+        self.can_xml_models.push(None);
         self.bus_loads.push(crate::load::BusLoad::new());
         self.loads_dirty = true;
         let ch = self.can_count() - 1;
@@ -4888,6 +4901,7 @@ impl BusCore {
             ))));
         self.model_plans.push(None);
         self.model_dbs.push(Some(Arc::clone(&dbc)));
+        self.can_xml_models.push(None);
         self.bus_loads.push(crate::load::BusLoad::new());
         self.loads_dirty = true;
         self.nodes_dirty = true;
@@ -4908,32 +4922,66 @@ impl BusCore {
         &mut self,
         name: String,
         comm: Arc<crate::model::Comm>,
+        sources: Vec<crate::model::ClusterSource>,
         status: &mut String,
     ) {
         self.bus_counter += 1;
         let cluster = self.cluster_ids.allocate();
-        self.can_cluster_ids.push(cluster);
-        let mut comm = (*comm).clone();
-        comm.rebind_cluster(cluster);
-        let (plans, plan_issues) = crate::model::PlanCache::build(&comm, 1);
-        self.report_model_issues(&name, &comm.issues);
-        self.report_model_issues(&name, &plan_issues);
-        let ids: Vec<u32> = comm
-            .frames
+        let (cluster_name, bitrate, fd) = comm
+            .clusters
             .values()
-            .filter_map(|frame| match frame.address {
-                crate::model::FrameAddress::Can { id, .. } => Some(id),
-                _ => None,
+            .next()
+            .map(|cluster| {
+                let (bitrate, fd) = comm
+                    .networks
+                    .values()
+                    .find_map(|network| match &network.params {
+                        crate::model::NetworkParams::Can(params) => {
+                            Some((params.bitrate_kbps, params.fd_data_kbps))
+                        }
+                        _ => None,
+                    })
+                    .unwrap_or((
+                        crate::model::CanParams::DEFAULT_BITRATE_KBPS,
+                        crate::model::CanParams::DEFAULT_FD_DATA_KBPS,
+                    ));
+                (cluster.name.clone(), bitrate, fd)
             })
-            .collect();
-        let messages = ids.len();
-        self.model_comms.push(Some(Arc::new(comm)));
-        self.model_plans.push(Some(Arc::new(plans)));
+            .unwrap_or((
+                name.clone(),
+                crate::model::CanParams::DEFAULT_BITRATE_KBPS,
+                crate::model::CanParams::DEFAULT_FD_DATA_KBPS,
+            ));
+        self.can_cluster_ids.push(cluster);
+        self.model_comms
+            .push(Some(Arc::new(crate::model::empty_can_comm(
+                &cluster_name,
+                cluster,
+                &sources,
+                bitrate,
+                fd,
+            ))));
+        self.model_plans.push(None);
         self.model_dbs.push(None);
+        self.can_xml_models.push(None);
         self.bus_loads.push(crate::load::BusLoad::new());
         self.loads_dirty = true;
         self.nodes_dirty = true;
         let ch = self.can_count() - 1;
+        self.set_channel_model(ch as u8, Some(comm), sources);
+        let ids: Vec<u32> = self.model_comms[ch]
+            .as_ref()
+            .map(|comm| {
+                comm.frames
+                    .values()
+                    .filter_map(|frame| match frame.address {
+                        crate::model::FrameAddress::Can { id, .. } => Some(id),
+                        _ => None,
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        let messages = ids.len();
         self.seed_entries_for_simulated(ch);
         for id in ids {
             self.add_entry(ch as u8, id);
@@ -5079,20 +5127,21 @@ impl BusCore {
     fn set_can_table(&mut self, ch: usize, db: Option<Arc<crate::dbc::SymbolTable>>) {
         while self.model_dbs.len() <= ch {
             self.model_dbs.push(None);
+            self.can_xml_models.push(None);
         }
         self.model_dbs[ch] = db;
         self.rebuild_can_model(ch);
     }
 
     /// Rebuilds the unified model and its decode plans for one CAN channel.
-    /// The model is the source of signal values for every frame it knows,
-    /// including multiplexed DBC messages (`mux_when`) and containers; the
-    /// legacy decoder remains only for a channel whose table has no model.
+    /// The DBC table (when present) and every bound ARXML aggregate are
+    /// merged into the one cluster id the bus owns.
     pub(crate) fn rebuild_can_model(&mut self, ch: usize) {
         while self.model_comms.len() <= ch {
             self.model_comms.push(None);
             self.model_plans.push(None);
             self.model_dbs.push(None);
+            self.can_xml_models.push(None);
         }
         if ch >= self.can_cluster_ids.len() {
             return;
@@ -5104,35 +5153,29 @@ impl BusCore {
             .can_cluster(ch)
             .map(|cluster| cluster.sources.clone())
             .unwrap_or_default();
-        let Some(db) = self.model_dbs.get(ch).and_then(|db| db.clone()) else {
-            // An ARXML-sourced channel has no table: its model is already the
-            // document, so a rebuild (project restore, cluster renumber) must
-            // leave it alone instead of replacing it with an empty cluster.
-            let from_arxml = self.can_cluster(ch).is_some_and(|cluster| {
-                cluster
-                    .sources
-                    .iter()
-                    .any(|source| matches!(source, crate::model::ClusterSource::Arxml { .. }))
-            });
-            if from_arxml && self.model_comms[ch].is_some() {
-                return;
+        let db = self.model_dbs.get(ch).and_then(|db| db.clone());
+        let mut comm = match &db {
+            Some(db) => {
+                let mut ids = crate::model::ElementIds::new();
+                let outcome = crate::model::import_symbol_table_sources(
+                    db, &name, cluster_id, &sources, &mut ids, bitrate, fd,
+                );
+                self.report_model_issues(&name, &outcome.issues);
+                outcome.comm
             }
-            self.model_comms[ch] = Some(Arc::new(crate::model::empty_can_comm(
-                &name, cluster_id, &sources, bitrate, fd,
-            )));
-            self.model_plans[ch] = None;
-            return;
+            None => crate::model::empty_can_comm(&name, cluster_id, &sources, bitrate, fd),
         };
-        let mut ids = crate::model::ElementIds::new();
-        let outcome = crate::model::import_symbol_table_sources(
-            &db, &name, cluster_id, &sources, &mut ids, bitrate, fd,
-        );
-        let (plans, plan_issues) = crate::model::PlanCache::build(&outcome.comm, 1);
-        self.report_model_issues(&name, &outcome.issues);
+        if let Some(extra) = self.can_xml_models.get(ch).and_then(|model| model.clone()) {
+            let mut extra = (*extra).clone();
+            extra.rebind_cluster(cluster_id);
+            comm.merge_from(extra, cluster_id);
+        }
+        let (plans, plan_issues) = crate::model::PlanCache::build(&comm, 1);
+        self.report_model_issues(&name, &comm.issues);
         self.report_model_issues(&name, &plan_issues);
-        self.model_comms[ch] = Some(Arc::new(outcome.comm));
+        self.model_comms[ch] = Some(Arc::new(comm));
         self.model_plans[ch] = Some(Arc::new(plans));
-        self.model_dbs[ch] = Some(db);
+        self.model_dbs[ch] = db;
     }
 
     /// Anchors a matrix-read model to a channel. The model's database guard
@@ -5160,35 +5203,58 @@ impl BusCore {
         }
     }
 
-    fn set_channel_model(&mut self, ch: u8, comm: Arc<crate::model::Comm>) {
+    fn set_channel_model(
+        &mut self,
+        ch: u8,
+        comm: Option<Arc<crate::model::Comm>>,
+        sources: Vec<crate::model::ClusterSource>,
+    ) {
         let ch = ch as usize;
         if ch >= self.can_count() {
             return;
         }
-        let label = self.can_name(ch);
         if self.model_comms.len() <= ch {
             self.model_comms.resize(ch + 1, None);
             self.model_plans.resize(ch + 1, None);
             self.model_dbs.resize(ch + 1, None);
+            self.can_xml_models.resize(ch + 1, None);
         }
-        while self.can_cluster_ids.len() <= ch {
-            let id = self.cluster_ids.allocate();
-            self.can_cluster_ids.push(id);
+        self.can_xml_models[ch] = comm;
+        let cluster_id = self.can_cluster_ids[ch];
+        let (bitrate, fd) = self.can_bitrates(ch);
+        let name = self.can_name(ch);
+        // Keep the DBC sources, replace the document-derived ones, so the
+        // cluster lists exactly the descriptions bound to this bus.
+        let dbc: Vec<_> = self
+            .can_cluster(ch)
+            .map(|cluster| {
+                cluster
+                    .sources
+                    .iter()
+                    .filter(|source| matches!(source, crate::model::ClusterSource::Dbc { .. }))
+                    .cloned()
+                    .collect()
+            })
+            .unwrap_or_default();
+        let mut combined = dbc;
+        combined.extend(sources);
+        if self.model_comms[ch].is_none() {
+            self.model_comms[ch] = Some(Arc::new(crate::model::empty_can_comm(
+                &name, cluster_id, &combined, bitrate, fd,
+            )));
+        } else if let Some(current) = self.model_comms[ch].as_mut()
+            && let Some(cluster) = Arc::make_mut(current).clusters.get_mut(&cluster_id)
+        {
+            cluster.sources = combined;
         }
-        let mut comm = (*comm).clone();
-        comm.rebind_cluster(self.can_cluster_ids[ch]);
-        let cluster = self.can_cluster_ids[ch];
-        for node in &mut self.nodes {
-            if node.channel as usize == ch {
-                node.refresh_named_signals_from_model(&comm, cluster);
+        self.rebuild_can_model(ch);
+        if let Some(current) = self.model_comms[ch].as_ref() {
+            for node in &mut self.nodes {
+                if node.channel as usize == ch {
+                    node.refresh_named_signals_from_model(current, cluster_id);
+                }
             }
         }
-        let (plans, plan_issues) = crate::model::PlanCache::build(&comm, 1);
-        self.report_model_issues(&label, &comm.issues);
-        self.report_model_issues(&label, &plan_issues);
-        self.model_comms[ch] = Some(Arc::new(comm));
-        self.model_plans[ch] = Some(Arc::new(plans));
-        self.model_dbs[ch] = None;
     }
 
     fn set_fr_model(&mut self, bus: u8, comm: Arc<crate::model::Comm>) {
@@ -5868,6 +5934,7 @@ impl BusCore {
             self.model_comms.remove(ch);
             self.model_plans.remove(ch);
             self.model_dbs.remove(ch);
+            self.can_xml_models.remove(ch);
         }
         if ch < self.can_cluster_ids.len() {
             self.can_cluster_ids.remove(ch);

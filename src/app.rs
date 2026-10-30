@@ -382,6 +382,7 @@ impl App {
                 ))));
             core.model_plans.push(None);
             core.model_dbs.push(None);
+            core.can_xml_models.push(None);
         }
         core.bootstrap_dbcs();
         core.populate_generator();
