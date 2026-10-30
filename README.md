@@ -27,7 +27,7 @@ Rate/Signals/Monitor/Data/State 标签页、下栏 Statistics/Bus/Spec/Write，
 - **Kvaser / Vector 硬件连接**：Buses… 选通道即连接；通道被别的程序占用时自动降级为仅接收并在行上标注；CAN FD 按总线的数据段波特率申请，硬件不支持就降级经典并标注。连接期间收到的帧照常进入所有视图，真实节点不必被模拟。发送被线路拒绝不再是静默的：第一次写入 Write 带驱动给的原因，之后只在 Buses 行上累计次数。
 - **FlexRay**：可同时监听多路，每路一份自己的集群描述（FIBEX 2.x/3.x 或 AUTOSAR ARXML，中文编码无碍）。帧名与信号都按该路的描述解码，与 CAN 帧在 Trace 里按时间混排；Messages 逐帧给计数与周期均值±抖动，负载与规格照常判定；信号可订阅画曲线、进 State Tracker；帧到达与信号越阈都能作触发条件。**目前仅接收**：生成器条目、脚本与 Panel Setpoint 发的 FlexRay 帧只进入本会话（所有视图与录制都看得见），但不出端口、不会被另一台设备收到。
 - **车载以太网**：Buses 加载 AUTOSAR Ethernet 矩阵（ARXML），离线 BLF 的以太网帧按 VLAN/长度/EtherType 匹配帧定义并解码 PDU/I-Signal；帧与 CAN/FlexRay 在 Trace 同表按时间混排，Messages/Statistics 有 flow 行，信号可订阅画曲线；Panel Setpoint 可写 Ethernet 信号，但只注入本会话（合成 MAC、矩阵 VLAN、EtherType 或无声明时 0x88B5），没有发送端口；Trace 导出 `.pcap`（MAC/VLAN/EtherType/载荷），ASC 导出负责 CAN/FlexRay。`FRAME-LENGTH 含 L2 头` 随工程保存。
-- **统一 ARXML 导入**：Buses 的 **Add cluster** 菜单（ARXML / FlexRay FIBEX / Ethernet ARXML）一次读取文件里的相应 cluster，各自建一路并分配持久化的 cluster id；CAN ARXML 读标识符/帧类、帧→PDU、I-Signal、compu/单位与物理量程、PDU 周期、ECU 端口发送方和 `SW-BASE-TYPE` 的符号/浮点编码；FlexRay 的 `COMPU-METHOD` 限值也换算成物理量程。文档里的统一模型（含 mux/container 结构）直接送进核心，DBC/FIBEX 只作同一模型的适配器；只读不写回。
+- **统一 ARXML 导入**：Buses 的 **Add cluster** 菜单（ARXML / FlexRay FIBEX / Ethernet ARXML）一次读取文件里的相应 cluster，各自建一路并分配持久化的 cluster id；CAN ARXML 读标识符/帧类、帧→PDU、I-Signal、compu/单位与物理量程、PDU 周期、ECU 端口发送方和 `SW-BASE-TYPE` 的符号/浮点编码；FlexRay 的 `COMPU-METHOD` 限值也换算成物理量程。文档里的统一模型（含 mux/container 结构、Signal Group、update indication bit、E2E 计数与 Transformation 引用）直接送进核心；解码/编码与 Messages/Trace/Statistics/Buses 元数据都以模型为准，DBC/FIBEX 只作同一模型的适配器；只读不写回。
 - **回放块**：依附于 DBC 节点——把该节点录制过的日志按 id 过滤后重新发到仿真总线上，按录制间距发送，仿真 restbus 的落地方案。
 - **仿真节点**：类 CAPL 的小语言编译执行，`on start` / `on message` / `on fr slot` / `on timer` / `on errorFrame` 事件驱动，读写 DBC 信号、收发帧、随机与波形内建。`frame(Bus.Frame)` 可创建多个独立帧实例，写物理信号字段后用 `send_frame` 一次发一帧（CAN 走节点总线，FR/ETH 只进本会话）。每个回调有指令预算，有缺陷的脚本不会卡住总线，出错节点自动停止运行。可绑定到 DBC 节点，绑定后能否发送由该节点的角色决定。编辑器三栏：处理器大纲、静态收发事实表、函数与报文速插。语言参考见 [docs/script_language.md](docs/script_language.md)，可运行示例见 `examples/`。
 - **派生信号**：脚本 `emit_value("名", 表达式)` 一行发布，像数据库信号一样进 Signals / Data / State Tracker。
@@ -35,8 +35,8 @@ Rate/Signals/Monitor/Data/State 标签页、下栏 Statistics/Bus/Spec/Write，
 - **Monitor 监控面板**：轻量纯文本行，一行一个信号，行内阈值着色规则让"温度超 90 变红"这类告警一眼可见。
 - **State Tracker**：对订阅信号的历史做状态分段——枚举标签、二进制方波、会话稳定配色，支持自定义区间与固定颜色，短区段按最短显示时长合并，区段表可导出 CSV。
 - **Write 窗口**：整系统一条滚动输出——节点 `print`、装配层检查与告警、节点停止的错误、命令事件分色带时间戳；可按类别过滤、导出文本。
-- **录制与回放**：读写 Vector ASC 与 BLF（经典 / FD / 错误 / 远程帧，以及 FlexRay 收帧），自家录的文件放回去是同一批帧；`--convert` 纯流式转码。播放器式控制——倍速增减、as-fast-as-possible、按步长单步、播放指定时长或到指定时间后自动暂停（都只向前）；按时间戳顺序调度，不做进度条随机跳转。别人的日志只带通道编号，Buses 窗口底部的**回放通道映射**把那些编号指到本工程的各路（CAN、FlexRay、以太网各一张表，随工程保存）。录制支持按 id 过滤（CAN 写 hex、FlexRay 写 `FR0:13`）。
-- **工程文件（.rxproj）**：总线与 DBC、观测窗口及过滤、信号选择、生成器配置、触发器、窗口布局全存一个 JSON（schema v2，cluster 带持久化 id；回放映射、generator 与 trigger 行也按 cluster id 记录，旧工程打开时一次性迁移）；DBC 路径相对工程目录，工程文件夹可整体移动。
+- **录制与回放**：读写 Vector ASC 与 BLF（经典 / FD / 错误 / 远程帧，以及 FlexRay 收帧），自家录的文件放回去是同一批帧；`--convert` 纯流式转码。播放器式控制——倍速增减、as-fast-as-possible、按步长单步、播放指定时长或到指定时间后自动暂停（都只向前）；按时间戳顺序调度，不做进度条随机跳转。别人的日志只带通道编号，Buses 窗口底部的**回放通道映射**把那些编号指到本工程的各路（CAN、FlexRay、以太网各一张表；表项存 cluster id，删/加路不重编号，随工程保存）。录制支持按 id 过滤（CAN 写 hex、FlexRay 写 `FR0:13`）。
+- **工程文件（.rxproj）**：总线与 DBC、观测窗口及过滤、信号选择、生成器配置、触发器、窗口布局全存一个 JSON（schema v2，cluster 带持久化 id；回放映射表项存 cluster id、播放时再解析成路，generator 与 trigger 行也按 cluster id 记录，旧工程打开时一次性迁移）；DBC 路径相对工程目录，工程文件夹可整体移动。
 - **中文字体**：Web UI 跟随系统中文输入与显示。
 
 ## Web 快捷键
