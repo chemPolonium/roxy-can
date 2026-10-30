@@ -218,7 +218,7 @@ pub struct App {
     /// driver automatically (USB replug without pressing Refresh).
     pnp_signature: Option<Vec<String>>,
     last_pnp_poll: Instant,
-    /// Config JSON snapshot of the last clean state (loaded/saved/reset);
+    /// ProjectV2 JSON snapshot of the last clean state (loaded/saved/reset);
     /// compared against the live config to decide if anything changed.
     pub(crate) baseline: String,
     pub replay_speed: f64,
