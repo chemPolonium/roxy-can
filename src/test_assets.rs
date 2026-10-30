@@ -74,6 +74,10 @@ fn ensure() {
             "PowerTrain2_v2.xml",
             crate::test_assets_data::POWERTRAIN_FIBEX2_GZ,
         );
+        write_gzip(
+            "system-4.2.arxml",
+            crate::test_assets_data::SYSTEM_42_ARXML_GZ,
+        );
         std::fs::write(dir.join("EthSample.arxml"), ETH_ARXML).expect("write EthSample.arxml");
     });
 }
@@ -192,6 +196,12 @@ fn ensure_logs() {
 
 pub fn eth_arxml() -> &'static str {
     path("EthSample.arxml")
+}
+
+/// The cantools AUTOSAR 4.2 system extract: SecOC with a PDU-TRIGGERING
+/// payload and E2E declared through DATA-TRANSFORMATION-SET.
+pub fn system42_arxml() -> &'static str {
+    path("system-4.2.arxml")
 }
 
 pub fn logging_asc() -> &'static str {

@@ -746,3 +746,39 @@ fn a_42_secured_payload_triggering_and_group_e2e_are_read() {
         comm.issues
     );
 }
+
+/// The whole cantools 4.2 extract, not a hand-made excerpt: its SecOC PDU
+/// points at a PDU-TRIGGERING and its E2E is declared on signal groups.
+#[test]
+fn the_real_42_system_extract_imports_secured_and_group_e2e() {
+    let text = std::fs::read_to_string(crate::test_assets::system42_arxml()).expect("corpus");
+    let comm = import(&text, "Cluster0", 1);
+    assert_eq!(comm.frames.len(), 8, "every triggered frame is imported");
+    let secured = comm
+        .pdus
+        .values()
+        .find(|pdu| pdu.name == "message3_secured")
+        .expect("secured pdu");
+    let meta = secured.secured.as_ref().expect("secured meta");
+    assert_eq!(meta.data_id, Some(1337));
+    assert_eq!(meta.auth_info_length, Some(10));
+    assert!(
+        meta.payload.is_some(),
+        "PAYLOAD-REF -> PDU-TRIGGERING -> I-PDU-REF resolves"
+    );
+    let group = comm
+        .groups
+        .values()
+        .find(|group| group.name == "message3Group")
+        .expect("group");
+    let e2e = group.e2e.as_ref().expect("group E2E");
+    assert_eq!(e2e.profile_name, "Profile5");
+    assert_eq!(e2e.profile, Some(5));
+    assert_eq!(e2e.data_ids, vec![321]);
+    assert!(
+        comm.issues
+            .iter()
+            .any(|issue| issue.message.contains("counter continuity is not planned")),
+        "no silent drop of the group-level declaration"
+    );
+}
