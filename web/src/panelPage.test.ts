@@ -5,7 +5,6 @@ import {
   PAGE_WIDTH,
   PANEL_FILE_FORMAT,
   PANEL_WIDGET_KINDS,
-  addPanelButton,
   addPanelPage,
   addPanelPageFromFile,
   addPanelWidget,
@@ -155,7 +154,7 @@ describe("panel page", () => {
 
   it("adds a free button and reports a full page", () => {
     const page = defaultPanelPage();
-    const added = addPanelButton(page);
+    const added = addPanelWidget(page, "button");
     expect(added).not.toBeNull();
     expect(added?.page.widgets).toHaveLength(page.widgets.length + 1);
     expect(added?.page.widgets.some((widget) => widget.id === added.id)).toBe(
@@ -177,7 +176,7 @@ describe("panel page", () => {
         },
       ],
     };
-    expect(addPanelButton(full)).toBeNull();
+    expect(addPanelWidget(full, "button")).toBeNull();
   });
 
   it("updates labels/actions and removes widgets", () => {

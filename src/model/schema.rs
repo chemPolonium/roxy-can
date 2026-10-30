@@ -6,7 +6,6 @@
 //! typed fields here; there is no compatibility bucket.
 
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 use std::collections::BTreeMap;
 
 use super::{ClusterId, ClusterKind, ClusterSource, ElementIds, ElementKind, FrameOverride};
@@ -324,17 +323,6 @@ impl ProjectV2 {
             clusters,
             ..Self::default()
         }
-    }
-
-    pub fn is_v2(value: &Value) -> bool {
-        value
-            .get("version")
-            .and_then(Value::as_u64)
-            .is_some_and(|v| v == u64::from(PROJECT_VERSION))
-            || value
-                .get("format")
-                .and_then(Value::as_str)
-                .is_some_and(|f| f == PROJECT_FORMAT)
     }
 
     pub fn cluster(&self, id: ClusterId) -> Option<&ClusterCfg> {

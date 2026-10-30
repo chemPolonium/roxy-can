@@ -805,7 +805,7 @@ SecOC 没有逐帧的额外校验：头、secured area 与认证长度在建计�
 | --- | --- |
 | `src/model/mod.rs` | 实体、ID newtype、Comm 查询/完整性检查、导入器 trait |
 | `src/model/id.rs` | 确定性元素 ID、改名绑定、集群 ID 分配 |
-| `src/model/key.rs` | `SignalKey` / `SignalRef`、`sig:` 文本、`[Cluster:Frame:Signal]` 别名（无旧 key 解析） |
+| `src/observe.rs` | `SigKey`、`sig:` / `derived:` 文本；只接受规范 key，无旧总线编号文本 |
 | `src/model/schema.rs` | schema v2 DTO、字段校验、`idAliases`、帧覆盖、回放映射 |
 | `src/model/arxml.rs` | 统一 ARXML 读取器（三协议 cluster/帧触发/PDU/信号/compu/ECU/端口/高级 PDU 模型） |
 | `src/model/dbc_import.rs` | DBC → CAN cluster 适配器 |

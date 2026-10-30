@@ -562,7 +562,7 @@ pub struct ProjectSettings {
 /// The project-file fields a signal key writes: the CAN triple, or the
 /// FlexRay bus in `ch` with its slot in `fr_slot`, or the Ethernet bus in
 /// `ch` with the frame name in `eth_frame`. The bus is resolved from the
-/// key's cluster; these v1 fields keep their old numbering.
+/// key's cluster; these fields keep the bus numbering.
 fn sig_cfg_of(
     app: &App,
     key: &SigKey,
@@ -589,22 +589,22 @@ fn sig_cfg_of(
     }
 }
 
-/// The bus-count to cluster map a v1 window field set is rebuilt against.
+/// The bus-count to cluster map a window field set is rebuilt against.
 struct KeyMaps<'a> {
     can: &'a [u32],
     fr: &'a std::collections::BTreeMap<u8, u32>,
     eth: &'a std::collections::BTreeMap<u8, u32>,
 }
 
-/// The v1 placement fields shared by a curve/row and a Monitor row.
-struct LegacySlot<'a> {
+/// The placement fields shared by a curve/row and a Monitor row.
+struct SignalSlot<'a> {
     fr_slot: Option<u16>,
     eth_frame: Option<&'a str>,
     derived: Option<&'a str>,
     signal: &'a str,
 }
 
-impl LegacySlot<'_> {
+impl SignalSlot<'_> {
     fn key(&self, maps: &KeyMaps<'_>, ch: u8, id: u32, ext: bool) -> SigKey {
         if let Some(id) = self.derived {
             return SigKey::derived(id, self.signal);
@@ -627,7 +627,7 @@ impl LegacySlot<'_> {
 }
 
 fn sig_key(maps: &KeyMaps<'_>, s: &SignalCfg) -> SigKey {
-    LegacySlot {
+    SignalSlot {
         fr_slot: s.fr_slot,
         eth_frame: s.eth_frame.as_deref(),
         derived: s.derived.as_deref(),
@@ -1001,8 +1001,8 @@ impl ProjectSettings {
                 text_rows: Vec::new(),
             })
             .collect();
-        // The snapshot's cluster ids are the only bus-count-to-cluster map the
-        // v1 window fields can be rebuilt against.
+        // The snapshot's cluster ids are the bus-count-to-cluster map the
+        // window fields are rebuilt against.
         let can_ids = app.snap.cluster_ids.can.clone();
         let fr_ids = app.snap.cluster_ids.fr.clone();
         let eth_ids = app.snap.cluster_ids.eth.clone();
@@ -1051,7 +1051,7 @@ impl ProjectSettings {
                 .monitor_rows
                 .into_iter()
                 .map(|m| crate::app::MonitorRow {
-                    key: LegacySlot {
+                    key: SignalSlot {
                         fr_slot: m.fr_slot,
                         eth_frame: m.eth_frame.as_deref(),
                         derived: m.derived.as_deref(),

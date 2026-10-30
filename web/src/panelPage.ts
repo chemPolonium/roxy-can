@@ -1645,9 +1645,3 @@ export function duplicatePanelWidget(
   return pastePanelWidget(page, widget);
 }
 
-/// Kept for the default-page helpers and older callers.
-export function addPanelButton(
-  page: PanelPage,
-): { page: PanelPage; id: string } | null {
-  return addPanelWidget(page, "button");
-}

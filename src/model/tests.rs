@@ -469,7 +469,6 @@ fn schema_v2_roundtrips_the_workspace_section() {
     let parsed: ProjectV2 = serde_json::from_value(value).unwrap();
     assert_eq!(parsed, project);
     assert!(parsed.validate().is_empty(), "{:?}", parsed.validate());
-    assert!(ProjectV2::is_v2(&serde_json::to_value(&parsed).unwrap()));
 }
 
 #[test]

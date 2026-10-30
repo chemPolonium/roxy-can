@@ -5463,12 +5463,12 @@ impl BusCore {
     ) -> Option<Vec<crate::dbc::DecodedSignal>> {
         let comm = self.fr_models.get(&row.bus)?;
         let plans = self.fr_model_plans.get(&row.bus)?;
-        let legacy = self.fr_dbs.get(&row.bus)?;
+        let db = self.fr_dbs.get(&row.bus)?;
         let model_db = self.fr_model_dbs.get(&row.bus)?;
-        if !Arc::ptr_eq(model_db, legacy) {
+        if !Arc::ptr_eq(model_db, db) {
             return None;
         }
-        let frame_name = &legacy.frame_index(frame_ix)?.name;
+        let frame_name = &db.frame_index(frame_ix)?.name;
         let cluster = self.fr_cluster_ids.get(&row.bus).copied()?;
         let frame = comm.frame_by_name(cluster, frame_name)?;
         let plan = plans.get(frame.id)?;
@@ -5516,9 +5516,9 @@ impl BusCore {
     ) -> Option<Vec<crate::dbc::DecodedSignal>> {
         let comm = self.eth_models.get(&bus)?;
         let plans = self.eth_model_plans.get(&bus)?;
-        let legacy = self.eth_dbs.get(&bus)?;
+        let db = self.eth_dbs.get(&bus)?;
         let model_db = self.eth_model_dbs.get(&bus)?;
-        if !Arc::ptr_eq(model_db, legacy) {
+        if !Arc::ptr_eq(model_db, db) {
             return None;
         }
         let cluster = self.eth_cluster_ids.get(&bus).copied()?;
@@ -6251,9 +6251,9 @@ impl BusCore {
     ) -> Option<Result<Vec<u8>, String>> {
         let comm = self.fr_models.get(&bus)?;
         let plans = self.fr_model_plans.get(&bus)?;
-        let legacy = self.fr_dbs.get(&bus)?;
+        let db = self.fr_dbs.get(&bus)?;
         let model_db = self.fr_model_dbs.get(&bus)?;
-        if !Arc::ptr_eq(model_db, legacy) {
+        if !Arc::ptr_eq(model_db, db) {
             return None;
         }
         let cluster = self.fr_cluster_ids.get(&bus).copied()?;
@@ -6324,9 +6324,9 @@ impl BusCore {
     ) -> Option<Result<Vec<u8>, String>> {
         let comm = self.eth_models.get(&bus)?;
         let plans = self.eth_model_plans.get(&bus)?;
-        let legacy = self.eth_dbs.get(&bus)?;
+        let db = self.eth_dbs.get(&bus)?;
         let model_db = self.eth_model_dbs.get(&bus)?;
-        if !Arc::ptr_eq(model_db, legacy) {
+        if !Arc::ptr_eq(model_db, db) {
             return None;
         }
         let cluster = self.eth_cluster_ids.get(&bus).copied()?;
