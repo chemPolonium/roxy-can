@@ -20,7 +20,7 @@ CAN/FlexRay/Ethernet 的首选描述来源，DBC/FIBEX 只作为导入适配器�
 > derived/web 已迁为 typed v2 段，Trace 手选帧也按 cluster id 保存；生产解码路径
 > （含 Reference 与 CLI 导出）已全部走模型；观测键与 CAN 报文聚合都以 cluster 为身份，
 > 键文本一律写 `sig:` 规范形态，旧 `ch:id:name` / `fr:` / `eth:` 文本仍可读入。
-> 硬件端口按物理路号寻址（附件跟随通道/簇，未重跑 VN1610 复验）与旧表结构清理仍未完成（FR/ETH 承载已删，只剩 CAN `Channel` + 约 50 处描述表元数据读取）。逐项状态见 [`docs/autosar-model.md`](autosar-model.md) 第 10 节。
+> 硬件端口按物理路号寻址（附件跟随通道/簇，未重跑 VN1610 复验）。旧表结构清理已完成：`Channel`/`FrBusCfg`/`EthBusCfg` 均已删除，CAN 通道就是模型里的 cluster（名称、位率、描述路径、节点角色都落在模型/按 `ClusterId` 的核心映射），生产路径没有描述表回退。剩余：VN1610 复验与真实 SecOC/E2E/Transformation 语料。逐项状态见 [`docs/autosar-model.md`](autosar-model.md) 第 10 节。
 
 ## 1. 原则
 
@@ -28,7 +28,7 @@ CAN/FlexRay/Ethernet 的首选描述来源，DBC/FIBEX 只作为导入适配器�
   importer/adapter，但它们只向最终模型供料。
 - **只读参考 roxy-arxml**：借鉴模型、字段与解析语义，不移植编辑、导出、
   写回、RXA 布局代码。
-- **旧的按协议分空间只作为输入**：切换期间 `Channel` 可以继续工作，但不再新增依赖它的公开接口；FR/ETH 的 `FrBusCfg`/`EthBusCfg` 已删除。
+- **旧的按协议分空间只作为输入**：切换期间 `Channel` 曾可继续工作；现在 `Channel`/`FrBusCfg`/`EthBusCfg` 都已删除，CAN 通道直接由模型 cluster 承载。
 - **每一切片可构建、可测试、可回退**：主分支不长期处于“只有底层没有 UI”
   的状态；大改不采用一次性大爆炸合并。
 
@@ -59,9 +59,10 @@ CAN/FlexRay/Ethernet 的首选描述来源，DBC/FIBEX 只作为导入适配器�
 
 - ARXML 导入已能一次扫描 CAN/FlexRay/Ethernet cluster，并分别落到三种
   内部总线（`src/channel.rs::import_arxml_path`）。
-- 运行时仍是三套模型：CAN `Vec<Channel>`，FR/ETH 各自
+- 运行时曾是三套模型：CAN `Vec<Channel>`，FR/ETH 各自
   `BTreeMap<bus, Cfg>`；`SigKey` 按 `Can {ch}` / `Fr {bus}` / `Eth {bus}`
-  分空间（`src/observe.rs`）。
+  分空间（`src/observe.rs`）。迁移已完成：三协议都以 cluster 为身份，CAN
+  通道的配置也来自模型，`Channel`/`FrBusCfg`/`EthBusCfg` 已不存在。
 - Buses 的 **Add bus** 只接 CAN（`web/src/components/BusesModal.tsx`）；
   FR/ETH 入口分散在各自的 Load database 区域。
 - CAN ARXML 解析器（`src/can_arxml.rs`）目前先转成 DBC 形状的

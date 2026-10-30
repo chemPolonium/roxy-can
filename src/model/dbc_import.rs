@@ -52,17 +52,16 @@ pub fn import_dbc(
     import_symbol_table(&db, cluster_name, cluster_id, source, ids, 500, 2000)
 }
 
-/// Builds the unified model from an already-parsed DBC table. The bus core
-/// holds parsed tables, not source text, so this is the runtime entry.
-pub fn import_symbol_table(
-    db: &SymbolTable,
+/// A cluster with no frames yet: a CAN channel exists even before (or
+/// without) a database, and its name, bitrate and source paths still have to
+/// live somewhere the rest of the model can read.
+pub fn empty_can_comm(
     cluster_name: &str,
     cluster_id: ClusterId,
-    source: &ClusterSource,
-    ids: &mut ElementIds,
+    sources: &[ClusterSource],
     bitrate_kbps: u32,
     fd_data_kbps: u32,
-) -> ImportOutcome {
+) -> Comm {
     let mut comm = Comm::default();
     let network_id = NetworkId(cluster_id.0);
     comm.clusters.insert(
@@ -73,7 +72,7 @@ pub fn import_symbol_table(
             name: cluster_name.to_string(),
             aliases: Vec::new(),
             description: String::new(),
-            sources: vec![source.clone()],
+            sources: sources.to_vec(),
             networks: vec![network_id],
         },
     );
@@ -90,6 +89,51 @@ pub fn import_symbol_table(
             }),
         },
     );
+    comm
+}
+
+/// Builds the unified model from an already-parsed DBC table. The bus core
+/// holds parsed tables, not source text, so this is the runtime entry.
+pub fn import_symbol_table(
+    db: &SymbolTable,
+    cluster_name: &str,
+    cluster_id: ClusterId,
+    source: &ClusterSource,
+    ids: &mut ElementIds,
+    bitrate_kbps: u32,
+    fd_data_kbps: u32,
+) -> ImportOutcome {
+    import_symbol_table_sources(
+        db,
+        cluster_name,
+        cluster_id,
+        std::slice::from_ref(source),
+        ids,
+        bitrate_kbps,
+        fd_data_kbps,
+    )
+}
+
+/// [`import_symbol_table`] with every attached database file, not just the
+/// primary: a channel may merge several DBCs, and the model's cluster has to
+/// list the same sources.
+pub fn import_symbol_table_sources(
+    db: &SymbolTable,
+    cluster_name: &str,
+    cluster_id: ClusterId,
+    sources: &[ClusterSource],
+    ids: &mut ElementIds,
+    bitrate_kbps: u32,
+    fd_data_kbps: u32,
+) -> ImportOutcome {
+    let mut comm = empty_can_comm(
+        cluster_name,
+        cluster_id,
+        sources,
+        bitrate_kbps,
+        fd_data_kbps,
+    );
+    let network_id = NetworkId(cluster_id.0);
     if !db.nodes.is_empty() {
         for node in &db.nodes {
             let _ = ecu(&mut comm, ids, cluster_id, node);

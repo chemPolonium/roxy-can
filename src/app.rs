@@ -42,7 +42,7 @@ pub const REPLAY_SPEEDS: [f64; 5] = [0.5, 1.0, 2.0, 4.0, f64::INFINITY];
 pub(crate) const DEFAULT_TX_CYCLE_US: u64 = 100_000;
 
 pub use crate::aggregate::MessageAgg;
-pub use crate::channel::{Channel, NodeRole};
+pub use crate::channel::NodeRole;
 #[cfg(test)]
 pub use crate::generator::cycle_from_ms_text;
 #[cfg(test)]
@@ -364,27 +364,25 @@ impl App {
             crate::load::BusLoad::new(),
             crate::load::BusLoad::new(),
         ]);
-        core.channels = vec![
-            Channel {
-                name: "CAN1".to_string(),
-                dbc_paths: vec!["builtin:sample.dbc".to_string()],
-                dbc_sums: Vec::new(),
-                node_roles: std::collections::BTreeMap::new(),
-                bitrate_kbps: Channel::DEFAULT_BITRATE_KBPS,
-                fd_data_kbps: Channel::DEFAULT_FD_DATA_KBPS,
-            },
-            Channel {
-                name: "CAN2".to_string(),
-                dbc_paths: vec!["builtin:motbus.dbc".to_string()],
-                dbc_sums: Vec::new(),
-                node_roles: std::collections::BTreeMap::new(),
-                bitrate_kbps: Channel::DEFAULT_BITRATE_KBPS,
-                fd_data_kbps: Channel::DEFAULT_FD_DATA_KBPS,
-            },
-        ];
-        core.can_cluster_ids = (0..core.channels.len())
-            .map(|_| core.cluster_ids.allocate())
-            .collect();
+        for (name, path) in [
+            ("CAN1", "builtin:sample.dbc"),
+            ("CAN2", "builtin:motbus.dbc"),
+        ] {
+            let cluster = core.cluster_ids.allocate();
+            core.can_cluster_ids.push(cluster);
+            core.model_comms
+                .push(Some(std::sync::Arc::new(crate::model::empty_can_comm(
+                    name,
+                    cluster,
+                    &[crate::model::ClusterSource::Dbc {
+                        path: path.to_string(),
+                    }],
+                    crate::model::CanParams::DEFAULT_BITRATE_KBPS,
+                    crate::model::CanParams::DEFAULT_FD_DATA_KBPS,
+                ))));
+            core.model_plans.push(None);
+            core.model_dbs.push(None);
+        }
         core.bootstrap_dbcs();
         core.populate_generator();
         core

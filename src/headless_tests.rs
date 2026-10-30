@@ -965,7 +965,7 @@ fn the_threaded_core_honors_node_roles_and_replay_blocks() {
 #[test]
 fn the_threaded_core_restores_a_saved_project_at_startup() {
     let mut saved = App::headless();
-    saved.channels[0].name = "Powertrain".to_string();
+    saved.set_can_name_for_test(0, "Powertrain");
     saved.refresh_snapshot();
     saved.add_signal_trigger();
     let path = std::env::temp_dir().join("roxy_can_threaded_restore.rxproj");

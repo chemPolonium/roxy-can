@@ -38,7 +38,9 @@ mod tests;
 #[allow(unused_imports)]
 pub use arxml::{ArxmlImporter, ScannedCluster, import_cluster, scan_clusters};
 #[allow(unused_imports)]
-pub use dbc_import::{DbcImporter, import_dbc, import_symbol_table};
+pub use dbc_import::{
+    DbcImporter, empty_can_comm, import_dbc, import_symbol_table, import_symbol_table_sources,
+};
 #[allow(unused_imports)]
 pub use id::{ClusterIds, ElementIds, ElementKind};
 #[allow(unused_imports)]
@@ -170,6 +172,9 @@ pub struct CanParams {
 }
 
 impl CanParams {
+    pub const DEFAULT_BITRATE_KBPS: u32 = 500;
+    pub const DEFAULT_FD_DATA_KBPS: u32 = 2000;
+
     pub fn supports_fd(&self) -> bool {
         self.fd_data_kbps > 0
     }

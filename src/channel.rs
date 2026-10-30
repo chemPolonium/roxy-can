@@ -1,7 +1,6 @@
-//! One CAN bus: user identity, its DBC, and the bitrate declarations the
-//! load view divides wire bits by.
-
-use std::collections::BTreeMap;
+//! CAN bus helpers: the node-role model and the App-side per-bus actions.
+//! A bus itself is a model cluster; its configuration lives in `Comm` and in
+//! core maps keyed by `ClusterId`, not in a parallel struct here.
 
 use crate::dbc::SymbolTable;
 
@@ -40,60 +39,6 @@ impl NodeRole {
     /// the loader drops rather than guessing.
     pub fn parse(s: &str) -> Option<NodeRole> {
         NodeRole::ALL.iter().copied().find(|r| r.tag() == s)
-    }
-}
-
-/// One CAN bus: user-defined name, a DBC database, the path it came from, and
-/// the DBC nodes this tool transmits as. The parsed database is shared as an
-/// `Arc`: it is immutable once loaded, and snapshots hand the frontend the
-/// same allocation instead of a copy.
-pub struct Channel {
-    pub name: String,
-    /// The primary path (UI-editable) plus any extra databases attached
-    /// to this bus. First entry is the primary; on duplicate message ids
-    /// the earlier database wins.
-    pub dbc_paths: Vec<String>,
-    /// Content checksums of `dbc_paths`, kept in sync so external edits
-    /// to a DBC file can be detected and the database reloaded.
-    pub dbc_sums: Vec<u64>,
-    /// Per-node roles declared on this bus. Only deviations from the
-    /// default are stored: a missing entry *is* the `Absent` role, so
-    /// restbus is the default behaviour rather than a configuration.
-    /// `BTreeMap` keeps the project file's key order stable.
-    pub node_roles: BTreeMap<String, NodeRole>,
-    /// Arbitration bitrate in kbit/s, as the load view divides wire bits by
-    /// it. There is no hardware behind the simulation, so the value is a
-    /// declaration about the bus being analysed, not a device setting.
-    pub bitrate_kbps: u32,
-    /// CAN FD data-phase bitrate in kbit/s, applied to BRS frames only.
-    pub fd_data_kbps: u32,
-}
-
-impl Channel {
-    pub const DEFAULT_BITRATE_KBPS: u32 = 500;
-    pub const DEFAULT_FD_DATA_KBPS: u32 = 2000;
-
-    /// The role declared for `node`; every node without an entry is
-    /// `Absent` -- that is the restbus default, not a stored state.
-    pub fn role_of(&self, node: &str) -> NodeRole {
-        self.node_roles
-            .get(node)
-            .copied()
-            .unwrap_or(NodeRole::Absent)
-    }
-
-    /// Records a role. `Absent` removes the entry: the map holds only
-    /// deviations from the default, and a node's role outliving its
-    /// database is meaningless anyway.
-    pub fn set_node_role(&mut self, node: &str, role: NodeRole) {
-        match role {
-            NodeRole::Absent => {
-                self.node_roles.remove(node);
-            }
-            r => {
-                self.node_roles.insert(node.to_string(), r);
-            }
-        }
     }
 }
 
@@ -715,7 +660,7 @@ impl App {
                                     let bus = next_can as u8;
                                     let bitrate = parsed
                                         .bitrate_kbps
-                                        .unwrap_or(crate::app::Channel::DEFAULT_BITRATE_KBPS);
+                                        .unwrap_or(crate::model::CanParams::DEFAULT_BITRATE_KBPS);
                                     self.send(crate::bus::BusCommand::AddChannelWithDbc {
                                         name: name.clone(),
                                         dbc: std::sync::Arc::new(parsed.db),

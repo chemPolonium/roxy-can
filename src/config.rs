@@ -101,11 +101,11 @@ pub struct ChannelCfg {
 }
 
 fn default_bitrate() -> u32 {
-    crate::app::Channel::DEFAULT_BITRATE_KBPS
+    crate::model::CanParams::DEFAULT_BITRATE_KBPS
 }
 
 fn default_fd_data_bitrate() -> u32 {
-    crate::app::Channel::DEFAULT_FD_DATA_KBPS
+    crate::model::CanParams::DEFAULT_FD_DATA_KBPS
 }
 
 /// One window's hand-picked subjects as the file stores them: the two buses
@@ -1891,7 +1891,7 @@ mod tests {
         assert_eq!(restored.tx_list[0].cycle_us, 50_000);
         assert!(restored.tx_list[0].flags.contains(FrameFlags::FD));
         assert!(restored.tx_list[0].flags.contains(FrameFlags::BRS));
-        assert_eq!(restored.channels.len(), app.channels.len());
+        assert_eq!(restored.can_count(), app.can_count());
     }
 
     /// A project with no analysis windows gets none back: an empty saved list
@@ -2343,8 +2343,8 @@ mod tests {
     #[test]
     fn node_roles_round_trip_without_starting_traffic() {
         let mut app = App::headless();
-        app.channels[1].set_node_role("ABS", NodeRole::Absent);
-        app.channels[1].set_node_role("GearBox", NodeRole::Simulated);
+        app.set_role_for_test(1, "ABS", NodeRole::Absent);
+        app.set_role_for_test(1, "GearBox", NodeRole::Simulated);
         app.refresh_snapshot();
         let json = serde_json::to_string(&Config::from_app(&app, None)).unwrap();
         let mut restored = App::headless();
@@ -2352,22 +2352,22 @@ mod tests {
             .unwrap()
             .apply(&mut restored);
         assert_eq!(
-            restored.channels[1].role_of("ABS"),
+            restored.can_role_of(1, "ABS"),
             NodeRole::Absent,
             "an offline node stays offline"
         );
         assert_eq!(
-            restored.channels[1].role_of("GearBox"),
+            restored.can_role_of(1, "GearBox"),
             NodeRole::Simulated,
             "a simulated node keeps its declaration"
         );
         assert_eq!(
-            restored.channels[1].role_of("DashBoard"),
+            restored.can_role_of(1, "DashBoard"),
             NodeRole::Absent,
             "an undeclared node is absent, not an error"
         );
         assert!(
-            restored.channels[0].node_roles.is_empty(),
+            restored.can_node_roles(0).is_empty(),
             "the other bus keeps its own map"
         );
         assert!(
@@ -2501,19 +2501,18 @@ mod tests {
     #[test]
     fn bitrates_round_trip() {
         let mut app = App::headless();
-        app.channels[0].bitrate_kbps = 1_000;
-        app.channels[0].fd_data_kbps = 5_000;
+        app.set_can_bitrates_for_test(0, Some(1_000), Some(5_000));
         app.refresh_snapshot();
         let json = serde_json::to_string(&Config::from_app(&app, None)).unwrap();
         let mut restored = App::headless();
         serde_json::from_str::<Config>(&json)
             .unwrap()
             .apply(&mut restored);
-        assert_eq!(restored.channels[0].bitrate_kbps, 1_000);
-        assert_eq!(restored.channels[0].fd_data_kbps, 5_000);
+        assert_eq!(restored.can_bitrates(0).0, 1_000);
+        assert_eq!(restored.can_bitrates(0).1, 5_000);
         assert_eq!(
-            restored.channels[1].bitrate_kbps,
-            crate::app::Channel::DEFAULT_BITRATE_KBPS,
+            restored.can_bitrates(1).0,
+            crate::model::CanParams::DEFAULT_BITRATE_KBPS,
             "the other bus keeps its own rate"
         );
     }
@@ -2526,11 +2525,11 @@ mod tests {
             serde_json::from_str(r#"{"channels":[{"name":"A","dbc_path":"sample.dbc"}]}"#).unwrap();
         assert_eq!(
             cfg.channels[0].bitrate_kbps,
-            crate::app::Channel::DEFAULT_BITRATE_KBPS
+            crate::model::CanParams::DEFAULT_BITRATE_KBPS
         );
         assert_eq!(
             cfg.channels[0].fd_data_kbps,
-            crate::app::Channel::DEFAULT_FD_DATA_KBPS
+            crate::model::CanParams::DEFAULT_FD_DATA_KBPS
         );
     }
 
@@ -2742,7 +2741,7 @@ mod tests {
         };
         let text = serde_json::to_string(&proj).unwrap();
         let back: ProjectFile = serde_json::from_str(&text).unwrap();
-        assert_eq!(back.config.channels.len(), app.channels.len());
+        assert_eq!(back.config.channels.len(), app.can_count());
     }
 
     /// 回放通道映射随工程存：日志里只有通道编号，那是录它的那个人工程里的

@@ -8,7 +8,7 @@ use std::sync::Arc;
 use crate::aggregate::MessageAgg;
 use crate::app::{Mode, SAMPLE_INTERVAL_US, TRACE_LIMIT};
 use crate::can::frame::{CanFrame, Direction};
-use crate::channel::{Channel, NodeRole};
+use crate::channel::NodeRole;
 use crate::dbc::DecodedSignal;
 use crate::generator::{FrTxMsg, TxMsg};
 use crate::observe::{SigKey, Subscription};
@@ -1043,7 +1043,7 @@ pub struct ChannelView {
 
 impl ChannelView {
     /// The role declared for `node`; every node without an entry is
-    /// `Absent` -- the restbus default. Mirrors `Channel::role_of` so
+    /// `Absent` -- the restbus default. Mirrors `BusCore::role_in` so
     /// frontend reads never touch live bus state.
     pub fn role_of(&self, node: &str) -> NodeRole {
         self.node_roles
@@ -1237,16 +1237,24 @@ pub struct BusCore {
     /// 已经报过"这一路没有对应的总线"的文件通道：一句话只说一次，同一条规矩
     /// 适用于发送被线路拒绝的总线（一秒几千条会把状态行埋掉）。
     pub(crate) drop_news_done: std::collections::HashSet<u8>,
-    pub(crate) channels: Vec<Channel>,
-    /// Unified-model view of each CAN channel, aligned with `channels`.
-    /// `None` until a database is loaded.
+    /// Per-cluster state that is not part of the imported description:
+    /// content checksums that detect external DBC edits, and the simulated
+    /// node roles. Keyed by the stable cluster id, so removing a bus never
+    /// renumbers anything.
+    pub(crate) can_sums: std::collections::BTreeMap<crate::model::ClusterId, Vec<u64>>,
+    pub(crate) can_node_roles: std::collections::BTreeMap<
+        crate::model::ClusterId,
+        std::collections::BTreeMap<String, NodeRole>,
+    >,
+    /// Unified-model view of each CAN channel, aligned with
+    /// `can_cluster_ids`. Every channel has one (a channel without a
+    /// database is an empty cluster); only a loaded database gives it plans.
     pub(crate) model_comms: Vec<Option<Arc<crate::model::Comm>>>,
     /// Flattened decode plans for `model_comms`, same alignment.
     pub(crate) model_plans: Vec<Option<Arc<crate::model::PlanCache>>>,
     /// The exact database Arc each model was built from. A direct replacement
-    /// of `Channel::dbc` (tests, or a future path that bypasses the load
-    /// helpers) must fall back to the legacy decoder rather than decode with
-    /// a stale model.
+    /// of the table (tests, or a path that bypasses the load helpers) must
+    /// drop the plans rather than decode with a stale model.
     pub(crate) model_dbs: Vec<Option<Arc<crate::dbc::SymbolTable>>>,
     /// Global cluster ids for the CAN channels, aligned with `channels`; and
     /// per-bus ids for the FR/ETH maps. Allocated once and never reused.
@@ -1524,12 +1532,7 @@ fn derived_key_bus(key: &SigKey, core: &BusCore) -> String {
     match key {
         SigKey::Can { .. } => core
             .key_bus(key)
-            .map(|ch| {
-                core.channels
-                    .get(ch as usize)
-                    .map(|channel| channel.name.clone())
-                    .unwrap_or_else(|| format!("CAN{}", ch + 1))
-            })
+            .map(|ch| core.can_name(ch as usize))
             .unwrap_or_else(|| "CAN".to_string()),
         SigKey::Fr { .. } => core
             .key_bus(key)
@@ -1634,7 +1637,8 @@ impl BusCore {
             replay_map: crate::replay_map::ReplayMap::default(),
             log_census: crate::replay_map::LogCensus::default(),
             drop_news_done: std::collections::HashSet::new(),
-            channels: Vec::new(),
+            can_sums: Default::default(),
+            can_node_roles: Default::default(),
             model_comms: Vec::new(),
             model_plans: Vec::new(),
             model_dbs: Vec::new(),
@@ -1808,7 +1812,7 @@ impl BusCore {
             } => {
                 if !self.measuring {
                     *status = "[panel] sending a frame needs a running measurement".to_string();
-                } else if channel as usize >= self.channels.len() {
+                } else if channel as usize >= self.can_count() {
                     *status = format!("[panel] CAN channel {channel} does not exist");
                 } else if extended && id > 0x1fff_ffff {
                     *status = "[panel] extended IDs stop at 0x1FFFFFFF".to_string();
@@ -2251,6 +2255,7 @@ impl BusCore {
             BusCommand::SetEthModel { bus, comm } => self.set_eth_model(bus, comm),
             BusCommand::SetClusterIds { next, can, fr, eth } => {
                 self.cluster_ids = crate::model::ClusterIds::new(next);
+                let old_can = std::mem::take(&mut self.can_cluster_ids);
                 self.can_cluster_ids = can.into_iter().map(crate::model::ClusterId).collect();
                 self.fr_cluster_ids = fr
                     .into_iter()
@@ -2260,14 +2265,29 @@ impl BusCore {
                     .into_iter()
                     .map(|(bus, id)| (bus, crate::model::ClusterId(id)))
                     .collect();
-                while self.can_cluster_ids.len() < self.channels.len() {
-                    let id = self.cluster_ids.allocate();
-                    self.can_cluster_ids.push(id);
+                // Roles and checksums follow their channel to the restored id;
+                // the model's own references are rebound below.
+                let roles = std::mem::take(&mut self.can_node_roles);
+                let sums = std::mem::take(&mut self.can_sums);
+                for (index, old) in old_can.iter().enumerate() {
+                    let Some(id) = self.can_cluster_ids.get(index).copied() else {
+                        break;
+                    };
+                    if let Some(v) = roles.get(old) {
+                        self.can_node_roles.insert(id, v.clone());
+                    }
+                    if let Some(v) = sums.get(old) {
+                        self.can_sums.insert(id, v.clone());
+                    }
                 }
-                for index in 0..self.channels.len() {
+                for index in 0..self.can_count() {
                     self.model_comms.resize(index + 1, None);
                     self.model_plans.resize(index + 1, None);
                     self.model_dbs.resize(index + 1, None);
+                    let id = self.can_cluster_ids[index];
+                    if let Some(comm) = self.model_comms[index].as_mut() {
+                        Arc::make_mut(comm).rebind_cluster(id);
+                    }
                     self.rebuild_can_model(index);
                 }
                 self.rebuild_fr_models();
@@ -2608,12 +2628,11 @@ impl BusCore {
             } => self.set_entry_config(ch, id, active, cycle_us, fd, flags, data_text, srcs),
             #[cfg(test)]
             BusCommand::ClearDatabases => {
-                for c in &mut self.channels {
-                    c.dbc_paths.clear();
+                for ch in 0..self.can_count() {
+                    self.set_can_paths(ch, Vec::new());
+                    self.set_can_table(ch, None);
                 }
-                self.model_comms.clear();
-                self.model_plans.clear();
-                self.model_dbs.clear();
+                self.can_sums.clear();
                 self.tx_list.clear();
                 self.subs.clear();
                 for runtime in &mut self.derived {
@@ -3012,9 +3031,12 @@ impl BusCore {
             // 绑定脚本的发帧受所属 DBC 节点的角色开关：节点离线时脚本同样
             // 不发送（模拟 = 允许发送）。
             let script_allowed = node.attached.as_ref().is_none_or(|(ach, anode)| {
-                self.channels
-                    .get(*ach as usize)
-                    .is_some_and(|c| c.role_of(anode) == NodeRole::Simulated)
+                Self::role_in(
+                    &self.can_cluster_ids,
+                    &self.can_node_roles,
+                    *ach as usize,
+                    anode,
+                ) == NodeRole::Simulated
             });
             for (id, ext, data) in node.run_timers(now_us, &input) {
                 let frame = Self::node_frame(node.channel, id, ext, &data, self.sim_t_us);
@@ -3081,9 +3103,12 @@ impl BusCore {
                 }
                 ran += count;
                 let script_allowed = node.attached.as_ref().is_none_or(|(ach, anode)| {
-                    self.channels
-                        .get(*ach as usize)
-                        .is_some_and(|c| c.role_of(anode) == NodeRole::Simulated)
+                    Self::role_in(
+                        &self.can_cluster_ids,
+                        &self.can_node_roles,
+                        *ach as usize,
+                        anode,
+                    ) == NodeRole::Simulated
                 });
                 if script_allowed {
                     for (id, ext, data) in &node_out {
@@ -3160,9 +3185,12 @@ impl BusCore {
         for node in &mut self.nodes {
             // 绑定脚本的发帧受所属 DBC 节点的角色开关（见 run_node_timers）。
             let script_allowed = node.attached.as_ref().is_none_or(|(ach, anode)| {
-                self.channels
-                    .get(*ach as usize)
-                    .is_some_and(|c| c.role_of(anode) == NodeRole::Simulated)
+                Self::role_in(
+                    &self.can_cluster_ids,
+                    &self.can_node_roles,
+                    *ach as usize,
+                    anode,
+                ) == NodeRole::Simulated
             });
             let node_out =
                 node.dispatch_frame(f.channel, f.id, f.extended, f.is_error(), data, input);
@@ -3240,9 +3268,12 @@ impl BusCore {
             // The same role gate as the CAN path: a script bound to a DBC node
             // whose ECU is not simulated does not get to answer either bus.
             let script_allowed = node.attached.as_ref().is_none_or(|(ach, anode)| {
-                self.channels
-                    .get(*ach as usize)
-                    .is_some_and(|c| c.role_of(anode) == NodeRole::Simulated)
+                Self::role_in(
+                    &self.can_cluster_ids,
+                    &self.can_node_roles,
+                    *ach as usize,
+                    anode,
+                ) == NodeRole::Simulated
             });
             let input = inputs.get(&node.channel).cloned().unwrap_or_default();
             let node_out = node.dispatch_fr_row(row.bus, row.slot, row.cycle, &row.payload, &input);
@@ -3949,7 +3980,7 @@ impl BusCore {
             replay_census_can: self.log_census.rows(crate::replay_map::LogBusKind::Can),
             replay_census_fr: self.log_census.rows(crate::replay_map::LogBusKind::Fr),
             replay_census_eth: self.log_census.rows(crate::replay_map::LogBusKind::Eth),
-            channel_count: self.channels.len(),
+            channel_count: self.can_count(),
             cluster_ids: self.cluster_ids_view(),
             model_frames: self.model_frames_view(),
             e2e: self.e2e_tracks.clone(),
@@ -4006,17 +4037,17 @@ impl BusCore {
                 })
                 .collect(),
             last_record: self.recorder.last_record.clone(),
-            channels: self
-                .channels
-                .iter()
-                .enumerate()
-                .map(|(index, c)| ChannelView {
-                    name: c.name.clone(),
-                    dbc_paths: c.dbc_paths.clone(),
-                    bitrate_kbps: c.bitrate_kbps,
-                    fd_data_kbps: c.fd_data_kbps,
-                    node_roles: c.node_roles.clone(),
-                    dbc: self.model_dbs.get(index).and_then(|db| db.clone()),
+            channels: (0..self.can_count())
+                .map(|index| {
+                    let (bitrate_kbps, fd_data_kbps) = self.can_bitrates(index);
+                    ChannelView {
+                        name: self.can_name(index),
+                        dbc_paths: self.can_paths(index),
+                        bitrate_kbps,
+                        fd_data_kbps,
+                        node_roles: self.can_node_roles(index),
+                        dbc: self.model_dbs.get(index).and_then(|db| db.clone()),
+                    }
                 })
                 .collect(),
             mode: self.mode,
@@ -4099,7 +4130,7 @@ impl BusCore {
                         node: t.node.clone(),
                         active: t.active,
                         gate_open: t.node.is_empty()
-                            || self.channels[t.channel as usize].role_of(&t.node)
+                            || self.can_role_of(t.channel as usize, &t.node)
                                 == crate::app::NodeRole::Simulated,
                         fd: t.flags.contains(crate::can::frame::FrameFlags::FD),
                         brs: t.flags.contains(crate::can::frame::FrameFlags::BRS),
@@ -4208,6 +4239,204 @@ impl BusCore {
     /// Starts caching one signal: a fresh [`Subscription`] gets the next
     /// palette color and the database's display type. An existing
     /// subscription for the key is left untouched.
+    /// How many CAN channels exist. The cluster-id list *is* the channel
+    /// list: there is no parallel configuration vector.
+    pub(crate) fn can_count(&self) -> usize {
+        self.can_cluster_ids.len()
+    }
+
+    /// The cluster a CAN channel names in the model.
+    pub(crate) fn can_cluster(&self, ch: usize) -> Option<&crate::model::Cluster> {
+        let comm = self.model_comms.get(ch)?.as_deref()?;
+        comm.clusters.get(self.can_cluster_ids.get(ch)?)
+    }
+
+    /// The channel's model, empty when no database is attached.
+    pub(crate) fn can_comm(&self, ch: usize) -> Option<&crate::model::Comm> {
+        self.model_comms.get(ch)?.as_deref()
+    }
+
+    /// The user-facing channel name, from its cluster.
+    pub(crate) fn can_name(&self, ch: usize) -> String {
+        self.can_cluster(ch)
+            .map(|cluster| cluster.name.clone())
+            .unwrap_or_else(|| format!("CAN{}", ch + 1))
+    }
+
+    /// The channel's attached DBC paths, primary first. ARXML/FIBEX sources
+    /// are model provenance, not database files to parse as DBC.
+    pub(crate) fn can_paths(&self, ch: usize) -> Vec<String> {
+        self.can_cluster(ch)
+            .map(|cluster| {
+                cluster
+                    .sources
+                    .iter()
+                    .filter_map(|source| match source {
+                        crate::model::ClusterSource::Dbc { path } => Some(path.clone()),
+                        _ => None,
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// Arbitration and FD data-phase bitrates in kbit/s.
+    pub(crate) fn can_bitrates(&self, ch: usize) -> (u32, u32) {
+        self.can_comm(ch)
+            .and_then(|comm| {
+                comm.networks
+                    .values()
+                    .find_map(|network| match &network.params {
+                        crate::model::NetworkParams::Can(params) => {
+                            Some((params.bitrate_kbps, params.fd_data_kbps))
+                        }
+                        _ => None,
+                    })
+            })
+            .unwrap_or((
+                crate::model::CanParams::DEFAULT_BITRATE_KBPS,
+                crate::model::CanParams::DEFAULT_FD_DATA_KBPS,
+            ))
+    }
+
+    /// The node-role declarations of one channel; empty means restbus.
+    pub(crate) fn can_node_roles(&self, ch: usize) -> std::collections::BTreeMap<String, NodeRole> {
+        self.can_cluster_ids
+            .get(ch)
+            .and_then(|cluster| self.can_node_roles.get(cluster))
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    /// The role declared for `node` on one channel; every node without an
+    /// entry is `Absent` -- the restbus default, not a stored state.
+    pub(crate) fn can_role_of(&self, ch: usize, node: &str) -> NodeRole {
+        Self::role_in(&self.can_cluster_ids, &self.can_node_roles, ch, node)
+    }
+
+    /// Test-only setters: fixtures that used to poke the removed bus
+    /// configuration struct now write the model the same way the commands do.
+    #[cfg(test)]
+    pub(crate) fn set_can_name_for_test(&mut self, ch: usize, name: &str) {
+        self.update_can_comm(ch, |comm| {
+            for cluster in comm.clusters.values_mut() {
+                cluster.name = name.to_string();
+            }
+            for network in comm.networks.values_mut() {
+                network.name = name.to_string();
+            }
+        });
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_can_bitrates_for_test(
+        &mut self,
+        ch: usize,
+        bitrate: Option<u32>,
+        fd: Option<u32>,
+    ) {
+        self.update_can_comm(ch, |comm| {
+            for network in comm.networks.values_mut() {
+                if let crate::model::NetworkParams::Can(params) = &mut network.params {
+                    if let Some(k) = bitrate {
+                        params.bitrate_kbps = k;
+                    }
+                    if let Some(k) = fd {
+                        params.fd_data_kbps = k;
+                    }
+                }
+            }
+        });
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_role_for_test(&mut self, ch: usize, node: &str, role: NodeRole) {
+        let Some(cluster) = self.can_cluster_ids.get(ch).copied() else {
+            return;
+        };
+        match role {
+            NodeRole::Absent => {
+                if let Some(roles) = self.can_node_roles.get_mut(&cluster) {
+                    roles.remove(node);
+                }
+            }
+            role => {
+                self.can_node_roles
+                    .entry(cluster)
+                    .or_default()
+                    .insert(node.to_string(), role);
+            }
+        }
+    }
+
+    /// Field-level form of [`Self::can_role_of`] for call sites that already
+    /// hold a mutable borrow of another `BusCore` field (the node loop).
+    pub(crate) fn role_in(
+        ids: &[crate::model::ClusterId],
+        roles: &std::collections::BTreeMap<
+            crate::model::ClusterId,
+            std::collections::BTreeMap<String, NodeRole>,
+        >,
+        ch: usize,
+        node: &str,
+    ) -> NodeRole {
+        ids.get(ch)
+            .and_then(|cluster| roles.get(cluster))
+            .and_then(|roles| roles.get(node))
+            .copied()
+            .unwrap_or(NodeRole::Absent)
+    }
+
+    /// Replaces the channel's description paths in its cluster's sources.
+    fn set_can_paths(&mut self, ch: usize, paths: Vec<String>) {
+        let Some(cluster) = self.can_cluster_ids.get(ch).copied() else {
+            return;
+        };
+        let Some(comm) = self.model_comms.get_mut(ch).and_then(Option::as_mut) else {
+            return;
+        };
+        if let Some(cluster) = Arc::make_mut(comm).clusters.get_mut(&cluster) {
+            let keep: Vec<_> = cluster
+                .sources
+                .iter()
+                .filter(|source| !matches!(source, crate::model::ClusterSource::Dbc { .. }))
+                .cloned()
+                .collect();
+            cluster.sources = paths
+                .iter()
+                .map(|path| crate::model::ClusterSource::Dbc { path: path.clone() })
+                .chain(keep)
+                .collect();
+        }
+    }
+
+    /// Applies a settings change to the channel's cluster/network in place.
+    fn update_can_comm(&mut self, ch: usize, update: impl FnOnce(&mut crate::model::Comm)) {
+        if ch >= self.can_cluster_ids.len() {
+            return;
+        }
+        while self.model_comms.len() <= ch {
+            self.model_comms.push(None);
+            self.model_plans.push(None);
+            self.model_dbs.push(None);
+        }
+        if self.model_comms[ch].is_none() {
+            let (bitrate, fd) = self.can_bitrates(ch);
+            let name = self.can_name(ch);
+            let cluster = self.can_cluster_ids[ch];
+            self.model_comms[ch] = Some(Arc::new(crate::model::empty_can_comm(
+                &name,
+                cluster,
+                &[],
+                bitrate,
+                fd,
+            )));
+        }
+        if let Some(comm) = self.model_comms[ch].as_mut() {
+            update(Arc::make_mut(comm));
+        }
+    }
+
     /// A CAN key carrying the channel's cluster id, for canonical wire text.
     /// The model a node's buffer builtins encode/decode through, when the
     /// channel has one built from its current table.
@@ -4223,7 +4452,7 @@ impl BusCore {
     }
 
     fn can_codec_map(&self) -> std::collections::HashMap<u8, crate::node::CanCodec> {
-        (0..self.channels.len() as u8)
+        (0..self.can_count() as u8)
             .filter_map(|ch| self.can_codec(ch).map(|codec| (ch, codec)))
             .collect()
     }
@@ -4622,21 +4851,25 @@ impl BusCore {
     /// generator from the database.
     fn add_channel(&mut self, status: &mut String) {
         self.bus_counter += 1;
-        self.channels.push(Channel {
-            name: format!("CAN{}", self.bus_counter),
-            dbc_paths: vec!["builtin:sample.dbc".to_string()],
-            dbc_sums: Vec::new(),
-            node_roles: std::collections::BTreeMap::new(),
-            bitrate_kbps: Channel::DEFAULT_BITRATE_KBPS,
-            fd_data_kbps: Channel::DEFAULT_FD_DATA_KBPS,
-        });
-        self.model_comms.push(None);
-        self.can_cluster_ids.push(self.cluster_ids.allocate());
+        let name = format!("CAN{}", self.bus_counter);
+        let cluster = self.cluster_ids.allocate();
+        self.can_cluster_ids.push(cluster);
+        let sources: Vec<crate::model::ClusterSource> = vec![crate::model::ClusterSource::Dbc {
+            path: "builtin:sample.dbc".to_string(),
+        }];
+        self.model_comms
+            .push(Some(Arc::new(crate::model::empty_can_comm(
+                &name,
+                cluster,
+                &sources,
+                crate::model::CanParams::DEFAULT_BITRATE_KBPS,
+                crate::model::CanParams::DEFAULT_FD_DATA_KBPS,
+            ))));
         self.model_plans.push(None);
         self.model_dbs.push(None);
         self.bus_loads.push(crate::load::BusLoad::new());
         self.loads_dirty = true;
-        let ch = self.channels.len() - 1;
+        let ch = self.can_count() - 1;
         self.load_channel(ch, status);
         let ids: Vec<u32> = self.model_dbs[ch]
             .as_ref()
@@ -4658,22 +4891,22 @@ impl BusCore {
         status: &mut String,
     ) {
         self.bus_counter += 1;
-        self.channels.push(Channel {
-            name: name.clone(),
-            dbc_paths: Vec::new(),
-            dbc_sums: Vec::new(),
-            node_roles: std::collections::BTreeMap::new(),
-            bitrate_kbps,
-            fd_data_kbps: Channel::DEFAULT_FD_DATA_KBPS,
-        });
-        self.model_comms.push(None);
-        self.can_cluster_ids.push(self.cluster_ids.allocate());
+        let cluster = self.cluster_ids.allocate();
+        self.can_cluster_ids.push(cluster);
+        self.model_comms
+            .push(Some(Arc::new(crate::model::empty_can_comm(
+                &name,
+                cluster,
+                &[],
+                bitrate_kbps,
+                crate::model::CanParams::DEFAULT_FD_DATA_KBPS,
+            ))));
         self.model_plans.push(None);
         self.model_dbs.push(Some(Arc::clone(&dbc)));
         self.bus_loads.push(crate::load::BusLoad::new());
         self.loads_dirty = true;
         self.nodes_dirty = true;
-        let ch = self.channels.len() - 1;
+        let ch = self.can_count() - 1;
         self.rebuild_can_model(ch);
         self.seed_entries_for_simulated(ch);
         let ids: Vec<u32> = dbc.order.iter().map(|&(id, _)| id).collect();
@@ -4687,12 +4920,14 @@ impl BusCore {
     /// port, name and role declarations alone. The source table's paths are
     /// cleared: the project carries the ARXML path/cluster separately.
     fn set_channel_dbc(&mut self, ch: u8, dbc: Arc<crate::dbc::SymbolTable>, status: &mut String) {
-        let Some(channel) = self.channels.get_mut(ch as usize) else {
+        if ch as usize >= self.can_count() {
             return;
-        };
-        let name = channel.name.clone();
-        channel.dbc_paths.clear();
-        channel.dbc_sums.clear();
+        }
+        let name = self.can_name(ch as usize);
+        self.set_can_paths(ch as usize, Vec::new());
+        if let Some(cluster) = self.can_cluster_ids.get(ch as usize) {
+            self.can_sums.remove(cluster);
+        }
         self.nodes_dirty = true;
         for node in &mut self.nodes {
             if node.channel == ch {
@@ -4711,19 +4946,21 @@ impl BusCore {
     /// database. An empty path list is silent: a bus deliberately
     /// configured without a database is not an error.
     fn load_channel(&mut self, ch: usize, status: &mut String) -> bool {
-        let Some(channel) = self.channels.get_mut(ch) else {
+        if ch >= self.can_count() {
             return false;
-        };
-        if channel.dbc_paths.iter().all(|p| p.trim().is_empty()) {
-            channel.dbc_sums.clear();
+        }
+        let cluster = self.can_cluster_ids[ch];
+        let paths = self.can_paths(ch);
+        if paths.iter().all(|p| p.trim().is_empty()) {
+            self.can_sums.remove(&cluster);
             self.set_can_table(ch, None);
             return false;
         }
-        let name = channel.name.clone();
+        let name = self.can_name(ch);
         let mut tables: Vec<crate::dbc::SymbolTable> = Vec::new();
         let mut sums: Vec<u64> = Vec::new();
         let mut first_error: Option<String> = None;
-        for path in &channel.dbc_paths {
+        for path in &paths {
             let path = path.trim();
             if path.is_empty() {
                 continue;
@@ -4752,7 +4989,7 @@ impl BusCore {
                 }
             }
         }
-        channel.dbc_sums = sums;
+        self.can_sums.insert(cluster, sums);
         let loaded = tables.len();
         let total: usize = tables.iter().map(|t| t.order.len()).sum();
         if tables.is_empty() {
@@ -4791,7 +5028,7 @@ impl BusCore {
         true
     }
 
-    /// Test hook for fixtures that used to assign `Channel::dbc` directly.
+    /// Test hook for fixtures that used to assign a table directly.
     #[cfg(test)]
     pub(crate) fn set_can_table_for_test(
         &mut self,
@@ -4829,33 +5066,31 @@ impl BusCore {
     /// including multiplexed DBC messages (`mux_when`) and containers; the
     /// legacy decoder remains only for a channel whose table has no model.
     pub(crate) fn rebuild_can_model(&mut self, ch: usize) {
-        if self.model_comms.len() <= ch {
-            self.model_comms.resize(ch + 1, None);
-            self.model_plans.resize(ch + 1, None);
-            self.model_dbs.resize(ch + 1, None);
+        while self.model_comms.len() <= ch {
+            self.model_comms.push(None);
+            self.model_plans.push(None);
+            self.model_dbs.push(None);
         }
-        let Some(channel) = self.channels.get(ch) else {
+        if ch >= self.can_cluster_ids.len() {
             return;
-        };
+        }
+        let cluster_id = self.can_cluster_ids[ch];
+        let name = self.can_name(ch);
+        let (bitrate, fd) = self.can_bitrates(ch);
+        let sources = self
+            .can_cluster(ch)
+            .map(|cluster| cluster.sources.clone())
+            .unwrap_or_default();
         let Some(db) = self.model_dbs.get(ch).and_then(|db| db.clone()) else {
-            self.model_comms[ch] = None;
+            self.model_comms[ch] = Some(Arc::new(crate::model::empty_can_comm(
+                &name, cluster_id, &sources, bitrate, fd,
+            )));
             self.model_plans[ch] = None;
             return;
         };
-        let name = channel.name.clone();
-        let bitrate = channel.bitrate_kbps;
-        let fd = channel.fd_data_kbps;
-        let source = crate::model::ClusterSource::Dbc {
-            path: channel.dbc_paths.first().cloned().unwrap_or_default(),
-        };
         let mut ids = crate::model::ElementIds::new();
-        let cluster_id = self
-            .can_cluster_ids
-            .get(ch)
-            .copied()
-            .unwrap_or(crate::model::ClusterId(ch as u32 + 1));
-        let outcome = crate::model::import_symbol_table(
-            &db, &name, cluster_id, &source, &mut ids, bitrate, fd,
+        let outcome = crate::model::import_symbol_table_sources(
+            &db, &name, cluster_id, &sources, &mut ids, bitrate, fd,
         );
         let (plans, plan_issues) = crate::model::PlanCache::build(&outcome.comm, 1);
         self.report_model_issues(&name, &outcome.issues);
@@ -4892,10 +5127,10 @@ impl BusCore {
 
     fn set_channel_model(&mut self, ch: u8, comm: Arc<crate::model::Comm>) {
         let ch = ch as usize;
-        let Some(channel) = self.channels.get(ch) else {
+        if ch >= self.can_count() {
             return;
-        };
-        let label = channel.name.clone();
+        }
+        let label = self.can_name(ch);
         let channel_dbc = self.model_dbs.get(ch).and_then(|db| db.clone());
         if self.model_comms.len() <= ch {
             self.model_comms.resize(ch + 1, None);
@@ -5372,11 +5607,11 @@ impl BusCore {
     /// restore may start traffic by itself; switching the role or the TX
     /// switch is the explicit act that does.
     fn seed_entries_for_simulated(&mut self, ch: usize) {
-        let simulated: Vec<String> = self.channels[ch]
-            .node_roles
-            .iter()
-            .filter(|(_, r)| **r == NodeRole::Simulated)
-            .map(|(n, _)| n.clone())
+        let simulated: Vec<String> = self
+            .can_node_roles(ch)
+            .into_iter()
+            .filter(|(_, r)| *r == NodeRole::Simulated)
+            .map(|(n, _)| n)
             .collect();
         for node in simulated {
             let ids = self.model_tx_ids(ch as u8, &node).unwrap_or_default();
@@ -5394,11 +5629,19 @@ impl BusCore {
     pub(crate) fn maybe_reload_changed_dbcs(&mut self) -> Option<String> {
         // First pass: find buses whose checksum changed (read-only scan).
         let mut to_reload: Vec<usize> = Vec::new();
-        for (ch, channel) in self.channels.iter().enumerate() {
-            if channel.dbc_paths.len() != channel.dbc_sums.len() {
+        for ch in 0..self.can_count() {
+            let paths = self.can_paths(ch);
+            let Some(sums) = self
+                .can_cluster_ids
+                .get(ch)
+                .and_then(|c| self.can_sums.get(c))
+            else {
+                continue;
+            };
+            if paths.len() != sums.len() {
                 continue; // lists out of sync until the next explicit load
             }
-            for (i, path) in channel.dbc_paths.iter().enumerate() {
+            for (i, path) in paths.iter().enumerate() {
                 let path = path.trim();
                 if path.is_empty() {
                     continue;
@@ -5406,7 +5649,7 @@ impl BusCore {
                 let Ok(content) = crate::dbc::read_file(std::path::Path::new(path)) else {
                     continue;
                 };
-                if content_sum(content.as_bytes()) != channel.dbc_sums[i] {
+                if content_sum(content.as_bytes()) != sums[i] {
                     to_reload.push(ch);
                     break; // one reload per bus per sweep
                 }
@@ -5427,10 +5670,10 @@ impl BusCore {
     /// and parses everything in the same stroke -- the path is not really
     /// set until its file has been accepted.
     fn load_dbc(&mut self, ch: u8, paths: Vec<String>, status: &mut String) {
-        let Some(channel) = self.channels.get_mut(ch as usize) else {
+        if ch as usize >= self.can_count() {
             return;
-        };
-        channel.dbc_paths = paths;
+        }
+        self.set_can_paths(ch as usize, paths);
         self.load_channel(ch as usize, status);
     }
 
@@ -5446,33 +5689,54 @@ impl BusCore {
         fd_data_kbps: Option<u32>,
         node_roles: Option<std::collections::BTreeMap<String, crate::app::NodeRole>>,
     ) {
-        let Some(c) = self.channels.get_mut(ch as usize) else {
+        if ch as usize >= self.can_count() {
             return;
-        };
-        if let Some(name) = name {
-            c.name = name;
         }
+        let ch = ch as usize;
         if let Some(p) = dbc_path {
             // Replaces the primary database; any extra attached databases
             // stay on the bus.
-            if c.dbc_paths.is_empty() {
-                c.dbc_paths.push(p);
+            let mut paths = self.can_paths(ch);
+            if paths.is_empty() {
+                paths.push(p);
             } else {
-                c.dbc_paths[0] = p;
+                paths[0] = p;
             }
+            self.set_can_paths(ch, paths);
         }
-        if let Some(k) = bitrate_kbps {
-            c.bitrate_kbps = k.max(1);
-        }
-        if let Some(k) = fd_data_kbps {
-            c.fd_data_kbps = k.max(1);
+        if name.is_some() || bitrate_kbps.is_some() || fd_data_kbps.is_some() {
+            self.update_can_comm(ch, |comm| {
+                for cluster in comm.clusters.values_mut() {
+                    if let Some(name) = &name {
+                        cluster.name = name.clone();
+                    }
+                }
+                for network in comm.networks.values_mut() {
+                    if let Some(name) = &name {
+                        network.name = name.clone();
+                    }
+                    if let crate::model::NetworkParams::Can(params) = &mut network.params {
+                        if let Some(k) = bitrate_kbps {
+                            params.bitrate_kbps = k.max(1);
+                        }
+                        if let Some(k) = fd_data_kbps {
+                            params.fd_data_kbps = k.max(1);
+                        }
+                    }
+                }
+            });
         }
         if let Some(roles) = node_roles {
             // Project restore pins the declarations wholesale. Whether
             // anything transmits is decided by the restored generator
             // rows, so this only records intent -- no entry activation
             // here.
-            c.node_roles = roles;
+            let cluster = self.can_cluster_ids[ch];
+            if roles.is_empty() {
+                self.can_node_roles.remove(&cluster);
+            } else {
+                self.can_node_roles.insert(cluster, roles);
+            }
             self.nodes_dirty = true;
         }
     }
@@ -5521,7 +5785,7 @@ impl BusCore {
     /// ever starts), not a command: there is no frontend yet to receive
     /// the status lines.
     pub(crate) fn bootstrap_dbcs(&mut self) {
-        for ch in 0..self.channels.len() {
+        for ch in 0..self.can_count() {
             let mut status = String::new();
             self.load_channel(ch, &mut status);
         }
@@ -5532,11 +5796,8 @@ impl BusCore {
     /// it runs before the first publish, so a threaded frontend's very
     /// first snapshot already shows the full send table.
     pub(crate) fn populate_generator(&mut self) {
-        let ids: Vec<(u8, u32)> = self
-            .channels
-            .iter()
-            .enumerate()
-            .flat_map(|(ch, _)| {
+        let ids: Vec<(u8, u32)> = (0..self.can_count())
+            .flat_map(|ch| {
                 self.model_dbs
                     .get(ch)
                     .and_then(|db| db.as_ref())
@@ -5553,16 +5814,15 @@ impl BusCore {
     /// Removes bus `ch` and remaps every bus-side, channel-indexed
     /// reference one step down. Window state is the frontend's to remap.
     fn remove_channel(&mut self, ch: usize, status: &mut String) {
-        if self.channels.len() <= 1 {
+        if self.can_count() <= 1 {
             *status = "at least one bus is required".to_string();
             return;
         }
-        if ch >= self.channels.len() {
+        if ch >= self.can_count() {
             return;
         }
-        let name = self.channels[ch].name.clone();
+        let name = self.can_name(ch);
         let removed_cluster = self.can_cluster_ids.get(ch).copied();
-        self.channels.remove(ch);
         if ch < self.model_comms.len() {
             self.model_comms.remove(ch);
             self.model_plans.remove(ch);
@@ -5570,6 +5830,10 @@ impl BusCore {
         }
         if ch < self.can_cluster_ids.len() {
             self.can_cluster_ids.remove(ch);
+        }
+        if let Some(cluster) = removed_cluster {
+            self.can_sums.remove(&cluster);
+            self.can_node_roles.remove(&cluster);
         }
         self.bus_loads.remove(ch);
         self.loads_dirty = true;
@@ -5736,12 +6000,28 @@ impl BusCore {
     /// neither transmits -- and differ in what they declare: a monitor is
     /// present and listening, an absent node is not on the simulated bus.
     fn set_node_role(&mut self, channel: u8, node: &str, role: NodeRole, status: &mut String) {
-        if self.channels.get(channel as usize).is_none() {
+        if channel as usize >= self.can_count() {
             return;
         }
         // The role is recorded first and unconditionally: a node that sends
         // nothing still has to remember what we declared it to be.
-        self.channels[channel as usize].set_node_role(node, role);
+        let cluster = self.can_cluster_ids[channel as usize];
+        match role {
+            NodeRole::Absent => {
+                if let Some(roles) = self.can_node_roles.get_mut(&cluster) {
+                    roles.remove(node);
+                    if roles.is_empty() {
+                        self.can_node_roles.remove(&cluster);
+                    }
+                }
+            }
+            role => {
+                self.can_node_roles
+                    .entry(cluster)
+                    .or_default()
+                    .insert(node.to_string(), role);
+            }
+        }
 
         // Membership comes from the live database, not from each entry's
         // stamped `node`: loading another DBC does not rebuild the generator,
@@ -5763,11 +6043,7 @@ impl BusCore {
             }
         }
         // 切出「模拟」（监听/离线）：条目开/关原样保留，开关关闭即停发。
-        let bus = self
-            .channels
-            .get(channel as usize)
-            .map(|c| c.name.clone())
-            .unwrap_or_else(|| format!("CAN{}", channel + 1));
+        let bus = self.can_name(channel as usize);
         *status = match role {
             NodeRole::Simulated => format!(
                 "simulating {node} on {bus} ({} message(s), entries follow their own switches)",
@@ -6259,10 +6535,8 @@ impl BusCore {
             return self.send_script_eth_frame(bus, parts[1], frame);
         }
         let (channel, name) = if bus_name {
-            let channel = self
-                .channels
-                .iter()
-                .position(|channel| channel.name.eq_ignore_ascii_case(parts[0]))
+            let channel = (0..self.can_count())
+                .find(|ch| self.can_name(*ch).eq_ignore_ascii_case(parts[0]))
                 .ok_or_else(|| format!("unknown CAN bus \"{}\"", parts[0]))?
                 as u8;
             (channel, parts[1])
@@ -7039,7 +7313,7 @@ impl BusCore {
                         t.active
                             && t.cycle_us != 0
                             && (t.node.is_empty()
-                                || self.channels[t.channel as usize].role_of(&t.node)
+                                || self.can_role_of(t.channel as usize, &t.node)
                                     == NodeRole::Simulated)
                     })
                     .map(|t| t.next_t_us)
@@ -7144,8 +7418,8 @@ impl BusCore {
             let can_ids = self.can_cluster_ids.clone();
             let fr_ids = self.fr_cluster_ids.clone();
             let eth_ids = self.eth_cluster_ids.clone();
+            let buses = self.can_count();
             let census = &mut self.log_census;
-            let buses = self.channels.len();
             let mut unaimed: Vec<u8> = Vec::new();
             self.buf.retain_mut(|f| {
                 census.bump(LogBusKind::Can, f.channel);
@@ -7271,11 +7545,8 @@ impl BusCore {
         // a recording of this same simulation interleaves two senders of one
         // signal and every consumer sees their mixed values. Only consulted
         // in Replay mode, so nothing to restore when the run ends.
-        let channels = &self.channels;
-        let models: Vec<Option<ModelHandle>> = channels
-            .iter()
-            .enumerate()
-            .map(|(index, _)| {
+        let models: Vec<Option<ModelHandle>> = (0..self.can_count())
+            .map(|index| {
                 let cluster = *self.can_cluster_ids.get(index)?;
                 let comm = self.model_comms.get(index)?.as_ref()?;
                 let plans = self.model_plans.get(index)?.as_ref()?;
@@ -7297,7 +7568,12 @@ impl BusCore {
             // 发送；未分配条目（无 node 戳）不受角色开关约束。开关关闭时发送循环不运行、
             // next_t_us 冻结，切回模拟由 set_node_role 锚定排程。
             let gate_open = tx.node.is_empty()
-                || channels[tx.channel as usize].role_of(&tx.node) == NodeRole::Simulated;
+                || Self::role_in(
+                    &self.can_cluster_ids,
+                    &self.can_node_roles,
+                    tx.channel as usize,
+                    &tx.node,
+                ) == NodeRole::Simulated;
             // Every slot the clock has passed goes out at its own stamp.
             // Skipping the backlog after a UI stall (the old policy) kept the
             // tick cheap but punched a hole into the bus's own timeline --
@@ -7645,11 +7921,11 @@ impl BusCore {
         // growing on the Buses row; one line per refused frame would bury every
         // other news in the log, and a dead wire refuses thousands a second.
         for (bus, reason) in self.hw.take_tx_fail_news() {
-            let name = self
-                .channels
-                .get(bus as usize)
-                .map(|c| c.name.clone())
-                .unwrap_or_else(|| format!("bus {}", bus + 1));
+            let name = if (bus as usize) < self.can_count() {
+                self.can_name(bus as usize)
+            } else {
+                format!("bus {}", bus + 1)
+            };
             self.write_push(
                 WriteKind::Error,
                 format!("{name}: transmit refused by the wire: {reason} (reported once; count is in Buses)"),
@@ -7940,11 +8216,8 @@ impl BusCore {
         self.frame_counter += 1;
         // Error frames included: they occupy the bus and the load view
         // counts them; per-message aggregation below skips them.
+        let (arb, data) = self.can_bitrates(f.channel as usize);
         if let Some(load) = self.bus_loads.get_mut(f.channel as usize) {
-            let (arb, data) = {
-                let ch = &self.channels[f.channel as usize];
-                (ch.bitrate_kbps, ch.fd_data_kbps)
-            };
             let wire = crate::load::wire_time_us(&f, arb, data);
             load.note(&f, wire);
         }

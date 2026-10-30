@@ -1368,16 +1368,16 @@ fn an_event_triggered_message_is_never_auto_sent() {
 #[test]
 fn simulated_node_state_follows_the_bus_it_lives_on() {
     let mut app = App::headless();
-    app.channels[0].set_node_role("EngineECU", NodeRole::Simulated);
-    app.channels[1].set_node_role("ABS", NodeRole::Simulated);
+    app.set_role_for_test(0, "EngineECU", NodeRole::Simulated);
+    app.set_role_for_test(1, "ABS", NodeRole::Simulated);
     app.remove_channel(0);
     assert_eq!(
-        app.channels[0].role_of("ABS"),
+        app.can_role_of(0, "ABS"),
         NodeRole::Simulated,
         "the survivor keeps its own nodes instead of inheriting the deleted bus's"
     );
     assert_eq!(
-        app.channels[0].role_of("EngineECU"),
+        app.can_role_of(0, "EngineECU"),
         NodeRole::Absent,
         "the removed bus's declarations go with it"
     );
@@ -1697,7 +1697,7 @@ fn a_monitoring_node_declares_presence_without_traffic() {
         "its entries survive, ready for a return to Simulated"
     );
     assert!(
-        !app.channels[1].node_roles.contains_key("GearBox"),
+        !app.can_node_roles(1).contains_key("GearBox"),
         "absent stays the stored default: no entry, no traffic"
     );
 }
@@ -1785,7 +1785,7 @@ fn a_node_with_no_name_simulates_nothing() {
 
     app.set_node_role(0, "", NodeRole::Simulated);
     assert!(
-        app.channels[0].node_roles.is_empty(),
+        app.can_node_roles(0).is_empty(),
         "not even recorded as a tick"
     );
     assert!(
@@ -2550,8 +2550,8 @@ fn the_spec_report_export_includes_its_premises_and_rows() {
 #[test]
 fn two_channels_aggregate_separately() {
     let mut app = App::headless();
-    assert_eq!(app.channels.len(), 2);
-    for (ch, _) in app.channels.iter().enumerate() {
+    assert_eq!(app.can_count(), 2);
+    for ch in 0..app.can_count() {
         assert!(
             app.channel_dbc(ch as u8).is_some(),
             "CAN{} should load its DBC",
@@ -2960,13 +2960,13 @@ fn a_flexray_row_is_filtered_by_the_value_its_frame_carries() {
 #[test]
 fn channels_can_be_added_removed_and_renamed() {
     let mut app = App::headless();
-    assert_eq!(app.channels.len(), 2);
-    app.channels[0].name = "Powertrain".to_string();
+    assert_eq!(app.can_count(), 2);
+    app.set_can_name_for_test(0, "Powertrain");
     app.refresh_snapshot();
     assert_eq!(app.channel_name(0), "Powertrain");
 
     app.add_channel();
-    assert_eq!(app.channels.len(), 3);
+    assert_eq!(app.can_count(), 3);
     assert_eq!(app.channel_name(2), "CAN3");
 
     let cluster = crate::model::ClusterId(app.snap.cluster_ids.can[1]);
@@ -3006,7 +3006,7 @@ fn channels_can_be_added_removed_and_renamed() {
     let w = app.trace_windows[0].clone();
 
     app.remove_channel(0);
-    assert_eq!(app.channels.len(), 2);
+    assert_eq!(app.can_count(), 2);
     assert_eq!(app.channel_name(0), "CAN2", "remaining buses shift down");
     assert!(
         app.aggs.contains_key(&(
@@ -3040,10 +3040,10 @@ fn channels_can_be_added_removed_and_renamed() {
         "a FlexRay cluster scope is not a CAN channel index and does not move"
     );
 
-    while app.channels.len() > 1 {
+    while app.can_count() > 1 {
         app.remove_channel(0);
     }
-    assert_eq!(app.channels.len(), 1, "last bus cannot be removed");
+    assert_eq!(app.can_count(), 1, "last bus cannot be removed");
 }
 
 #[test]
@@ -3676,7 +3676,7 @@ fn dropping_a_dbc_loads_it_into_the_first_bus() {
     // **attaches** the new database as an extra instead of replacing it.
     app.open_dropped(std::path::Path::new(motbus));
     assert_eq!(
-        app.channels[0].dbc_paths,
+        app.can_paths(0),
         ["builtin:sample.dbc".to_string(), motbus.to_string()]
     );
     assert!(
@@ -3688,7 +3688,7 @@ fn dropping_a_dbc_loads_it_into_the_first_bus() {
     // Dropping the same file again never duplicates the attach.
     app.open_dropped(std::path::Path::new(motbus));
     assert_eq!(
-        app.channels[0].dbc_paths.len(),
+        app.can_paths(0).len(),
         2,
         "an already-attached path is not re-added"
     );
@@ -3720,9 +3720,8 @@ fn new_project_starts_completely_empty() {
     let mut app = App::headless();
     app.new_project();
     assert!(
-        (0..app.channels.len()).all(|ch| {
-            app.channel_dbc(ch as u8).is_none() && app.channels[ch].dbc_paths.is_empty()
-        }),
+        (0..app.can_count())
+            .all(|ch| { app.channel_dbc(ch as u8).is_none() && app.can_paths(ch).is_empty() }),
         "no DBCs on any bus"
     );
     assert!(app.trace_windows.is_empty());
@@ -3739,13 +3738,13 @@ fn new_project_starts_completely_empty() {
 fn a_contended_mailbox_keeps_last_frames_snapshot() {
     let mut app = App::headless();
     assert_eq!(app.channel_name(0), "CAN1");
-    app.channels[0].name = "Renamed".to_string();
+    app.set_can_name_for_test(0, "Renamed");
     app.refresh_snapshot();
     assert_eq!(app.channel_name(0), "Renamed");
 
     // A newer snapshot is published while the reader is mid-read: the
     // try-read bows out (None) instead of waiting on the bus.
-    app.channels[0].name = "Renamed again".to_string();
+    app.set_can_name_for_test(0, "Renamed again");
     let newer = std::sync::Arc::new(app.snapshot());
     let mut guard = app.mail.lock().unwrap();
     *guard = newer;
@@ -3807,7 +3806,7 @@ fn project_round_trips_through_an_rxproj_file() {
     restored.open_project_path(&path);
     assert_eq!(restored.project_path.as_deref(), Some(path.as_path()));
     assert_eq!(restored.trace_windows[0].filter, "Motor");
-    assert_eq!(restored.channels.len(), app.channels.len());
+    assert_eq!(restored.can_count(), app.can_count());
     assert_eq!(restored.tx_list.len(), app.tx_list.len());
     std::fs::remove_file(&path).ok();
 }
@@ -5445,7 +5444,7 @@ fn a_brs_payload_gets_cheaper_at_a_faster_data_phase() {
     );
     // Same frames, data phase throttled to the arbitration rate: all 607
     // bits at 500 kbit/s = 1214 碌s -> 12.14 %.
-    app.channels[0].fd_data_kbps = 500;
+    app.set_can_bitrates_for_test(0, None, Some(500));
     for load in &mut app.bus_loads {
         load.clear();
     }
