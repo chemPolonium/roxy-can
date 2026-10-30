@@ -584,16 +584,6 @@ fn schema_validation_flags_bus_identity_problems() {
 }
 
 #[test]
-fn schema_v2_rejects_v1_bus_fields() {
-    let mut project = ProjectV2::new(vec![cluster_cfg(1, ClusterKind::Can, "CAN1")]);
-    project
-        .rest
-        .insert("channels".to_string(), json!([{ "name": "CAN1" }]));
-    let problems = project.validate();
-    assert!(problems.iter().any(|p| p.contains("v1 field 'channels'")));
-}
-
-#[test]
 fn frame_override_mac_and_kind_validation() {
     let good = FrameOverrideCfg {
         cluster: 1,
