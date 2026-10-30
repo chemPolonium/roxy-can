@@ -2039,4 +2039,119 @@ mod tests {
             println!("unsupported FD rate falls back to classic: ok");
         }
     }
+
+    /// Two physically wired VN1610 ports, both directions, classic and CAN
+    /// FD at 2/5/8 Mbit/s with BRS. Opt-in because it drives real wire:
+    /// `ROXY_VECTOR_BENCH=1 cargo test vector_bench_loops -- --ignored`.
+    /// The pair is the first two non-virtual CAN ports; frames carry their
+    /// own ids so live traffic on the same bus is ignored.
+    #[test]
+    #[ignore = "bench: transmits on wired physical ports; set ROXY_VECTOR_BENCH=1"]
+    fn vector_bench_loops_classic_and_fd_both_ways() {
+        if std::env::var("ROXY_VECTOR_BENCH").ok().as_deref() != Some("1") {
+            println!("skipped: set ROXY_VECTOR_BENCH=1 on the wired bench");
+            return;
+        }
+        if Vxlapi::lib().is_none() {
+            println!("no vxlapi -- bench probe skipped");
+            return;
+        }
+        let channels = enumerate().expect("enumerate");
+        let physical: Vec<i32> = channels
+            .iter()
+            .filter(|c| c.can && !c.name.starts_with("Virtual"))
+            .map(|c| c.index)
+            .collect();
+        assert!(
+            physical.len() >= 2,
+            "need two physical CAN ports wired together, found {physical:?}"
+        );
+        let (a, b) = (physical[0], physical[1]);
+        println!("bench pair: ch{a} <-> ch{b}");
+
+        let mut next_id = 0x5A0u32;
+        bench_round(a, b, None, &mut next_id);
+        for rate in [2_000u32, 5_000, 8_000] {
+            bench_round(a, b, Some(rate), &mut next_id);
+        }
+    }
+
+    fn bench_round(a: i32, b: i32, rate: Option<u32>, next_id: &mut u32) {
+        let fd = rate.is_some();
+        let label = match rate {
+            Some(kbps) => format!("FD 500/{kbps} kbit/s"),
+            None => "classic 500 kbit/s".to_string(),
+        };
+        let mut ach = VectorChannel::open(a, 500, rate, true).expect("open A with init access");
+        let mut bch = VectorChannel::open(b, 500, rate, true).expect("open B with init access");
+        if fd {
+            assert!(ach.fd, "{label}: A rejected the FD configuration");
+            assert!(bch.fd, "{label}: B rejected the FD configuration");
+        }
+        let len = if fd { 64 } else { 8 };
+        let mut data = [0u8; MAX_CAN_FD_LEN];
+        for (i, byte) in data.iter_mut().take(len).enumerate() {
+            *byte = 0x80 + i as u8;
+        }
+        let flags = if fd {
+            FrameFlags::FD.union(FrameFlags::BRS)
+        } else {
+            FrameFlags::NONE
+        };
+
+        for name in ["A->B", "B->A"] {
+            let id = *next_id;
+            *next_id += 1;
+            if name == "A->B" {
+                bench_one_way(&ach, &mut bch, name, id, len, &data, flags, &label);
+            } else {
+                bench_one_way(&bch, &mut ach, name, id, len, &data, flags, &label);
+            }
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn bench_one_way(
+        from: &VectorChannel,
+        to: &mut VectorChannel,
+        name: &str,
+        id: u32,
+        len: usize,
+        data: &[u8; MAX_CAN_FD_LEN],
+        flags: FrameFlags,
+        label: &str,
+    ) {
+        let frame = CanFrame {
+            t_us: 0,
+            channel: 0,
+            id,
+            extended: false,
+            len: len as u8,
+            data: *data,
+            dir: Direction::Tx,
+            flags,
+        };
+        from.write_frame(&frame).expect("bench tx");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        let mut got = None;
+        while std::time::Instant::now() < deadline {
+            if let Some(f) = to.try_read()
+                && f.id == id
+                && !f.is_error()
+            {
+                got = Some(f);
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        let got = got.unwrap_or_else(|| panic!("{label}: {name} frame never arrived"));
+        assert_eq!(got.len as usize, len, "{label}: {name} length");
+        assert_eq!(&got.data[..len], &data[..len], "{label}: {name} payload");
+        assert_eq!(
+            got.flags.contains(FrameFlags::BRS),
+            label.starts_with("FD"),
+            "{label}: {name} BRS flag"
+        );
+        println!("{label}: {name} id=0x{id:X} len={len} ok");
+    }
 }
