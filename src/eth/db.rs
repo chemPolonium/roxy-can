@@ -275,41 +275,6 @@ impl EthDb {
         }
     }
 
-    /// Encodes `phys` into `payload` as signal `name` of frame `frame_ix`, at
-    /// its PDU + signal bit offset. False when the frame has no such signal or
-    /// the bits do not fit the payload, so a value that cannot be stored is
-    /// never sent as a partially written frame.
-    pub fn encode_signal(
-        &self,
-        frame_ix: usize,
-        name: &str,
-        phys: f64,
-        payload: &mut [u8],
-    ) -> bool {
-        let Some(frame) = self.frames.get(frame_ix) else {
-            return false;
-        };
-        for pdu in &frame.pdus {
-            let Some(sig) = pdu.signals.iter().find(|signal| signal.name == name) else {
-                continue;
-            };
-            let bit = pdu.start_bit + sig.start_bit;
-            if bit + sig.size > payload.len() * 8 {
-                return false;
-            }
-            let raw = crate::decode::from_physical(
-                phys,
-                sig.size as u64,
-                sig.signed,
-                sig.factor,
-                sig.offset,
-            );
-            crate::decode::pack_raw(payload, bit as u64, sig.size as u64, sig.big_endian, raw);
-            return true;
-        }
-        false
-    }
-
     #[cfg(test)]
     pub fn decode(
         &self,

@@ -453,6 +453,7 @@ impl FrDb {
     /// cache's walk ([`Self::frame_values`]) and the curve fold go through it, so
     /// the child rows a frame row reserves and the text the draw resolves for
     /// them cannot disagree.
+    #[cfg(test)]
     fn bits_fit(child: &FrChild, sig: &FrSignal, bytes: usize) -> bool {
         child.bit as usize + sig.length_bits as usize <= bytes * 8
     }
@@ -693,6 +694,9 @@ impl FrDb {
     /// has no such signal or the bytes do not reach it: a value that cannot be
     /// stored is not sent at all, rather than sent as whatever the old bytes
     /// happened to hold.
+    /// Test-only legacy encoder: production paths encode through the unified
+    /// model plan.
+    #[cfg(test)]
     pub fn encode_signal(
         &self,
         frame_ix: usize,

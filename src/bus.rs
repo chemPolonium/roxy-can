@@ -6629,32 +6629,12 @@ impl BusCore {
             .expect("index from frames")
             .triggering
             .slot_id as u16;
-        let data = if let Some(result) = self.model_fr_signal_payload(bus, name, &frame.values) {
-            result?
-        } else {
-            let mut data = vec![0u8; db.frame_index(ix).expect("index").length as usize];
-            for (at, _, names) in db.slot_signals() {
-                if at == slot {
-                    for signal_name in names {
-                        db.encode_signal(ix, &signal_name, 0.0, &mut data);
-                    }
-                }
-            }
-            for (signal_name, value) in &frame.values {
-                let Some(signal) = db.slot_signal(slot, signal_name) else {
-                    return Err(format!("frame \"{name}\" has no signal \"{signal_name}\""));
-                };
-                let value = if signal.max > signal.min {
-                    value.clamp(signal.min, signal.max)
-                } else {
-                    *value
-                };
-                if !db.encode_signal(ix, signal_name, value, &mut data) {
-                    return Err(format!("signal \"{signal_name}\" does not fit \"{name}\""));
-                }
-            }
-            data
+        let Some(result) = self.model_fr_signal_payload(bus, name, &frame.values) else {
+            return Err(format!(
+                "FR{bus} frame \"{name}\" is not in the unified model; it cannot be encoded"
+            ));
         };
+        let data = result?;
         let now_cycle = crate::generator::fr_cycle_at(&db, self.sim_t_us);
         let cycle = if db.frame_ix_at(slot, now_cycle, 2).is_some() {
             now_cycle
@@ -6680,29 +6660,12 @@ impl BusCore {
             .position(|frame| frame.name == name)
             .ok_or_else(|| format!("ETH{bus} has no frame \"{name}\""))?;
         let def = &db.frames[ix];
-        let len = if self.eth_length_includes_header {
-            def.length.saturating_sub(14)
-        } else {
-            def.length
+        let Some(result) = self.model_eth_signal_payload(bus, name, &frame.values) else {
+            return Err(format!(
+                "ETH{bus} frame \"{name}\" is not in the unified model; it cannot be encoded"
+            ));
         };
-        let data = if let Some(result) = self.model_eth_signal_payload(bus, name, &frame.values) {
-            result?
-        } else {
-            let mut data = vec![0u8; len];
-            for pdu in &def.pdus {
-                for signal in &pdu.signals {
-                    db.encode_signal(ix, &signal.name, 0.0, &mut data);
-                }
-            }
-            for (signal_name, value) in &frame.values {
-                if !db.encode_signal(ix, signal_name, *value, &mut data) {
-                    return Err(format!(
-                        "frame \"{name}\" has no signal \"{signal_name}\" or it does not fit"
-                    ));
-                }
-            }
-            data
-        };
+        let data = result?;
         let vlan = def.vlan;
         let ethertype = def
             .ethertype_hint
