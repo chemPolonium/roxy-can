@@ -514,6 +514,20 @@ export function SignalChart({
     };
   };
 
+  const placeCursorAt = (t: number) => {
+    if (series.length === 0 && !hasReadout) return;
+    const { start, end } = viewWindow();
+    const from = Math.max(start, timeBounds.first);
+    const to = Math.min(end, timeBounds.last);
+    if (!(to > from)) return;
+    const at = clamp(t, from, to);
+    const tolerance = Math.max(1e-9, (view.windowS / plotWidth()) * 2);
+    if (cursors.some((cursor) => Math.abs(cursor.t - at) <= tolerance)) {
+      return;
+    }
+    onAddCursor(at);
+  };
+
   const addCursor = () => {
     if (series.length === 0 && !hasReadout) return;
     const { start, end } = viewWindow();
@@ -1277,8 +1291,8 @@ export function SignalChart({
         aria-label="Live signal curves"
         title={
           overlay
-            ? "Click a legend row to show or hide a signal · drag a cursor to move it · wheel zooms"
-            : "Drag a signal name to reorder · drag a cursor to move it · wheel zooms"
+            ? "Click a legend row to show or hide a signal · drag a cursor to move it · Shift+click adds a cursor · wheel zooms"
+            : "Drag a signal name to reorder · drag a cursor to move it · Shift+click adds a cursor · wheel zooms"
         }
         onWheel={(event) => {
           event.preventDefault();
@@ -1313,6 +1327,14 @@ export function SignalChart({
         onPointerDown={(event) => {
           if (event.button !== 0) return;
           setNameTip(null);
+          if (event.shiftKey) {
+            const rect = event.currentTarget.getBoundingClientRect();
+            if (event.clientX - rect.left >= GUTTER) {
+              placeCursorAt(timeAt(event.clientX));
+            }
+            event.preventDefault();
+            return;
+          }
           const cursor = cursorAt(event.clientX, event.clientY);
           if (cursor !== null) {
             setHoverCursorId(cursor);
@@ -1453,6 +1475,7 @@ export function SignalChart({
           }
         }}
         onDblClick={(event) => {
+          if (event.shiftKey) return;
           const rect = event.currentTarget.getBoundingClientRect();
           if (event.clientX - rect.left >= GUTTER) {
             onView(() => ({ windowS: 30, endS: null }));
