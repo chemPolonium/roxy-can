@@ -94,6 +94,7 @@ pub struct DecodedSignal {
 impl EthDb {
     /// Merges another matrix describing the same physical bus. A cluster
     /// name or a frame name inside one cluster keeps the first definition.
+    #[allow(dead_code)]
     pub fn merge(&mut self, other: EthDb) -> Vec<String> {
         let mut warnings = Vec::new();
         for cluster in other.clusters {
