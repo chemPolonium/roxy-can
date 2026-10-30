@@ -3609,8 +3609,9 @@ button.mini.on {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
-  gap: 6px;
-  padding: 5px 10px;
+  gap: 5px;
+  min-height: 26px;
+  padding: 3px 10px;
   border-bottom: 1px solid var(--line-soft);
 }
 
@@ -3633,13 +3634,14 @@ button.mini.on {
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  max-width: 100%;
-  padding: 2px 4px 2px 6px;
+  height: 20px;
+  padding: 0 3px 0 6px;
   border: 1px solid var(--line);
   border-radius: 3px;
   background: var(--panel);
   color: var(--text);
   font-size: 10px;
+  line-height: 18px;
 }
 
 .description-chip em {
@@ -3654,12 +3656,14 @@ button.mini.on {
 }
 
 .description-remove {
-  padding: 0 4px;
+  width: 16px;
+  height: 16px;
+  padding: 0;
   border: none;
   background: transparent;
   color: var(--muted);
   font-size: 12px;
-  line-height: 1;
+  line-height: 16px;
   cursor: pointer;
 }
 
