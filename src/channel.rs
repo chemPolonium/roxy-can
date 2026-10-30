@@ -712,17 +712,24 @@ impl App {
             .iter()
             .map(|(b, c)| (*b, std::sync::Arc::clone(c)))
             .collect();
-        let paths: std::collections::BTreeMap<u8, String> = self
+        let sources = self
             .eth_buses
             .keys()
-            .map(|b| {
+            .map(|bus| {
                 let path = self
-                    .eth_description_path(*b)
-                    .or_else(|| extra.get(b).cloned());
-                (*b, path.unwrap_or_default())
+                    .eth_description_path(*bus)
+                    .or_else(|| extra.get(bus).cloned())
+                    .unwrap_or_default();
+                let cluster = self.eth_clusters.get(bus).cloned().unwrap_or_default();
+                let source = if path.trim().is_empty() {
+                    crate::model::ClusterSource::Manual
+                } else {
+                    crate::model::ClusterSource::Arxml { path, cluster }
+                };
+                (*bus, vec![source])
             })
             .collect();
-        self.send(crate::bus::BusCommand::SetEthDbs { dbs, paths });
+        self.send(crate::bus::BusCommand::SetEthDbs { dbs, sources });
     }
 
     /// Sets the project's `FRAME-LENGTH` convention and tells the core, which
@@ -872,17 +879,26 @@ impl App {
             .iter()
             .map(|(b, c)| (*b, std::sync::Arc::clone(c)))
             .collect();
-        let paths: std::collections::BTreeMap<u8, String> = self
+        let sources = self
             .fr_buses
             .keys()
-            .map(|b| {
+            .map(|bus| {
                 let path = self
-                    .fr_description_path(*b)
-                    .or_else(|| extra.get(b).cloned());
-                (*b, path.unwrap_or_default())
+                    .fr_description_path(*bus)
+                    .or_else(|| extra.get(bus).cloned())
+                    .unwrap_or_default();
+                let cluster = self.fr_clusters.get(bus).cloned().unwrap_or_default();
+                let source = if path.trim().is_empty() {
+                    crate::model::ClusterSource::Manual
+                } else if path.to_ascii_lowercase().ends_with(".arxml") {
+                    crate::model::ClusterSource::Arxml { path, cluster }
+                } else {
+                    crate::model::ClusterSource::Fibex { path }
+                };
+                (*bus, vec![source])
             })
             .collect();
-        self.send(crate::bus::BusCommand::SetFrDbs { dbs, paths });
+        self.send(crate::bus::BusCommand::SetFrDbs { dbs, sources });
     }
 
     /// Closes one FlexRay 路's receive port and leaves the 路 alone: its

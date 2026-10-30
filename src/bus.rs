@@ -243,13 +243,13 @@ pub enum BusCommand {
     /// dropped.
     SetFrDbs {
         dbs: std::collections::BTreeMap<u8, Arc<crate::fr_db::FrDb>>,
-        paths: std::collections::BTreeMap<u8, String>,
+        sources: std::collections::BTreeMap<u8, Vec<crate::model::ClusterSource>>,
     },
     /// Replaces the Ethernet matrices the core decodes captured frames
     /// against, one per Ethernet bus, with their source files.
     SetEthDbs {
         dbs: std::collections::BTreeMap<u8, Arc<crate::eth::db::EthDb>>,
-        paths: std::collections::BTreeMap<u8, String>,
+        sources: std::collections::BTreeMap<u8, Vec<crate::model::ClusterSource>>,
     },
     /// Whether an ARXML `FRAME-LENGTH` counts the 14-byte L2 header. The
     /// capture's payload never does, so this decides how a definition's
@@ -1317,12 +1317,12 @@ pub struct BusCore {
     /// folded into subscriptions for the Graphics / Data / State observers,
     /// exactly like a CAN frame's signals.
     pub(crate) fr_dbs: std::collections::BTreeMap<u8, Arc<crate::fr_db::FrDb>>,
-    /// Source file per FlexRay bus, the path the model's cluster carries.
-    pub(crate) fr_sources: std::collections::BTreeMap<u8, String>,
+    /// Source files per FlexRay bus, in bind order.
+    pub(crate) fr_sources: std::collections::BTreeMap<u8, Vec<crate::model::ClusterSource>>,
     /// Ethernet matrices, pushed from the frontend when ARXML files load.
     pub(crate) eth_dbs: std::collections::BTreeMap<u8, Arc<crate::eth::db::EthDb>>,
-    /// Source file per Ethernet bus.
-    pub(crate) eth_sources: std::collections::BTreeMap<u8, String>,
+    /// Source files per Ethernet bus, in bind order.
+    pub(crate) eth_sources: std::collections::BTreeMap<u8, Vec<crate::model::ClusterSource>>,
     /// Project-level `FRAME-LENGTH` convention: true when the matrix states
     /// a frame length including the 14-byte L2 header rather than the
     /// captured payload length.
@@ -2217,9 +2217,9 @@ impl BusCore {
                 self.nodes_dirty = true;
             }
             BusCommand::SetReplaySpeed(speed) => self.source.set_speed(speed),
-            BusCommand::SetFrDbs { dbs, paths } => {
+            BusCommand::SetFrDbs { dbs, sources } => {
                 self.fr_dbs = dbs;
-                self.fr_sources = paths;
+                self.fr_sources = sources;
                 self.rebuild_fr_models();
                 // Which frame an arrival was cannot be worked out later from
                 // the slot alone, so a description that appears or disappears
@@ -2234,9 +2234,9 @@ impl BusCore {
                     }
                 }
             }
-            BusCommand::SetEthDbs { dbs, paths } => {
+            BusCommand::SetEthDbs { dbs, sources } => {
                 self.eth_dbs = dbs;
-                self.eth_sources = paths;
+                self.eth_sources = sources;
                 self.rebuild_eth_models();
                 // Named-cluster reads store the bus they resolved to; a
                 // replaced matrix can move or lose that name.
@@ -4460,7 +4460,13 @@ impl BusCore {
             .and_then(|cluster| cluster.sources.first())
             .and_then(|source| source.path())
             .map(str::to_string)
-            .or_else(|| self.fr_sources.get(&bus).cloned())
+            .or_else(|| {
+                self.fr_sources
+                    .get(&bus)
+                    .and_then(|sources| sources.first())
+                    .and_then(|source| source.path())
+                    .map(str::to_string)
+            })
     }
 
     /// The source file an Ethernet bus's model came from.
@@ -4471,7 +4477,13 @@ impl BusCore {
             .and_then(|cluster| cluster.sources.first())
             .and_then(|source| source.path())
             .map(str::to_string)
-            .or_else(|| self.eth_sources.get(&bus).cloned())
+            .or_else(|| {
+                self.eth_sources
+                    .get(&bus)
+                    .and_then(|sources| sources.first())
+                    .and_then(|source| source.path())
+                    .map(str::to_string)
+            })
     }
 
     pub(crate) fn can_key(&self, ch: u8, id: u32, ext: bool, name: String) -> SigKey {
@@ -5249,19 +5261,22 @@ impl BusCore {
                 .get(&bus)
                 .copied()
                 .unwrap_or(crate::model::ClusterId(1000 + u32::from(bus)));
-            let source = self
-                .fr_sources
-                .get(&bus)
-                .filter(|path| !path.trim().is_empty())
-                .map(|path| crate::model::ClusterSource::Fibex { path: path.clone() })
+            let sources = self.fr_sources.get(&bus).cloned().unwrap_or_default();
+            let source = sources
+                .first()
+                .cloned()
                 .unwrap_or(crate::model::ClusterSource::Manual);
             let outcome =
                 crate::model::import_fr_db(&db, &format!("FR{bus}"), cluster_id, &source, &mut ids);
-            let (plans, plan_issues) = crate::model::PlanCache::build(&outcome.comm, 1);
+            let mut comm = outcome.comm;
+            if let Some(cluster) = comm.clusters.get_mut(&cluster_id) {
+                cluster.sources = sources;
+            }
+            let (plans, plan_issues) = crate::model::PlanCache::build(&comm, 1);
             let label = format!("FR{bus}");
             self.report_model_issues(&label, &outcome.issues);
             self.report_model_issues(&label, &plan_issues);
-            self.fr_models.insert(bus, Arc::new(outcome.comm));
+            self.fr_models.insert(bus, Arc::new(comm));
             self.fr_model_plans.insert(bus, Arc::new(plans));
             self.fr_model_dbs.insert(bus, db);
         }
@@ -5291,14 +5306,10 @@ impl BusCore {
                 .get(&bus)
                 .copied()
                 .unwrap_or(crate::model::ClusterId(2000 + u32::from(bus)));
-            let source = self
-                .eth_sources
-                .get(&bus)
-                .filter(|path| !path.trim().is_empty())
-                .map(|path| crate::model::ClusterSource::Arxml {
-                    path: path.clone(),
-                    cluster: String::new(),
-                })
+            let sources = self.eth_sources.get(&bus).cloned().unwrap_or_default();
+            let source = sources
+                .first()
+                .cloned()
                 .unwrap_or(crate::model::ClusterSource::Manual);
             let outcome = crate::model::import_eth_db_obj(
                 &db,
@@ -5307,11 +5318,16 @@ impl BusCore {
                 &source,
                 &mut ids,
             );
-            let (plans, plan_issues) = crate::model::PlanCache::build(&outcome.comm, 1);
+            let mut comm = outcome.comm;
+            let issues = outcome.issues;
+            if let Some(cluster) = comm.clusters.get_mut(&cluster_id) {
+                cluster.sources = sources;
+            }
+            let (plans, plan_issues) = crate::model::PlanCache::build(&comm, 1);
             let label = format!("ETH{bus}");
-            self.report_model_issues(&label, &outcome.issues);
+            self.report_model_issues(&label, &issues);
             self.report_model_issues(&label, &plan_issues);
-            self.eth_models.insert(bus, Arc::new(outcome.comm));
+            self.eth_models.insert(bus, Arc::new(comm));
             self.eth_model_plans.insert(bus, Arc::new(plans));
             self.eth_model_dbs.insert(bus, db);
         }
@@ -8810,7 +8826,7 @@ mod tests {
         core.handle(
             BusCommand::SetFrDbs {
                 dbs,
-                paths: Default::default(),
+                sources: Default::default(),
             },
             &mut String::new(),
         );
@@ -8974,7 +8990,7 @@ mod tests {
         core.handle(
             BusCommand::SetFrDbs {
                 dbs,
-                paths: Default::default(),
+                sources: Default::default(),
             },
             &mut String::new(),
         );
@@ -9010,7 +9026,7 @@ mod tests {
         core.handle(
             BusCommand::SetEthDbs {
                 dbs,
-                paths: Default::default(),
+                sources: Default::default(),
             },
             &mut String::new(),
         );
@@ -9041,7 +9057,7 @@ mod tests {
         core.handle(
             BusCommand::SetFrDbs {
                 dbs,
-                paths: Default::default(),
+                sources: Default::default(),
             },
             &mut String::new(),
         );
@@ -9553,7 +9569,7 @@ mod tests {
             core.handle(
                 BusCommand::SetFrDbs {
                     dbs,
-                    paths: Default::default(),
+                    sources: Default::default(),
                 },
                 &mut status,
             );
@@ -9565,7 +9581,7 @@ mod tests {
             core.handle(
                 BusCommand::SetFrDbs {
                     dbs: Default::default(),
-                    paths: Default::default(),
+                    sources: Default::default(),
                 },
                 &mut status,
             );
@@ -9620,7 +9636,7 @@ mod tests {
         core.handle(
             BusCommand::SetFrDbs {
                 dbs,
-                paths: Default::default(),
+                sources: Default::default(),
             },
             &mut String::new(),
         );
@@ -9639,7 +9655,7 @@ mod tests {
         core.handle(
             BusCommand::SetEthDbs {
                 dbs,
-                paths: Default::default(),
+                sources: Default::default(),
             },
             &mut String::new(),
         );
