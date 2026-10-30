@@ -3364,14 +3364,14 @@ button.mini.on {
 .buses-clusters td {
   padding: 3px 8px;
   text-align: left;
-  border-bottom: 1px solid #1c242e;
+  border-bottom: 1px solid var(--line);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
 .buses-clusters th {
-  color: #8b9aab;
+  color: var(--muted);
   font-weight: 500;
 }
 
@@ -3388,8 +3388,9 @@ button.mini.on {
   flex-direction: column;
   min-width: 190px;
   padding: 4px;
-  background: #161c24;
-  border: 1px solid #2b3542;
+  color: inherit;
+  background: var(--panel);
+  border: 1px solid var(--line);
   border-radius: 5px;
   box-shadow: 0 12px 30px rgb(0 0 0 / 45%);
 }
@@ -3400,7 +3401,7 @@ button.mini.on {
   justify-self: stretch;
   padding: 6px 8px;
   text-align: left;
-  color: #d6e2ef;
+  color: inherit;
   background: transparent !important;
   border: 0 !important;
   border-radius: 3px;
@@ -3409,7 +3410,7 @@ button.mini.on {
 
 .add-cluster-menu > button:hover,
 .add-cluster-menu .add-cluster-item:hover {
-  background: #223040 !important;
+  background: var(--accent-soft) !important;
 }
 
 .buses-tools {
@@ -6766,8 +6767,9 @@ button.danger:hover:not(:disabled) {
   flex-direction: column;
   min-width: 140px;
   padding: 4px;
-  background: #161c24;
-  border: 1px solid #2b3542;
+  color: inherit;
+  background: var(--panel);
+  border: 1px solid var(--line);
   border-radius: 5px;
   box-shadow: 0 12px 30px rgb(0 0 0 / 45%);
 }
@@ -6776,7 +6778,7 @@ button.danger:hover:not(:disabled) {
   width: 100%;
   padding: 6px 8px;
   text-align: left;
-  color: #d6e2ef;
+  color: inherit;
   background: transparent !important;
   border: 0 !important;
   border-radius: 3px;
@@ -6784,11 +6786,11 @@ button.danger:hover:not(:disabled) {
 }
 
 .row-menu button:hover {
-  background: #223040 !important;
+  background: var(--accent-soft) !important;
 }
 
 .row-menu button.danger {
-  color: #ff9a9a;
+  color: var(--error);
 }
 
 .proto-row {
@@ -6818,4 +6820,14 @@ button.danger:hover:not(:disabled) {
 
 .buses-clusters td.wire.none {
   color: var(--muted);
+}
+
+.buses-clusters tbody tr.selected td:first-child {
+  box-shadow: inset 3px 0 var(--accent);
+}
+
+.clusters-hint {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 10.5px;
 }

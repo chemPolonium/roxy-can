@@ -432,6 +432,14 @@ export function BusesModal({
     selectedCluster?.kind === "can"
       ? (buses.find((bus) => bus.index === selectedCluster.bus) ?? null)
       : null;
+  const selectedFrBus =
+    selectedCluster?.kind === "flexray"
+      ? (frBuses.find((bus) => bus.bus === selectedCluster.bus) ?? null)
+      : null;
+  const selectedEthBus =
+    selectedCluster?.kind === "ethernet"
+      ? (ethBuses.find((bus) => bus.bus === selectedCluster.bus) ?? null)
+      : null;
 
   const wireFor = (cluster: Cluster) => {
     if (cluster.kind === "can") {
@@ -499,6 +507,17 @@ export function BusesModal({
     rowMenuRef.current
       ?.querySelector<HTMLButtonElement>('[role="menuitem"]')
       ?.focus();
+  }, [rowMenu]);
+
+  useEffect(() => {
+    if (!rowMenu) return;
+    const close = () => setRowMenu(null);
+    window.addEventListener("resize", close);
+    window.addEventListener("scroll", close, true);
+    return () => {
+      window.removeEventListener("resize", close);
+      window.removeEventListener("scroll", close, true);
+    };
   }, [rowMenu]);
 
   useEffect(() => {
@@ -795,6 +814,9 @@ export function BusesModal({
                 })}
               </tbody>
             </table>
+            <p class="clusters-hint">
+              Select a cluster to edit its rates, description and hardware attachment.
+            </p>
           </section>
         )}
 
@@ -860,9 +882,10 @@ export function BusesModal({
             />
           )}
 
+          {selectedFrBus && (
           <section class="bus-proto">
             <h3>FlexRay</h3>
-            {frBuses.map((bus) => (
+            {frBuses.filter((bus) => bus.bus === selectedFrBus.bus).map((bus) => (
               <div
                 class={`proto-row${selected === `flexray:${bus.bus}` ? " selected" : ""}`}
                 id={`proto-flexray:${bus.bus}`}
@@ -929,10 +952,12 @@ export function BusesModal({
               </div>
             ))}
           </section>
+          )}
 
+          {selectedEthBus && (
           <section class="bus-proto">
             <h3>Ethernet</h3>
-            {ethBuses.map((bus) => (
+            {ethBuses.filter((bus) => bus.bus === selectedEthBus.bus).map((bus) => (
               <div
                 class={`proto-row${selected === `ethernet:${bus.bus}` ? " selected" : ""}`}
                 id={`proto-ethernet:${bus.bus}`}
@@ -956,6 +981,7 @@ export function BusesModal({
               </div>
             ))}
           </section>
+          )}
 
           <section class="bus-proto replay-map">
             <h3>Replay channel map</h3>
