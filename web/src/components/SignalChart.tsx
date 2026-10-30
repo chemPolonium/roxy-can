@@ -12,6 +12,25 @@ const GUTTER = 108;
 const AXIS_H = 18;
 /// A thin status strip above the lanes keeps LIVE/HOLD off the curves.
 const TOP = 14;
+/// Right margin holding the per-lane value ticks; overlay has no value axis.
+const Y_AXIS_W = 48;
+
+/// A split pane keeps its width: only reserve the axis margin when the lanes
+/// are tall enough to carry readable labels.
+function yAxisWidth(height: number, lanes: number, overlay: boolean): number {
+  if (overlay) return 8;
+  const laneH = Math.max(1, (height - TOP - AXIS_H) / Math.max(1, lanes));
+  return laneH >= 24 ? Y_AXIS_W : 8;
+}
+
+function plotWidthFor(
+  width: number,
+  height: number,
+  lanes: number,
+  overlay: boolean,
+): number {
+  return Math.max(1, width - GUTTER - yAxisWidth(height, lanes, overlay));
+}
 
 export interface SignalView {
   windowS: number;
@@ -237,6 +256,16 @@ function valueText(value: number): string {
   return value.toFixed(Math.abs(value) >= 100 ? 0 : 1);
 }
 
+/// Value-axis ticks must stay inside the right margin, so large magnitudes
+/// switch to a compact suffix instead of widening the axis.
+function axisText(value: number): string {
+  const abs = Math.abs(value);
+  if (abs >= 1e9) return `${(value / 1e9).toFixed(1)}G`;
+  if (abs >= 1e6) return `${(value / 1e6).toFixed(1)}M`;
+  if (abs >= 1e4) return `${(value / 1e3).toFixed(1)}k`;
+  return valueText(value);
+}
+
 /// Stacked signal lanes on one canvas. Curves are min/max decimated to the
 /// pixel columns, so a 12k-point series costs one vertical span per column
 /// instead of one line segment per sample.
@@ -376,7 +405,7 @@ export function SignalChart({
     if (clientY < rect.top + TOP || clientY > rect.bottom - AXIS_H) {
       return null;
     }
-    const plotW = Math.max(1, rect.width - GUTTER - 8);
+    const plotW = plotWidthFor(rect.width, rect.height, series.length, overlay);
     const { start, end } = viewWindow();
     let hit: { id: number; distance: number } | null = null;
     for (const cursor of cursors) {
@@ -394,7 +423,7 @@ export function SignalChart({
     const canvas = canvasRef.current;
     if (!canvas) return 0;
     const rect = canvas.getBoundingClientRect();
-    const plotW = Math.max(1, rect.width - GUTTER - 8);
+    const plotW = plotWidthFor(rect.width, rect.height, series.length, overlay);
     const { start, end } = viewWindow();
     const frac = clamp((clientX - rect.left - GUTTER) / plotW, 0, 1);
     return start + frac * (end - start);
@@ -479,8 +508,8 @@ export function SignalChart({
           );
       const start = end - view.windowS;
       const lanes = Math.max(1, series.length);
-      const plotW = Math.max(1, width - GUTTER - 8);
       const laneH = Math.max(1, (height - TOP - AXIS_H) / lanes);
+      const plotW = plotWidthFor(width, height, lanes, overlay);
 
       // Trigger markers: amber dashed lines behind the lanes.
       ctx.save();
@@ -745,8 +774,41 @@ export function SignalChart({
         ctx.strokeStyle = colors.signalMidLine;
         ctx.beginPath();
         ctx.moveTo(GUTTER, plotTop + plotH / 2 + 0.5);
-        ctx.lineTo(width - 8, plotTop + plotH / 2 + 0.5);
+        ctx.lineTo(GUTTER + plotW, plotTop + plotH / 2 + 0.5);
         ctx.stroke();
+
+        // Value ticks live in the right margin so they never cross the curve.
+        // High and low always show; the middle tick needs a tall lane to keep
+        // the labels apart, and a heavily split pane drops the axis entirely
+        // rather than stacking unreadable numbers. Taller lanes pull the edge
+        // labels inward so neighbouring lanes stay distinguishable.
+        const axisRight = GUTTER + plotW;
+        const inset = clamp((plotH - 16) * 0.25, 0, 6);
+        const ticks: { y: number; label: number; value: number }[] = [];
+        if (plotH >= 16) {
+          ticks.push({ y: plotTop, label: plotTop + 3 + inset, value: high });
+          ticks.push({
+            y: plotTop + plotH,
+            label: plotTop + plotH + 3 - inset,
+            value: low,
+          });
+          if (plotH >= 30) {
+            const y = plotTop + plotH / 2;
+            ticks.push({ y, label: y + 3, value: (low + high) / 2 });
+          }
+        }
+        ctx.strokeStyle = colors.signalMidLine;
+        ctx.beginPath();
+        for (const tick of ticks) {
+          ctx.moveTo(axisRight, tick.y + 0.5);
+          ctx.lineTo(axisRight + 4, tick.y + 0.5);
+        }
+        ctx.stroke();
+        ctx.fillStyle = colors.signalAxisLabel;
+        ctx.font = "9px 'Cascadia Mono', Consolas, monospace";
+        for (const tick of ticks) {
+          ctx.fillText(axisText(tick.value), axisRight + 7, tick.label);
+        }
 
         if (raw) {
           ctx.strokeStyle = color;
@@ -862,7 +924,7 @@ export function SignalChart({
             const label = `${labels[ci]} ${valueText(value)}${unit}`;
             ctx.font = "9px 'Cascadia Mono', Consolas, monospace";
             const labelW = ctx.measureText(label).width;
-            const onRight = x + 6 + labelW + 8 <= width - 8;
+            const onRight = x + 6 + labelW + 8 <= GUTTER + plotW - 8;
             const labelX = onRight ? x + 6 : x - 6 - labelW - 8;
             const labelY = clamp(vy - 6, top + 2, top + laneH - 14);
             ctx.fillStyle = colors.signalTagBg;
@@ -1025,7 +1087,12 @@ export function SignalChart({
 
   const plotWidth = () => {
     const canvas = canvasRef.current;
-    return Math.max(1, (canvas?.clientWidth ?? 0) - GUTTER - 8);
+    return plotWidthFor(
+      canvas?.clientWidth ?? 0,
+      canvas?.clientHeight ?? 0,
+      series.length,
+      overlay,
+    );
   };
   const menuSignal = laneMenu ? series[laneMenu.index] : undefined;
   const menuYMode = menuSignal ? (yModes?.[menuSignal.key] ?? "auto") : "auto";
