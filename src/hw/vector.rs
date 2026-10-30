@@ -2085,8 +2085,16 @@ mod tests {
         let mut ach = VectorChannel::open(a, 500, rate, true).expect("open A with init access");
         let mut bch = VectorChannel::open(b, 500, rate, true).expect("open B with init access");
         if fd {
-            assert!(ach.fd, "{label}: A rejected the FD configuration");
-            assert!(bch.fd, "{label}: B rejected the FD configuration");
+            assert!(
+                ach.fd,
+                "{label}: A rejected the FD configuration ({:?})",
+                ach.fd_error
+            );
+            assert!(
+                bch.fd,
+                "{label}: B rejected the FD configuration ({:?})",
+                bch.fd_error
+            );
         }
         let len = if fd { 64 } else { 8 };
         let mut data = [0u8; MAX_CAN_FD_LEN];
