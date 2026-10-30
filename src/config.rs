@@ -931,10 +931,10 @@ impl Config {
             bus_counter: app.snap.bus_counter,
             fr_buses: app
                 .fr_buses
-                .iter()
-                .map(|(bus, c)| FrBusFile {
+                .keys()
+                .map(|bus| FrBusFile {
                     bus: *bus,
-                    path: c.path.clone(),
+                    path: app.fr_description_path(*bus).unwrap_or_default(),
                     cluster: app.fr_clusters.get(bus).cloned().unwrap_or_default(),
                 })
                 .collect(),
@@ -945,10 +945,10 @@ impl Config {
                 .collect(),
             eth_buses: app
                 .eth_buses
-                .iter()
-                .map(|(bus, c)| EthBusFile {
+                .keys()
+                .map(|bus| EthBusFile {
                     bus: *bus,
-                    path: c.path.clone(),
+                    path: app.eth_description_path(*bus).unwrap_or_default(),
                     cluster: app.eth_clusters.get(bus).cloned().unwrap_or_default(),
                 })
                 .collect(),
@@ -1713,7 +1713,6 @@ impl Config {
                     app.fr_buses.insert(
                         file.bus,
                         crate::app::FrBusCfg {
-                            path: path.clone(),
                             db: std::sync::Arc::new(db),
                         },
                     );
@@ -1743,7 +1742,6 @@ impl Config {
                     app.eth_buses.insert(
                         file.bus,
                         crate::app::EthBusCfg {
-                            path: path.clone(),
                             db: std::sync::Arc::new(db),
                         },
                     );
@@ -1768,8 +1766,18 @@ impl Config {
         // The descriptions move to the core with the rest of the restored bus
         // state, so a replay or a watch attach finds them where the user left
         // them -- no lazy re-push at the moment of use.
-        app.push_fr_db_to_core();
-        app.push_eth_db_to_core();
+        let fr_paths: std::collections::BTreeMap<u8, String> = self
+            .fr_buses
+            .iter()
+            .map(|file| (file.bus, file.path.clone()))
+            .collect();
+        let eth_paths: std::collections::BTreeMap<u8, String> = self
+            .eth_buses
+            .iter()
+            .map(|file| (file.bus, file.path.clone()))
+            .collect();
+        app.push_fr_db_to_core_paths(fr_paths);
+        app.push_eth_db_to_core_paths(eth_paths);
         app.set_eth_length_includes_header(self.eth_frame_length_includes_header);
         // The FlexRay generator entries are rebuilt *after* the descriptions
         // land, because their name, payload length and send period are read out
@@ -2032,11 +2040,10 @@ mod tests {
         app.fr_buses.insert(
             0,
             crate::app::FrBusCfg {
-                path: arxml.into(),
                 db: std::sync::Arc::new(db),
             },
         );
-        app.push_fr_db_to_core();
+        app.push_fr_db_to_core_paths([(0, arxml.to_string())].into_iter().collect());
         app.add_fr_tx(0, slot);
         // The width the schedule gives this slot, read before anything is typed
         // into it: the payload must still be that wide after the save.

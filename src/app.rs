@@ -37,14 +37,12 @@ pub const EMITTED_ID_BASE: u32 = 0x8000_0000;
 /// can never end up displaying one file's frames and configuring the port from
 /// another's.
 pub struct FrBusCfg {
-    pub path: String,
     pub db: std::sync::Arc<crate::fr_db::FrDb>,
 }
 
 /// One Ethernet bus and the AUTOSAR communication matrix that describes it.
 /// Ethernet has its own bus index space; it never shares a CAN channel.
 pub struct EthBusCfg {
-    pub path: String,
     pub db: std::sync::Arc<crate::eth::db::EthDb>,
 }
 /// The replay speed ladder. The last entry is "as fast as possible":

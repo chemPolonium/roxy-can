@@ -723,11 +723,11 @@ impl App {
         }
         // Which description each FlexRay verdict was judged against: the
         // schedule is the promise, so a report without it cannot be re-checked.
-        for (bus, cfg) in &self.fr_buses {
+        for bus in self.fr_buses.keys() {
             s.push_str(&format!(
                 "# flexray,{},{}\n",
                 self.fr_bus_name(*bus),
-                crate::cli::csv_field(&cfg.path)
+                crate::cli::csv_field(&self.fr_description_path(*bus).unwrap_or_default())
             ));
         }
         s.push_str(&format!("# tolerance,+/-{}%\n", self.spec_tol_pct));

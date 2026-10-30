@@ -459,7 +459,6 @@ impl App {
         self.eth_buses.insert(
             bus,
             crate::app::EthBusCfg {
-                path: path.to_string(),
                 db: std::sync::Arc::new(db),
             },
         );
@@ -471,7 +470,7 @@ impl App {
                 self.eth_clusters.remove(&bus);
             }
         }
-        self.push_eth_db_to_core();
+        self.push_eth_db_to_core_with([(bus, path.to_string())].into_iter().collect());
         if let Some(name) = self.eth_clusters.get(&bus).cloned() {
             self.apply_eth_arxml_model(bus, &text, path, &name);
         }
@@ -589,20 +588,28 @@ impl App {
             .collect();
         let fr: Vec<(u8, String, String)> = self
             .fr_buses
-            .iter()
-            .filter_map(|(bus, cfg)| {
-                self.fr_clusters
-                    .get(bus)
-                    .map(|cluster| (*bus, cfg.path.clone(), cluster.clone()))
+            .keys()
+            .filter_map(|bus| {
+                self.fr_clusters.get(bus).map(|cluster| {
+                    (
+                        *bus,
+                        self.fr_description_path(*bus).unwrap_or_default(),
+                        cluster.clone(),
+                    )
+                })
             })
             .collect();
         let eth: Vec<(u8, String, String)> = self
             .eth_buses
-            .iter()
-            .filter_map(|(bus, cfg)| {
-                self.eth_clusters
-                    .get(bus)
-                    .map(|cluster| (*bus, cfg.path.clone(), cluster.clone()))
+            .keys()
+            .filter_map(|bus| {
+                self.eth_clusters.get(bus).map(|cluster| {
+                    (
+                        *bus,
+                        self.eth_description_path(*bus).unwrap_or_default(),
+                        cluster.clone(),
+                    )
+                })
             })
             .collect();
         for (bus, path, cluster) in can {
@@ -673,16 +680,16 @@ impl App {
                 crate::can_arxml::ClusterKind::FlexRay => self
                     .fr_buses
                     .iter()
-                    .find(|(bus, cfg)| {
-                        cfg.path == path
+                    .find(|(bus, _)| {
+                        self.fr_description_path(**bus).as_deref() == Some(path)
                             && self.fr_clusters.get(bus).is_some_and(|c| c == &info.name)
                     })
                     .map(|(bus, _)| *bus),
                 crate::can_arxml::ClusterKind::Ethernet => self
                     .eth_buses
                     .iter()
-                    .find(|(bus, cfg)| {
-                        cfg.path == path
+                    .find(|(bus, _)| {
+                        self.eth_description_path(**bus).as_deref() == Some(path)
                             && self.eth_clusters.get(bus).is_some_and(|c| c == &info.name)
                     })
                     .map(|(bus, _)| *bus),
@@ -821,12 +828,33 @@ impl App {
     /// Copies the frontend's parsed Ethernet matrices into the bus core,
     /// which decodes each arriving frame against the one for its own bus.
     pub(crate) fn push_eth_db_to_core(&mut self) {
+        self.push_eth_db_to_core_with(Default::default());
+    }
+
+    pub(crate) fn push_eth_db_to_core_paths(
+        &mut self,
+        extra: std::collections::BTreeMap<u8, String>,
+    ) {
+        self.push_eth_db_to_core_with(extra);
+    }
+
+    fn push_eth_db_to_core_with(&mut self, extra: std::collections::BTreeMap<u8, String>) {
         let dbs: std::collections::BTreeMap<u8, _> = self
             .eth_buses
             .iter()
             .map(|(b, c)| (*b, std::sync::Arc::clone(&c.db)))
             .collect();
-        self.send(crate::bus::BusCommand::SetEthDbs(dbs));
+        let paths: std::collections::BTreeMap<u8, String> = self
+            .eth_buses
+            .keys()
+            .map(|b| {
+                let path = self
+                    .eth_description_path(*b)
+                    .or_else(|| extra.get(b).cloned());
+                (*b, path.unwrap_or_default())
+            })
+            .collect();
+        self.send(crate::bus::BusCommand::SetEthDbs { dbs, paths });
     }
 
     /// Sets the project's `FRAME-LENGTH` convention and tells the core, which
@@ -942,7 +970,6 @@ impl App {
         self.fr_buses.insert(
             bus,
             crate::app::FrBusCfg {
-                path: path.to_string(),
                 db: std::sync::Arc::new(db),
             },
         );
@@ -954,7 +981,7 @@ impl App {
                 self.fr_clusters.remove(&bus);
             }
         }
-        self.push_fr_db_to_core();
+        self.push_fr_db_to_core_with([(bus, path.to_string())].into_iter().collect());
         if let Some(name) = self.fr_clusters.get(&bus).cloned() {
             self.apply_fr_arxml_model(bus, &text, path, &name);
         }
@@ -964,12 +991,35 @@ impl App {
     /// Copies the frontend's parsed FlexRay databases into the bus core, which
     /// decodes arriving FlexRay frames against the one for their own bus.
     pub(crate) fn push_fr_db_to_core(&mut self) {
+        self.push_fr_db_to_core_with(Default::default());
+    }
+
+    /// [`Self::push_fr_db_to_core`] plus source files for buses that were
+    /// just inserted, before their models exist to answer for them.
+    pub(crate) fn push_fr_db_to_core_paths(
+        &mut self,
+        extra: std::collections::BTreeMap<u8, String>,
+    ) {
+        self.push_fr_db_to_core_with(extra);
+    }
+
+    fn push_fr_db_to_core_with(&mut self, extra: std::collections::BTreeMap<u8, String>) {
         let dbs: std::collections::BTreeMap<u8, _> = self
             .fr_buses
             .iter()
             .map(|(b, c)| (*b, std::sync::Arc::clone(&c.db)))
             .collect();
-        self.send(crate::bus::BusCommand::SetFrDbs(dbs));
+        let paths: std::collections::BTreeMap<u8, String> = self
+            .fr_buses
+            .keys()
+            .map(|b| {
+                let path = self
+                    .fr_description_path(*b)
+                    .or_else(|| extra.get(b).cloned());
+                (*b, path.unwrap_or_default())
+            })
+            .collect();
+        self.send(crate::bus::BusCommand::SetFrDbs { dbs, paths });
     }
 
     /// Closes one FlexRay 路's receive port and leaves the 路 alone: its
@@ -1074,7 +1124,7 @@ impl App {
     /// cluster configuration from that bus's own file -- the route that needs
     /// no second file picker.
     pub fn attach_fr_watch_on(&mut self, bus: u8, channel_index: i32) {
-        let Some(path) = self.fr_buses.get(&bus).map(|c| c.path.clone()) else {
+        let Some(path) = self.fr_description_path(bus) else {
             self.status = format!(
                 "{} has no cluster description; cannot attach",
                 self.fr_bus_label(bus)

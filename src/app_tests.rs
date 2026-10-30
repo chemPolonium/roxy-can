@@ -2834,8 +2834,8 @@ fn a_closed_filter_row_names_the_conditions_still_working() {
 /// table rather than sitting in it unexplained.
 #[test]
 fn a_flexray_row_is_filtered_by_the_value_its_frame_carries() {
-    let arxml = crate::test_assets::path("PowerTrain.arxml");
     let mut app = App::headless();
+    let arxml = crate::test_assets::path("PowerTrain.arxml");
     assert!(
         app.load_cluster_description(arxml, Some(0)).is_some(),
         "the bundled description loads"
@@ -8111,7 +8111,6 @@ fn the_messages_window_lists_each_occupant_of_a_repeated_slot() {
     app.fr_buses.insert(
         0,
         crate::app::FrBusCfg {
-            path: arxml.into(),
             db: std::sync::Arc::new(db),
         },
     );
@@ -8175,7 +8174,6 @@ fn an_empty_flexray_message_row_names_its_reason() {
     app.fr_buses.insert(
         0,
         crate::app::FrBusCfg {
-            path: arxml.into(),
             db: std::sync::Arc::new(db),
         },
     );
@@ -8991,13 +8989,8 @@ fn the_trace_row_cache_extends_in_place_without_losing_rows() {
         !drive.is_empty(),
         "the asset has no static frame with signals to expand"
     );
-    app.fr_buses.insert(
-        0,
-        crate::app::FrBusCfg {
-            path: arxml.into(),
-            db: Arc::new(db),
-        },
-    );
+    app.fr_buses
+        .insert(0, crate::app::FrBusCfg { db: Arc::new(db) });
     app.push_fr_db_to_core();
     let q = app.hw.attach_fr_mock(0, 5);
     app.start_virtual();
@@ -9186,7 +9179,6 @@ fn a_flexray_cluster_reports_its_static_segment_occupancy() {
     app.fr_buses.insert(
         0,
         crate::app::FrBusCfg {
-            path: "synthetic".into(),
             db: one_slot_db(&["One"], 40.0),
         },
     );
@@ -9228,7 +9220,6 @@ fn an_undescribed_flexray_cluster_counts_frames_but_no_occupancy() {
     app.fr_buses.insert(
         0,
         crate::app::FrBusCfg {
-            path: "synthetic".into(),
             db: one_slot_db(&["One"], 0.0),
         },
     );
@@ -9265,7 +9256,6 @@ fn a_node_script_reads_a_flexray_signal() {
     app.fr_buses.insert(
         0,
         crate::app::FrBusCfg {
-            path: "synthetic".into(),
             db: one_slot_db(&["One"], 40.0),
         },
     );
@@ -9335,7 +9325,6 @@ fn a_flexray_arrival_drives_a_script_reaction() {
     app.fr_buses.insert(
         0,
         crate::app::FrBusCfg {
-            path: "synthetic".into(),
             db: one_slot_db(&["One"], 40.0),
         },
     );
@@ -9406,7 +9395,6 @@ fn a_script_frame_enters_the_session_like_any_arrival() {
     app.fr_buses.insert(
         0,
         crate::app::FrBusCfg {
-            path: "synthetic".into(),
             db: one_slot_db(&["One"], 40.0),
         },
     );
@@ -9491,7 +9479,6 @@ fn a_script_frame_wider_than_its_slot_is_dropped_with_the_reason() {
     app.fr_buses.insert(
         0,
         crate::app::FrBusCfg {
-            path: "synthetic".into(),
             db: one_slot_db(&["One"], 40.0),
         },
     );
@@ -9564,7 +9551,6 @@ fn a_script_frame_for_an_unconfigured_bus_is_refused() {
     app.fr_buses.insert(
         0,
         crate::app::FrBusCfg {
-            path: "synthetic".into(),
             db: one_slot_db(&["One"], 40.0),
         },
     );
@@ -9654,7 +9640,6 @@ fn a_script_writes_a_flexray_signal_into_its_entry() {
     app.fr_buses.insert(
         0,
         crate::app::FrBusCfg {
-            path: arxml.into(),
             db: std::sync::Arc::clone(&db),
         },
     );
@@ -9730,7 +9715,6 @@ fn a_flexray_signal_write_without_its_entry_is_refused() {
     app.fr_buses.insert(
         0,
         crate::app::FrBusCfg {
-            path: "synthetic".into(),
             db: one_slot_db(&["One"], 40.0),
         },
     );
@@ -9878,7 +9862,6 @@ fn a_generated_flexray_slot_fills_the_session_on_its_schedule() {
     app.fr_buses.insert(
         0,
         crate::app::FrBusCfg {
-            path: arxml.into(),
             db: std::sync::Arc::clone(&db),
         },
     );
@@ -10011,7 +9994,6 @@ fn fr_bound_slot(app: &mut App) -> (u16, String) {
     app.fr_buses.insert(
         0,
         crate::app::FrBusCfg {
-            path: arxml.into(),
             db: std::sync::Arc::new(db),
         },
     );
@@ -10271,13 +10253,8 @@ fn the_spec_monitor_judges_flexray_frames_against_their_schedule() {
         )
     };
     assert!(declared_us > 0, "the cluster declares a cycle time");
-    app.fr_buses.insert(
-        0,
-        crate::app::FrBusCfg {
-            path: arxml.into(),
-            db: db.into(),
-        },
-    );
+    app.fr_buses
+        .insert(0, crate::app::FrBusCfg { db: db.into() });
     app.push_fr_db_to_core();
     let q = app.hw.attach_fr_mock(0, 5);
     app.start_virtual();
@@ -10361,7 +10338,6 @@ fn clearing_the_message_counters_clears_the_flexray_tallies_too() {
     app.fr_buses.insert(
         0,
         crate::app::FrBusCfg {
-            path: "synthetic".into(),
             db: one_slot_db(&["One"], 40.0),
         },
     );
@@ -10426,7 +10402,6 @@ fn a_new_cluster_description_rebuilds_the_expanded_rows() {
         app.fr_buses.insert(
             0,
             crate::app::FrBusCfg {
-                path: "synthetic".into(),
                 db: one_slot_db(signals, 40.0),
             },
         );
@@ -10498,7 +10473,6 @@ fn dbc_only_keeps_the_flexray_rows_a_description_covers() {
     app.fr_buses.insert(
         0,
         crate::app::FrBusCfg {
-            path: arxml.into(),
             db: std::sync::Arc::new(db),
         },
     );
@@ -10600,7 +10574,6 @@ fn the_trace_text_filter_matches_fr_frame_names() {
     app.fr_buses.insert(
         0,
         crate::app::FrBusCfg {
-            path: crate::test_assets::path("PowerTrain.arxml").into(),
             db: std::sync::Arc::new(db),
         },
     );
@@ -11275,17 +11248,10 @@ fn removing_a_flexray_bus_takes_everything_keyed_on_it() {
     use crate::hw::vector::flexray::FrFrame;
     use crate::observe::GfxSignal;
     use crate::workspace::{Pick, SigScope};
-    let arxml = crate::test_assets::path("PowerTrain.arxml");
     let mut app = quiet_app();
     let (slot, _) = fr_bound_slot(&mut app);
     let db = std::sync::Arc::clone(&app.fr_buses[&0].db);
-    app.fr_buses.insert(
-        1,
-        crate::app::FrBusCfg {
-            path: arxml.into(),
-            db,
-        },
-    );
+    app.fr_buses.insert(1, crate::app::FrBusCfg { db });
     app.push_fr_db_to_core();
     let q0 = app.hw.attach_fr_mock(0, 5);
     let q1 = app.hw.attach_fr_mock(1, 6);
@@ -11731,7 +11697,6 @@ fn the_frame_length_convention_renames_trace_rows() {
     app.eth_buses.insert(
         0,
         crate::app::EthBusCfg {
-            path: "synthetic.arxml".to_string(),
             db: std::sync::Arc::new(db),
         },
     );
@@ -11953,7 +11918,6 @@ fn an_ethernet_signal_drives_a_dotted_script_read() {
     app.eth_buses.insert(
         0,
         crate::app::EthBusCfg {
-            path: "synthetic.arxml".into(),
             db: std::sync::Arc::new(db),
         },
     );

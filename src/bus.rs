@@ -240,13 +240,19 @@ pub enum BusCommand {
     /// choice for the next run and the combo's display stay frontend.)
     SetReplaySpeed(f64),
     /// Replaces the FlexRay descriptions the core decodes arriving frames
-    /// against, one per bus: their signals feed the Graphics / Data / State
-    /// observers during replay and live watch. The whole map moves at once so
-    /// the core's view can never hold a bus the frontend dropped.
-    SetFrDbs(std::collections::BTreeMap<u8, Arc<crate::fr_db::FrDb>>),
+    /// against, one per bus, with the source file each came from. The whole
+    /// map moves at once so the core's view can never hold a bus the frontend
+    /// dropped.
+    SetFrDbs {
+        dbs: std::collections::BTreeMap<u8, Arc<crate::fr_db::FrDb>>,
+        paths: std::collections::BTreeMap<u8, String>,
+    },
     /// Replaces the Ethernet matrices the core decodes captured frames
-    /// against, one per Ethernet bus.
-    SetEthDbs(std::collections::BTreeMap<u8, Arc<crate::eth::db::EthDb>>),
+    /// against, one per Ethernet bus, with their source files.
+    SetEthDbs {
+        dbs: std::collections::BTreeMap<u8, Arc<crate::eth::db::EthDb>>,
+        paths: std::collections::BTreeMap<u8, String>,
+    },
     /// Whether an ARXML `FRAME-LENGTH` counts the 14-byte L2 header. The
     /// capture's payload never does, so this decides how a definition's
     /// stated length compares with an arriving flow.
@@ -1305,8 +1311,12 @@ pub struct BusCore {
     /// folded into subscriptions for the Graphics / Data / State observers,
     /// exactly like a CAN frame's signals.
     pub(crate) fr_dbs: std::collections::BTreeMap<u8, Arc<crate::fr_db::FrDb>>,
+    /// Source file per FlexRay bus, the path the model's cluster carries.
+    pub(crate) fr_sources: std::collections::BTreeMap<u8, String>,
     /// Ethernet matrices, pushed from the frontend when ARXML files load.
     pub(crate) eth_dbs: std::collections::BTreeMap<u8, Arc<crate::eth::db::EthDb>>,
+    /// Source file per Ethernet bus.
+    pub(crate) eth_sources: std::collections::BTreeMap<u8, String>,
     /// Project-level `FRAME-LENGTH` convention: true when the matrix states
     /// a frame length including the 14-byte L2 header rather than the
     /// captured payload length.
@@ -1652,7 +1662,9 @@ impl BusCore {
             fr_aggs: HashMap::new(),
             eth_aggs: HashMap::new(),
             fr_dbs: Default::default(),
+            fr_sources: Default::default(),
             eth_dbs: Default::default(),
+            eth_sources: Default::default(),
             model_issues_seen: Default::default(),
             e2e_tracks: Default::default(),
             fr_e2e_tracks: Default::default(),
@@ -2204,8 +2216,9 @@ impl BusCore {
                 self.nodes_dirty = true;
             }
             BusCommand::SetReplaySpeed(speed) => self.source.set_speed(speed),
-            BusCommand::SetFrDbs(dbs) => {
+            BusCommand::SetFrDbs { dbs, paths } => {
                 self.fr_dbs = dbs;
+                self.fr_sources = paths;
                 self.rebuild_fr_models();
                 // Which frame an arrival was cannot be worked out later from
                 // the slot alone, so a description that appears or disappears
@@ -2220,8 +2233,9 @@ impl BusCore {
                     }
                 }
             }
-            BusCommand::SetEthDbs(dbs) => {
+            BusCommand::SetEthDbs { dbs, paths } => {
                 self.eth_dbs = dbs;
+                self.eth_sources = paths;
                 self.rebuild_eth_models();
                 // Named-cluster reads store the bus they resolved to; a
                 // replaced matrix can move or lose that name.
@@ -4214,6 +4228,28 @@ impl BusCore {
             .collect()
     }
 
+    /// The source file a FlexRay bus's model came from.
+    pub(crate) fn fr_description_path(&self, bus: u8) -> Option<String> {
+        self.fr_models
+            .get(&bus)
+            .and_then(|comm| comm.clusters.values().next())
+            .and_then(|cluster| cluster.sources.first())
+            .and_then(|source| source.path())
+            .map(str::to_string)
+            .or_else(|| self.fr_sources.get(&bus).cloned())
+    }
+
+    /// The source file an Ethernet bus's model came from.
+    pub(crate) fn eth_description_path(&self, bus: u8) -> Option<String> {
+        self.eth_models
+            .get(&bus)
+            .and_then(|comm| comm.clusters.values().next())
+            .and_then(|cluster| cluster.sources.first())
+            .and_then(|source| source.path())
+            .map(str::to_string)
+            .or_else(|| self.eth_sources.get(&bus).cloned())
+    }
+
     pub(crate) fn can_key(&self, ch: u8, id: u32, ext: bool, name: String) -> SigKey {
         let cluster = self
             .can_cluster_ids
@@ -4923,13 +4959,14 @@ impl BusCore {
                 .get(&bus)
                 .copied()
                 .unwrap_or(crate::model::ClusterId(1000 + u32::from(bus)));
-            let outcome = crate::model::import_fr_db(
-                &db,
-                &format!("FR{bus}"),
-                cluster_id,
-                &crate::model::ClusterSource::Manual,
-                &mut ids,
-            );
+            let source = self
+                .fr_sources
+                .get(&bus)
+                .filter(|path| !path.trim().is_empty())
+                .map(|path| crate::model::ClusterSource::Fibex { path: path.clone() })
+                .unwrap_or(crate::model::ClusterSource::Manual);
+            let outcome =
+                crate::model::import_fr_db(&db, &format!("FR{bus}"), cluster_id, &source, &mut ids);
             let (plans, plan_issues) = crate::model::PlanCache::build(&outcome.comm, 1);
             let label = format!("FR{bus}");
             self.report_model_issues(&label, &outcome.issues);
@@ -4964,11 +5001,20 @@ impl BusCore {
                 .get(&bus)
                 .copied()
                 .unwrap_or(crate::model::ClusterId(2000 + u32::from(bus)));
+            let source = self
+                .eth_sources
+                .get(&bus)
+                .filter(|path| !path.trim().is_empty())
+                .map(|path| crate::model::ClusterSource::Arxml {
+                    path: path.clone(),
+                    cluster: String::new(),
+                })
+                .unwrap_or(crate::model::ClusterSource::Manual);
             let outcome = crate::model::import_eth_db_obj(
                 &db,
                 &format!("ETH{bus}"),
                 cluster_id,
-                &crate::model::ClusterSource::Manual,
+                &source,
                 &mut ids,
             );
             let (plans, plan_issues) = crate::model::PlanCache::build(&outcome.comm, 1);
@@ -8516,7 +8562,13 @@ mod tests {
 
         let mut dbs = std::collections::BTreeMap::new();
         dbs.insert(0u8, crate::fr_db::two_frames_one_slot_db(10));
-        core.handle(BusCommand::SetFrDbs(dbs), &mut String::new());
+        core.handle(
+            BusCommand::SetFrDbs {
+                dbs,
+                paths: Default::default(),
+            },
+            &mut String::new(),
+        );
         let snap = core.snapshot();
         let mut got: Vec<(&str, u64)> = snap
             .fr_aggs
@@ -8674,7 +8726,13 @@ mod tests {
         let mut core = BusCore::new(Vec::new());
         let mut dbs = std::collections::BTreeMap::new();
         dbs.insert(0u8, fr_db_one_signal(12, "Speed", "km/h"));
-        core.handle(BusCommand::SetFrDbs(dbs), &mut String::new());
+        core.handle(
+            BusCommand::SetFrDbs {
+                dbs,
+                paths: Default::default(),
+            },
+            &mut String::new(),
+        );
         assert!(
             core.fr_models.contains_key(&0),
             "pushing a cluster description builds the FR model"
@@ -8704,7 +8762,13 @@ mod tests {
         let mut core = BusCore::new(Vec::new());
         let mut dbs = std::collections::BTreeMap::new();
         dbs.insert(0u8, db);
-        core.handle(BusCommand::SetEthDbs(dbs), &mut String::new());
+        core.handle(
+            BusCommand::SetEthDbs {
+                dbs,
+                paths: Default::default(),
+            },
+            &mut String::new(),
+        );
         assert!(
             core.eth_models.contains_key(&0),
             "pushing a matrix builds the ETH model"
@@ -8729,7 +8793,13 @@ mod tests {
         let mut core = BusCore::new(Vec::new());
         let mut dbs = std::collections::BTreeMap::new();
         dbs.insert(0u8, fr_db_one_signal(12, "Speed", "km/h"));
-        core.handle(BusCommand::SetFrDbs(dbs), &mut String::new());
+        core.handle(
+            BusCommand::SetFrDbs {
+                dbs,
+                paths: Default::default(),
+            },
+            &mut String::new(),
+        );
         let tx = crate::generator::FrTxMsg {
             bus: 0,
             slot: 12,
@@ -9235,13 +9305,25 @@ mod tests {
             // The description belongs to bus 1; asking for a watch on bus 0 is
             // still a bus with no description.
             dbs.insert(1u8, db);
-            core.handle(BusCommand::SetFrDbs(dbs.clone()), &mut status);
+            core.handle(
+                BusCommand::SetFrDbs {
+                    dbs,
+                    paths: Default::default(),
+                },
+                &mut status,
+            );
             core.handle(watch(), &mut status);
             assert!(
                 status.contains("description not loaded"),
                 "another bus's description does not count: {status}"
             );
-            core.handle(BusCommand::SetFrDbs(Default::default()), &mut status);
+            core.handle(
+                BusCommand::SetFrDbs {
+                    dbs: Default::default(),
+                    paths: Default::default(),
+                },
+                &mut status,
+            );
             core.handle(watch(), &mut status);
             assert!(
                 status.contains("description not loaded"),
@@ -9290,7 +9372,13 @@ mod tests {
         let mut core = BusCore::new(Vec::new());
         let mut dbs = std::collections::BTreeMap::new();
         dbs.insert(0u8, fr_db_one_signal(12, "Speed", "km/h"));
-        core.handle(BusCommand::SetFrDbs(dbs), &mut String::new());
+        core.handle(
+            BusCommand::SetFrDbs {
+                dbs,
+                paths: Default::default(),
+            },
+            &mut String::new(),
+        );
         let mut values = std::collections::BTreeMap::new();
         values.insert("Speed".to_string(), 80.0);
         let payload = core
@@ -9303,7 +9391,13 @@ mod tests {
         let db = std::sync::Arc::new(crate::eth::db::EthDb::parse(&text).unwrap());
         let mut dbs = std::collections::BTreeMap::new();
         dbs.insert(0u8, db);
-        core.handle(BusCommand::SetEthDbs(dbs), &mut String::new());
+        core.handle(
+            BusCommand::SetEthDbs {
+                dbs,
+                paths: Default::default(),
+            },
+            &mut String::new(),
+        );
         let mut values = std::collections::BTreeMap::new();
         values.insert("Sig".to_string(), 5.0);
         let payload = core

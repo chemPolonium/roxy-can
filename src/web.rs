@@ -4243,12 +4243,24 @@ fn channel_signature(app: &App) -> String {
     let fr: Vec<String> = app
         .fr_buses
         .iter()
-        .map(|(bus, cfg)| format!("fr{bus}:{}:{}", cfg.path, Arc::as_ptr(&cfg.db) as usize))
+        .map(|(bus, cfg)| {
+            format!(
+                "fr{bus}:{}:{}",
+                app.fr_description_path(*bus).unwrap_or_default(),
+                Arc::as_ptr(&cfg.db) as usize
+            )
+        })
         .collect();
     let eth: Vec<String> = app
         .eth_buses
         .iter()
-        .map(|(bus, cfg)| format!("eth{bus}:{}:{}", cfg.path, Arc::as_ptr(&cfg.db) as usize))
+        .map(|(bus, cfg)| {
+            format!(
+                "eth{bus}:{}:{}",
+                app.eth_description_path(*bus).unwrap_or_default(),
+                Arc::as_ptr(&cfg.db) as usize
+            )
+        })
         .collect();
     parts
         .into_iter()
@@ -5448,11 +5460,7 @@ fn build_state(app: &App, series: &VecDeque<WebSeriesPoint>, fps: f64) -> WebSta
             WebFrBus {
                 bus: *bus,
                 name: app.fr_bus_name(*bus),
-                path: model
-                    .and_then(|cluster| cluster.sources.first())
-                    .and_then(|source| source.path())
-                    .map(str::to_string)
-                    .unwrap_or_else(|| cfg.path.clone()),
+                path: app.fr_description_path(*bus).unwrap_or_default(),
                 cluster: model
                     .map(|cluster| cluster.name.clone())
                     .unwrap_or_else(|| cfg.db.params.name.clone()),
@@ -5473,38 +5481,28 @@ fn build_state(app: &App, series: &VecDeque<WebSeriesPoint>, fps: f64) -> WebSta
     let eth_buses: Vec<WebEthBus> = app
         .eth_buses
         .iter()
-        .map(|(bus, cfg)| {
-            let model = app
+        .map(|(bus, cfg)| WebEthBus {
+            bus: *bus,
+            name: app.eth_bus_label(*bus),
+            path: app.eth_description_path(*bus).unwrap_or_default(),
+            clusters: app
                 .eth_models
                 .get(bus)
-                .and_then(|comm| comm.clusters.values().next());
-            WebEthBus {
-                bus: *bus,
-                name: app.eth_bus_label(*bus),
-                path: model
-                    .and_then(|cluster| cluster.sources.first())
-                    .and_then(|source| source.path())
-                    .map(str::to_string)
-                    .unwrap_or_else(|| cfg.path.clone()),
-                clusters: app
-                    .eth_models
-                    .get(bus)
-                    .map(|comm| comm.clusters.len())
-                    .unwrap_or(cfg.db.clusters.len()),
-                frames: app
-                    .eth_models
-                    .get(bus)
-                    .map(|comm| {
-                        comm.frames
-                            .values()
-                            .filter(|frame| {
-                                matches!(frame.address, crate::model::FrameAddress::Ethernet { .. })
-                            })
-                            .count()
-                    })
-                    .filter(|count| *count > 0)
-                    .unwrap_or(cfg.db.frames.len()),
-            }
+                .map(|comm| comm.clusters.len())
+                .unwrap_or(cfg.db.clusters.len()),
+            frames: app
+                .eth_models
+                .get(bus)
+                .map(|comm| {
+                    comm.frames
+                        .values()
+                        .filter(|frame| {
+                            matches!(frame.address, crate::model::FrameAddress::Ethernet { .. })
+                        })
+                        .count()
+                })
+                .filter(|count| *count > 0)
+                .unwrap_or(cfg.db.frames.len()),
         })
         .collect();
     let mut clusters: Vec<WebCluster> = Vec::new();
