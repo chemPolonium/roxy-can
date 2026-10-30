@@ -488,12 +488,7 @@ impl App {
                     return;
                 };
                 let (bus, slot) = (tx.bus, tx.slot);
-                self.send(crate::bus::BusCommand::PinFrEntrySignal {
-                    bus,
-                    slot,
-                    name: sig.to_string(),
-                    phys,
-                });
+                self.pin_fr_entry_signal(bus, slot, sig, phys);
             }
         }
     }
@@ -513,30 +508,14 @@ impl App {
         });
     }
 
-    /// Writes a physical value into the base payload and pins that signal by
-    /// dropping only its source: grabbing a moving slider means "hold here".
-    /// The encode is validated read-only first so the command is only sent
-    /// when it will succeed; the bus re-checks authoritatively.
-    /// Test convenience: the UI sends [`crate::bus::BusCommand::PinEntrySignal`].
+    /// Test convenience: writes a physical value and pins that signal by
+    /// dropping only its source.
     #[cfg(test)]
     pub fn pin_signal(&mut self, i: usize, name: &str, phys: f64) -> bool {
-        let Some(tx) = self.tx_list.get(i) else {
+        let Some((ch, id)) = self.tx_list.get(i).map(|tx| (tx.channel, tx.id)) else {
             return false;
         };
-        let (ch, id) = (tx.channel, tx.id);
-        let mut probe = tx.data;
-        let encodable = self
-            .channel_dbc(ch)
-            .is_some_and(|table| table.encode_signal(id, name, phys, &mut probe));
-        if encodable {
-            self.send(crate::bus::BusCommand::PinEntrySignal {
-                ch,
-                id,
-                name: name.to_string(),
-                phys,
-            });
-        }
-        encodable
+        self.pin_entry_signal(ch, id, name, phys)
     }
 
     /// Replaces the base payload from the generator's hex box. Active sources

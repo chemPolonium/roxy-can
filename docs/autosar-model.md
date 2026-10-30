@@ -811,7 +811,7 @@ SecOC 没有逐帧的额外校验：头、secured area 与认证长度在建计�
 | `src/model/schema.rs` | schema v2 DTO、字段校验、`idAliases`、帧覆盖、回放映射 |
 | `src/model/arxml.rs` | 统一 ARXML 读取器（三协议 cluster/帧触发/PDU/信号/compu/ECU/端口/高级 PDU 模型） |
 | `src/model/dbc_import.rs` | DBC → CAN cluster 适配器 |
-| `src/model/legacy_import.rs` | FIBEX → FlexRay cluster、Ethernet DB 适配器 |
+| `src/model/import.rs` | FIBEX → FlexRay cluster、Ethernet DB 适配器 |
 | `src/model/plan.rs` | `DecodePlan` / `PlanCache`：Frame→PDU→Signal 展开，含 Container/Mux/Secured 偏移 |
 | `src/model/runtime.rs` | 按计划解码/编码：物理值、符号、float、mux 选择器门控 |
 | `src/model/registry.rs` | 工程级 cluster 注册表：全局 id、按源去重、三协议共存、导出 schema v2、从 schema v2 重新导入 |
@@ -825,7 +825,7 @@ SecOC 没有逐帧的额外校验：头、secured area 与认证长度在建计�
 - `src/model/tests.rs`：ID/key/schema/查询 20 条。
 - `src/model/arxml_tests.rs`：三协议导入、真实 FlexRay 矩阵、高级 PDU、ECU 端口/信号组。
 - `src/model/dbc_tests.rs`：DBC 帧/信号/节点、初始值、导入器边界。
-- `src/model/legacy_tests.rs`：FIBEX、Ethernet DB、DBC↔ARXML 同消息等价性。
+- `src/model/import_tests.rs`：FIBEX、Ethernet DB、DBC↔ARXML 同消息等价性。
 - `src/model/plan_tests.rs`：普通 PDU、Container、Multiplexed、Secured 的展开偏移与 mux 条件。
 - `src/model/runtime_tests.rs`：物理值/符号/float 解码，编码回读，mux 选择器门控。
 - `src/model/registry_tests.rs`：多 cluster ARXML、三协议共存、源去重、schema v2 导出。

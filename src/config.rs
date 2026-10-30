@@ -1847,6 +1847,7 @@ impl Config {
 mod tests {
     use super::*;
     use crate::app::NodeRole;
+    use crate::test_assets::TestBusLoad;
 
     #[test]
     fn config_round_trips_through_json() {
@@ -2029,8 +2030,8 @@ mod tests {
                 Some(db.frame_index(ix)?.triggering.slot_id as u16)
             })
             .expect("the asset binds a slot to a sending ECU");
-        app.fr_buses.insert(0, std::sync::Arc::new(db));
-        app.push_fr_db_to_core_paths([(0, arxml.to_string())].into_iter().collect());
+        app.add_fr_description(0, crate::channel::description_source(arxml, None))
+            .expect("the FlexRay description binds");
         app.add_fr_tx(0, slot);
         // The width the schedule gives this slot, read before anything is typed
         // into it: the payload must still be that wide after the save.
@@ -2766,6 +2767,7 @@ mod tests {
 #[cfg(test)]
 mod eth_config_tests {
     use super::*;
+    use crate::test_assets::TestBusLoad;
 
     const ETH_SAMPLE: &str = r#"<?xml version="1.0"?>
 <AUTOSAR><AR-PACKAGES><AR-PACKAGE><SHORT-NAME>N</SHORT-NAME><ELEMENTS>

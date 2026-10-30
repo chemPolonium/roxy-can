@@ -1824,10 +1824,6 @@ enum WebCommand {
     RemoveEthBus {
         bus: u8,
     },
-    LoadDbc {
-        ch: u8,
-        path: String,
-    },
     /// Lists the clusters of an uploaded ARXML so the UI can ask which one
     /// belongs to the bus the user picked.
     ScanArxml {
@@ -3328,29 +3324,6 @@ fn app_loop(
                         app.set_node_role(ch, &node, NodeRole::Simulated);
                     }
                 }
-                WebCommand::LoadDbc { ch, path } => {
-                    if app.snap.measuring {
-                        app.stop();
-                    }
-                    app.open_dbc_for(ch as usize, path);
-                    let (keep, drop) = signals
-                        .lock()
-                        .map(|mut store| {
-                            store.reset();
-                            let drop = store.prune_missing(&app);
-                            (store.keys(), drop)
-                        })
-                        .unwrap_or_default();
-                    for key in keep {
-                        app.subscribe(key);
-                    }
-                    for key in drop {
-                        app.send(BusCommand::Unsubscribe { key });
-                    }
-                    if let Ok(mut store) = trace.lock() {
-                        store.reset();
-                    }
-                }
             }
         }
         app.update();
@@ -3916,6 +3889,7 @@ impl SignalStore {
 
     /// A loaded database can replace the signals under a selection. Drop the
     /// ones it no longer declares and return their keys for unsubscription.
+    #[cfg(test)]
     fn prune_missing(&mut self, app: &App) -> Vec<SigKey> {
         let mut dropped = Vec::new();
         self.selected.retain(|signal| {
@@ -6390,6 +6364,7 @@ fn hex(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_assets::TestBusLoad;
 
     #[test]
     fn panel_action_commands_deserialize_for_the_core() {

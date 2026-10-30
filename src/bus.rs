@@ -213,19 +213,6 @@ pub enum BusCommand {
     AddChannel,
     /// Add a bus with no description: raw monitoring until files are bound.
     AddEmptyChannel,
-    /// Append a CAN bus straight from an ARXML cluster's unified model.
-    #[cfg(test)]
-    AddChannelWithModel {
-        name: String,
-        comm: Arc<crate::model::Comm>,
-        sources: Vec<crate::model::ClusterSource>,
-    },
-    /// Replace one CAN bus's database from a parsed ARXML cluster.
-    #[cfg(test)]
-    SetChannelDbc {
-        ch: u8,
-        dbc: Arc<crate::dbc::SymbolTable>,
-    },
     /// Remove bus `ch` and remap every channel-indexed reference one step
     /// down. The frontend remaps its own window state in the same stroke.
     RemoveChannel {
@@ -260,21 +247,13 @@ pub enum BusCommand {
     /// stated length compares with an arriving flow.
     SetEthLengthIncludesHeader(bool),
     /// Replaces one CAN channel's unified model with a matrix read straight
-    /// from ARXML. The legacy table still serves names and the generator, but
-    /// container/mux/E2E structure exists only in the unified model, so the
-    /// reader's output has to reach the core instead of being re-derived from
-    /// the table.
+    /// from ARXML. The DBC table remains the merge base, but container/mux/E2E
+    /// structure exists only in the unified model, so the reader's output has
+    /// to reach the core instead of being re-derived from the table.
     SetChannelModel {
         ch: u8,
         comm: Option<Arc<crate::model::Comm>>,
         sources: Vec<crate::model::ClusterSource>,
-    },
-    /// The same for a FlexRay bus, whose document also carries structure the
-    /// FIBEX-shaped database cannot hold.
-    #[cfg(test)]
-    SetFrModel {
-        bus: u8,
-        comm: Arc<crate::model::Comm>,
     },
     /// Restores the persisted global cluster ids from a project file.
     SetClusterIds {
@@ -347,14 +326,6 @@ pub enum BusCommand {
     },
     /// Write a physical value into the base payload and pin that signal
     /// by dropping only its source: grabbing a moving slider means
-    /// "hold here".
-    #[cfg(test)]
-    PinEntrySignal {
-        ch: u8,
-        id: u32,
-        name: String,
-        phys: f64,
-    },
     /// The FlexRay twin of the entry commands above, keyed by `(bus, slot)`:
     /// one entry per slot per cluster, the same identity a window's hand-picked
     /// set and `fr_sig` use. A slot is addressed, not identified by a message
@@ -391,13 +362,6 @@ pub enum BusCommand {
         bus: u8,
         slot: u16,
         src: crate::sim::ValueSrc,
-    },
-    #[cfg(test)]
-    PinFrEntrySignal {
-        bus: u8,
-        slot: u16,
-        name: String,
-        phys: f64,
     },
     /// Adds one line to the Write ring without touching the status bar. The
     /// frontend's own news -- a failed export, a refused operation, a project
@@ -825,7 +789,7 @@ pub struct Snapshot {
     /// Global cluster ids, written into schema v2 project files.
     pub cluster_ids: WebClusterIds,
     /// The unified model's own frame names and signal counts, keyed like a
-    /// CAN Messages row. The tables prefer these over the legacy table: the
+    /// CAN Messages row. The tables prefer these over the DBC table: the
     /// model keeps standard and extended ids apart and counts container
     /// children the table never held.
     pub model_frames: std::collections::BTreeMap<(u8, u32, bool), ModelFrameView>,
@@ -1941,14 +1905,6 @@ impl BusCore {
             BusCommand::SetRunMode(mode) => self.run_mode = mode,
             BusCommand::AddChannel => self.add_channel(status),
             BusCommand::AddEmptyChannel => self.add_empty_channel(status),
-            #[cfg(test)]
-            BusCommand::AddChannelWithModel {
-                name,
-                comm,
-                sources,
-            } => self.add_channel_with_model(name, comm, sources, status),
-            #[cfg(test)]
-            BusCommand::SetChannelDbc { ch, dbc } => self.set_channel_dbc(ch, dbc, status),
             BusCommand::RemoveChannel { ch } => self.remove_channel(ch, status),
             BusCommand::SetNodeRole { ch, node, role } => {
                 self.set_node_role(ch, &node, role, status)
@@ -2258,8 +2214,6 @@ impl BusCore {
             BusCommand::SetChannelModel { ch, comm, sources } => {
                 self.set_channel_model(ch, comm, sources)
             }
-            #[cfg(test)]
-            BusCommand::SetFrModel { bus, comm } => self.set_fr_model(bus, comm),
             BusCommand::SetClusterIds { next, can, fr, eth } => {
                 self.cluster_ids = crate::model::ClusterIds::new(next);
                 let old_can = std::mem::take(&mut self.can_cluster_ids);
@@ -2372,10 +2326,6 @@ impl BusCore {
                     tx.srcs.retain(|s| s.name != name);
                 }
             }
-            #[cfg(test)]
-            BusCommand::PinEntrySignal { ch, id, name, phys } => {
-                self.pin_entry_signal(ch, id, &name, phys);
-            }
             BusCommand::AddFrEntry { bus, slot, node } => self.add_fr_entry(bus, slot, node),
             BusCommand::RemoveFrEntry { bus, slot } => {
                 self.fr_tx_list
@@ -2416,15 +2366,6 @@ impl BusCore {
                         None => tx.srcs.push(src),
                     }
                 }
-            }
-            #[cfg(test)]
-            BusCommand::PinFrEntrySignal {
-                bus,
-                slot,
-                name,
-                phys,
-            } => {
-                self.pin_fr_entry_signal(bus, slot, &name, phys);
             }
             BusCommand::Subscribe { key } => {
                 self.subscribe_signal(key);
@@ -4940,102 +4881,6 @@ impl BusCore {
         *status = format!("{name} ARXML loaded: {} message(s)", dbc.order.len());
     }
 
-    /// Appends a CAN bus from an already-built ARXML model. No description
-    /// table is created: the model is the runtime source, and the generator
-    /// rows come from its CAN frames.
-    #[cfg(test)]
-    fn add_channel_with_model(
-        &mut self,
-        name: String,
-        comm: Arc<crate::model::Comm>,
-        sources: Vec<crate::model::ClusterSource>,
-        status: &mut String,
-    ) {
-        self.bus_counter += 1;
-        let cluster = self.cluster_ids.allocate();
-        let (cluster_name, bitrate, fd) = comm
-            .clusters
-            .values()
-            .next()
-            .map(|cluster| {
-                let (bitrate, fd) = comm
-                    .networks
-                    .values()
-                    .find_map(|network| match &network.params {
-                        crate::model::NetworkParams::Can(params) => {
-                            Some((params.bitrate_kbps, params.fd_data_kbps))
-                        }
-                        _ => None,
-                    })
-                    .unwrap_or((
-                        crate::model::CanParams::DEFAULT_BITRATE_KBPS,
-                        crate::model::CanParams::DEFAULT_FD_DATA_KBPS,
-                    ));
-                (cluster.name.clone(), bitrate, fd)
-            })
-            .unwrap_or((
-                name.clone(),
-                crate::model::CanParams::DEFAULT_BITRATE_KBPS,
-                crate::model::CanParams::DEFAULT_FD_DATA_KBPS,
-            ));
-        self.can_cluster_ids.push(cluster);
-        self.model_comms
-            .push(Some(Arc::new(crate::model::empty_can_comm(
-                &cluster_name,
-                cluster,
-                &sources,
-                bitrate,
-                fd,
-            ))));
-        self.model_plans.push(None);
-        self.model_dbs.push(None);
-        self.can_xml_models.push(None);
-        self.bus_loads.push(crate::load::BusLoad::new());
-        self.loads_dirty = true;
-        self.nodes_dirty = true;
-        let ch = self.can_count() - 1;
-        self.set_channel_model(ch as u8, Some(comm), sources);
-        let ids: Vec<u32> = self.model_comms[ch]
-            .as_ref()
-            .map(|comm| {
-                comm.frames
-                    .values()
-                    .filter_map(|frame| match frame.address {
-                        crate::model::FrameAddress::Can { id, .. } => Some(id),
-                        _ => None,
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
-        let messages = ids.len();
-        self.seed_entries_for_simulated(ch);
-        for id in ids {
-            self.add_entry(ch as u8, id);
-        }
-        *status = format!("{name} ARXML loaded: {messages} message(s)");
-    }
-
-    #[cfg(test)]
-    fn set_channel_dbc(&mut self, ch: u8, dbc: Arc<crate::dbc::SymbolTable>, status: &mut String) {
-        if ch as usize >= self.can_count() {
-            return;
-        }
-        let name = self.can_name(ch as usize);
-        self.set_can_paths(ch as usize, Vec::new());
-        if let Some(cluster) = self.can_cluster_ids.get(ch as usize) {
-            self.can_sums.remove(cluster);
-        }
-        self.nodes_dirty = true;
-        for node in &mut self.nodes {
-            if node.channel == ch {
-                node.refresh_named_signals(&dbc);
-            }
-        }
-        self.set_can_table(ch as usize, Some(dbc.clone()));
-        self.seed_entries_for_simulated(ch as usize);
-        *status = format!("{name} ARXML loaded: {} message(s)", dbc.order.len());
-    }
-
     /// (Re)loads every database attached to the bus (primary first, then
     /// extras) and merges them into one lookup table: on a duplicate
     /// message id the earlier database wins. Files that fail to parse are
@@ -5204,10 +5049,6 @@ impl BusCore {
         self.model_dbs[ch] = db;
     }
 
-    /// Anchors a matrix-read model to a channel. The model's database guard
-    /// is the channel's current table: replacing that table without a new
-    /// model must fall back to the legacy decoder, exactly like the
-    /// adapter-built models.
     /// Writes model and plan issues once each into the Write log. The status
     /// bar is for the action the user just took; an unsupported element in
     /// the matrix has to stay somewhere they can still read.
@@ -5511,9 +5352,9 @@ impl BusCore {
         );
     }
 
-    /// Model-side signal values for a CAN frame, in the same shape the
-    /// legacy decoder returns. `None` means "use the legacy path": the
-    /// channel has no model or the model does not know the frame.
+    /// Model-side signal values for a CAN frame, in the shape the tables
+    /// consume. `None` means the channel has no model or the model does not
+    /// know the frame.
     pub(crate) fn model_can_values(&self, f: &CanFrame) -> Option<Vec<crate::dbc::DecodedSignal>> {
         self.model_can_decoded(f, true)
     }
@@ -5572,16 +5413,6 @@ impl BusCore {
             }
         }
         Some(out)
-    }
-
-    /// Test seam: the model decode with no subscription filter, so a test can
-    /// tell "the model found the frame" from "the legacy decoder did".
-    #[cfg(test)]
-    pub(crate) fn model_decoded_for_test(
-        &self,
-        frame: &CanFrame,
-    ) -> Option<Vec<crate::dbc::DecodedSignal>> {
-        self.model_can_decoded(frame, false)
     }
 
     pub(crate) fn model_signal_decoded(
@@ -6342,8 +6173,8 @@ impl BusCore {
     /// declared start values first, then each named signal clamped to its
     /// range, at the message's declared DLC.
     /// Model-side physical encoding for a Panel CAN send. `None` means the
-    /// legacy encoder should run: no model, a multiplexed message, or a frame
-    /// the plan does not know.
+    /// model cannot encode it: no model, a multiplexed message, or a frame the
+    /// plan does not know.
     fn model_can_signal_payload(
         &self,
         channel: u8,
@@ -6949,7 +6780,8 @@ impl BusCore {
     /// by dropping only its source: grabbing a moving slider means "hold
     /// here". Returns false when the database cannot encode it.
     #[cfg(test)]
-    fn pin_entry_signal(&mut self, ch: u8, id: u32, name: &str, phys: f64) -> bool {
+    #[cfg(test)]
+    pub(crate) fn pin_entry_signal(&mut self, ch: u8, id: u32, name: &str, phys: f64) -> bool {
         let mut data = match self.entry_mut(ch, id) {
             Some(tx) => tx.data,
             None => return false,
@@ -7090,7 +6922,14 @@ impl BusCore {
     /// description, the slot holds no frame in it, the frame has no such signal,
     /// or the entry's bytes do not reach it.
     #[cfg(test)]
-    fn pin_fr_entry_signal(&mut self, bus: u8, slot: u16, name: &str, phys: f64) -> bool {
+    #[cfg(test)]
+    pub(crate) fn pin_fr_entry_signal(
+        &mut self,
+        bus: u8,
+        slot: u16,
+        name: &str,
+        phys: f64,
+    ) -> bool {
         let (mut data, len) = match self.fr_entry_mut(bus, slot) {
             Some(t) => (t.data.clone(), t.len),
             None => return false,
@@ -8751,7 +8590,7 @@ impl BusCore {
             self.tx_list[i].extended,
         );
         // The reaction send goes through the same model encoder as the
-        // periodic generator; the legacy table is only the no-model fallback.
+        // periodic generator.
         let model = self
             .can_cluster_ids
             .get(tch as usize)
@@ -9051,8 +8890,7 @@ mod tests {
         fr_db_one_signal_on(slot, sig_name, unit, crate::fr_db::FrChannel::Both)
     }
 
-    /// FlexRay subscriptions decode through the unified model as well; the
-    /// legacy decoder remains the fallback when no model was built.
+    /// FlexRay subscriptions decode through the unified model plan.
     #[test]
     fn fr_signal_subscriptions_use_the_unified_decode_plan() {
         let mut core = BusCore::new(Vec::new());
@@ -9086,7 +8924,7 @@ mod tests {
     }
 
     /// Ethernet subscriptions decode through the unified model once a matrix
-    /// is loaded; the legacy flow decoder remains the fallback.
+    /// is loaded.
     #[test]
     fn eth_signal_subscriptions_use_the_unified_decode_plan() {
         let text = std::fs::read_to_string(crate::test_assets::eth_arxml()).unwrap();
@@ -9667,8 +9505,7 @@ mod tests {
 
     // ---- 回放通道映射 ----
 
-    /// CAN signal subscriptions now decode through the unified model plan.
-    /// The legacy DBC decoder remains the fallback for multiplexed messages.
+    /// CAN signal subscriptions decode through the unified model plan.
     #[test]
     fn can_signal_subscriptions_use_the_unified_decode_plan() {
         let mut core = BusCore::new(Vec::new());
@@ -10266,13 +10103,7 @@ BA_ "GenSigStartValue" SG_ 512 Temp 80;
                 pdu_mappings: vec![MappingId(1)],
             },
         );
-        core.handle(
-            BusCommand::SetFrModel {
-                bus: 0,
-                comm: std::sync::Arc::new(comm),
-            },
-            &mut String::new(),
-        );
+        core.set_fr_model(0, std::sync::Arc::new(comm));
         for (t, counter) in [(1_000u64, 0u8), (2_000, 1), (3_000, 1)] {
             let mut row = fr_row(t, 12);
             row.payload[1] = counter;

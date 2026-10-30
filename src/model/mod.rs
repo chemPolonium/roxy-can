@@ -8,8 +8,8 @@
 mod arxml;
 mod dbc_import;
 mod id;
+mod import;
 mod key;
-mod legacy_import;
 mod plan;
 mod project_cfg;
 mod runtime;
@@ -20,7 +20,7 @@ mod arxml_tests;
 #[cfg(test)]
 mod dbc_tests;
 #[cfg(test)]
-mod legacy_tests;
+mod import_tests;
 #[cfg(test)]
 mod plan_tests;
 #[cfg(test)]
@@ -39,9 +39,9 @@ pub use dbc_import::{
 #[allow(unused_imports)]
 pub use id::{ClusterIds, ElementIds, ElementKind};
 #[allow(unused_imports)]
-pub use key::BusMap;
+pub use import::{import_eth_db, import_eth_db_obj, import_fibex, import_fr_db};
 #[allow(unused_imports)]
-pub use legacy_import::{import_eth_db, import_eth_db_obj, import_fibex, import_fr_db};
+pub use key::BusMap;
 #[allow(unused_imports)]
 pub use plan::{PlanCache, build_decode_plan};
 #[allow(unused_imports)]

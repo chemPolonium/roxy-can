@@ -1,4 +1,5 @@
 use super::*;
+use crate::test_assets::TestBusLoad;
 // The tests rely on the parent's imports through `use super::*`; the
 // ones app.rs itself no longer needs are imported directly here.
 use crate::bus::MAX_TX_CATCHUP;
@@ -466,9 +467,19 @@ fn arxml_can_import_reaches_the_unified_model_and_survives_reopen() {
     let arxml = dir.join("two.arxml");
     std::fs::write(&arxml, crate::test_assets::CAN_ARXML_SAMPLE).unwrap();
     let mut app = App::headless();
-    let bus = app
-        .add_can_arxml_bus(arxml.to_string_lossy().as_ref(), "CanA", "CanA")
-        .expect("CanA binds to a new CAN bus");
+    app.add_empty_channel();
+    app.settle();
+    let bus = (app.snap.channel_count - 1) as u8;
+    app.send(crate::bus::BusCommand::SetChannelConfig {
+        ch: bus,
+        name: Some("CanA".to_string()),
+        dbc_path: None,
+        bitrate_kbps: None,
+        fd_data_kbps: None,
+        node_roles: None,
+    });
+    app.load_can_arxml_on_bus(arxml.to_string_lossy().as_ref(), "CanA", bus)
+        .expect("CanA binds to the new CAN bus");
     app.settle();
     assert_eq!(
         app.snap.channels.get(bus as usize).map(|c| c.name.as_str()),
@@ -535,7 +546,18 @@ fn two_arxml_clusters_share_one_can_bus_and_survive_reopen() {
     let path = arxml.to_string_lossy().into_owned();
 
     let mut app = App::headless();
-    let bus = app.add_can_arxml_bus(&path, "CanA", "CanA").unwrap();
+    app.add_empty_channel();
+    app.settle();
+    let bus = (app.snap.channel_count - 1) as u8;
+    app.send(crate::bus::BusCommand::SetChannelConfig {
+        ch: bus,
+        name: Some("CanA".to_string()),
+        dbc_path: None,
+        bitrate_kbps: None,
+        fd_data_kbps: None,
+        node_roles: None,
+    });
+    app.load_can_arxml_on_bus(&path, "CanA", bus).unwrap();
     app.load_can_arxml_on_bus(&path, "CanB", bus).unwrap();
     app.settle();
     assert_eq!(app.snap.channel_count, 3, "the second cluster reused bus 2");
@@ -4679,10 +4701,12 @@ BO_ 400 Muxed: 8 ECU
 
 fn mux_app() -> App {
     let mut app = App::headless();
-    app.send(crate::bus::BusCommand::SetChannelDbc {
-        ch: 0,
-        dbc: std::sync::Arc::new(crate::dbc::load_dbc_str(MUX_SAMPLE_DBC).unwrap()),
-    });
+    app.set_can_table_for_test(
+        0,
+        Some(std::sync::Arc::new(
+            crate::dbc::load_dbc_str(MUX_SAMPLE_DBC).unwrap(),
+        )),
+    );
     app.tx_list.retain(|t| t.channel != 0);
     app.start_virtual();
     app
@@ -4715,10 +4739,12 @@ BO_ 2147483904 Twin: 2 ECU
  SG_ ExtSig : 0|16@1+ (0.1,0) [0|0] ""  ECU
 "#;
     let mut app = App::headless();
-    app.send(crate::bus::BusCommand::SetChannelDbc {
-        ch: 0,
-        dbc: std::sync::Arc::new(crate::dbc::load_dbc_str(TWIN_DBC).unwrap()),
-    });
+    app.set_can_table_for_test(
+        0,
+        Some(std::sync::Arc::new(
+            crate::dbc::load_dbc_str(TWIN_DBC).unwrap(),
+        )),
+    );
     app.tx_list.retain(|t| t.channel != 0);
     app.start_virtual();
     let std_key = SigKey::can_in(crate::model::ClusterId(1), 0x100, false, "StdSig");
@@ -4726,13 +4752,13 @@ BO_ 2147483904 Twin: 2 ECU
     app.subscribe(std_key.clone());
     app.subscribe(ext_key.clone());
     assert!(
-        app.model_decoded_for_test(&frame_at(0, 0x100, 2, Direction::Rx))
+        app.model_can_all_values(&frame_at(0, 0x100, 2, Direction::Rx))
             .is_some()
     );
     let mut ext_probe = frame_at(0, 0x100, 2, Direction::Rx);
     ext_probe.extended = true;
     assert!(
-        app.model_decoded_for_test(&ext_probe).is_some(),
+        app.model_can_all_values(&ext_probe).is_some(),
         "the extended class finds its own frame in the model"
     );
 
@@ -5282,7 +5308,10 @@ fn a_named_read_follows_a_reload_that_moves_the_message_id() {
     };
     std::fs::write(&a, dbc(0x100)).unwrap();
     let mut app = App::headless();
-    app.open_dbc_for(0, a.to_string_lossy().into_owned());
+    app.send(crate::bus::BusCommand::LoadDbc {
+        ch: 0,
+        paths: vec![a.to_string_lossy().into_owned()],
+    });
     app.settle();
     app.send(crate::bus::BusCommand::AddNode {
         name: "watcher".to_string(),
@@ -5350,7 +5379,10 @@ fn a_named_handler_follows_a_reload_that_moves_the_message_id() {
     };
     std::fs::write(&a, dbc(0x100)).unwrap();
     let mut app = App::headless();
-    app.open_dbc_for(0, a.to_string_lossy().into_owned());
+    app.send(crate::bus::BusCommand::LoadDbc {
+        ch: 0,
+        paths: vec![a.to_string_lossy().into_owned()],
+    });
     app.settle();
     app.send(crate::bus::BusCommand::AddNode {
         name: "listener".to_string(),
@@ -5579,7 +5611,7 @@ fn debug_default_model_availability() {
         .clone();
     let decoded = crate::model::decode_payload(comm, &plan, &f.data[..f.len as usize]);
     assert!(
-        app.model_decoded_for_test(&f).is_some(),
+        app.model_can_all_values(&f).is_some(),
         "model missing: db_ok={db_ok} frames={frames:?} plan_ok={plan_ok} reads={} decoded={decoded:?} signals={}",
         plan.reads.len(),
         comm.signals.len()
@@ -6207,14 +6239,16 @@ BO_ 512 DashMirror: 8 ECU
 #[test]
 fn a_send_action_mirrors_same_named_signals_from_the_trigger_frame() {
     let mut app = App::headless();
-    app.send(crate::bus::BusCommand::SetChannelDbc {
-        ch: 0,
-        dbc: std::sync::Arc::new(crate::dbc::load_dbc_str(MIRROR_DBC).unwrap()),
-    });
+    app.set_can_table_for_test(
+        0,
+        Some(std::sync::Arc::new(
+            crate::dbc::load_dbc_str(MIRROR_DBC).unwrap(),
+        )),
+    );
     app.tx_list.retain(|t| t.channel != 0);
     app.start_virtual();
     assert!(
-        app.model_decoded_for_test(&frame_at(0, 0x200, 8, Direction::Rx))
+        app.model_can_all_values(&frame_at(0, 0x200, 8, Direction::Rx))
             .is_some(),
         "the reaction target is decoded through the model"
     );
@@ -7308,7 +7342,7 @@ fn model_decoding_follows_restored_cluster_ids() {
     let mut frame = frame_at(1_000, *id, message.dlc.max(1) as u8, Direction::Rx);
     frame.extended = *extended;
     assert!(
-        app.model_decoded_for_test(&frame).is_some(),
+        app.model_can_all_values(&frame).is_some(),
         "the model is found through the restored cluster id"
     );
 }

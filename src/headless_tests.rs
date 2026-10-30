@@ -8,6 +8,7 @@ use crate::can::frame::{CanFrame, Direction, FrameFlags, MAX_CAN_FD_LEN};
 use crate::log::AscWriter;
 use crate::observe::SigKey;
 use crate::sim::{SrcKind, ValueSrc};
+use crate::test_assets::TestBusLoad;
 
 /// Advance the bus clock to synthetic `now`, then run one step.
 fn step(app: &mut App, now: u64) {

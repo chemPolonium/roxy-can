@@ -333,41 +333,6 @@ impl App {
         // The status line ("bus CANx removed") came from the command.
     }
 
-    /// Loads one Ethernet AUTOSAR matrix. A `None` bus picks the first free
-    /// Ethernet index; adding to a bus that already has descriptions merges
-    /// them into the same physical cluster.
-    #[cfg(test)]
-    pub fn load_eth_description(&mut self, path: &str, bus: Option<u8>) -> Option<u8> {
-        self.load_eth_description_inner(path, bus, None)
-    }
-
-    #[cfg(test)]
-    fn load_eth_description_inner(
-        &mut self,
-        path: &str,
-        bus: Option<u8>,
-        cluster: Option<&str>,
-    ) -> Option<u8> {
-        let source = description_source(path, cluster);
-        let bus = match bus {
-            Some(bus) => bus,
-            None => match self.next_eth_bus() {
-                Some(bus) => bus,
-                None => {
-                    self.fail("Ethernet bus index exhausted (256 buses)");
-                    return None;
-                }
-            },
-        };
-        match self.add_eth_description(bus, source) {
-            Ok(bus) => Some(bus),
-            Err(e) => {
-                self.fail(format!("Ethernet ARXML load failed: {e}"));
-                None
-            }
-        }
-    }
-
     /// Binds one Ethernet description to `bus`, merging frames with the files
     /// already bound there. Duplicates keep the first declaration and are
     /// reported to the Write log.
@@ -491,35 +456,6 @@ impl App {
         self.push_eth_db_to_core();
         self.status = format!("Added Ethernet bus ETH{bus}");
         Some(bus)
-    }
-
-    /// Creates a CAN bus whose first description is one ARXML cluster. The
-    /// bus may take more descriptions afterwards, exactly like an added one.
-    #[cfg(test)]
-    pub fn add_can_arxml_bus(
-        &mut self,
-        path: &str,
-        cluster: &str,
-        name: &str,
-    ) -> Result<u8, String> {
-        let bytes = std::fs::read(path).map_err(|e| format!("{path}: {e}"))?;
-        let text = crate::dbc::text_from_bytes(bytes);
-        let comm = Self::can_arxml_comm(&text, path, cluster)
-            .ok_or_else(|| format!("{path}: cluster `{cluster}` has no frames"))?;
-        let bus = self.snap.channel_count as u8;
-        let source = crate::model::ClusterSource::Arxml {
-            path: path.to_string(),
-            cluster: cluster.to_string(),
-        };
-        self.send(crate::bus::BusCommand::AddChannelWithModel {
-            name: name.to_string(),
-            comm: std::sync::Arc::new(comm),
-            sources: vec![source],
-        });
-        self.can_arxml
-            .insert(bus, vec![(path.to_string(), cluster.to_string())]);
-        self.status = format!("Added CAN bus {name} from `{cluster}`");
-        Ok(bus)
     }
 
     /// Reads an uploaded ARXML and lists its clusters for the binding chooser.
@@ -759,10 +695,6 @@ impl App {
     /// Copies the frontend's parsed Ethernet matrices into the bus core,
     /// which decodes each arriving frame against the one for its own bus.
     pub(crate) fn push_eth_db_to_core(&mut self) {
-        self.push_eth_db_to_core_with(Default::default());
-    }
-
-    fn push_eth_db_to_core_with(&mut self, extra: std::collections::BTreeMap<u8, String>) {
         let dbs: std::collections::BTreeMap<u8, _> = self
             .eth_buses
             .iter()
@@ -778,10 +710,7 @@ impl App {
                     .cloned()
                     .filter(|list| !list.is_empty())
                     .unwrap_or_else(|| {
-                        let path = self
-                            .eth_description_path(*bus)
-                            .or_else(|| extra.get(bus).cloned())
-                            .unwrap_or_default();
+                        let path = self.eth_description_path(*bus).unwrap_or_default();
                         let cluster = self.eth_cluster_label(*bus);
                         if path.trim().is_empty() {
                             vec![crate::model::ClusterSource::Manual]
@@ -868,45 +797,6 @@ impl App {
         buses.sort_unstable();
         buses.dedup();
         buses
-    }
-
-    /// Parses `path` as a cluster description and puts it on a FlexRay 路, then
-    /// hands the whole set to the core. No hardware is touched, so this is also
-    /// what a replay-only session uses. `None` picks the first 路 without a
-    /// description; `Some(bus)` replaces that 路's description, which is how a
-    /// file put on the wrong 路 gets moved. A watched 路 refuses: its port was
-    /// configured from the file already there. Returns the bus index, having
-    /// set a failure status if it did not.
-    #[cfg(test)]
-    pub fn load_cluster_description(&mut self, path: &str, bus: Option<u8>) -> Option<u8> {
-        self.load_cluster_description_inner(path, bus, None)
-    }
-
-    #[cfg(test)]
-    fn load_cluster_description_inner(
-        &mut self,
-        path: &str,
-        bus: Option<u8>,
-        cluster: Option<&str>,
-    ) -> Option<u8> {
-        let source = description_source(path, cluster);
-        let bus = match bus {
-            Some(bus) => bus,
-            None => match self.next_flexray_bus() {
-                Some(bus) => bus,
-                None => {
-                    self.status = "FlexRay bus index exhausted (256 buses)".to_string();
-                    return None;
-                }
-            },
-        };
-        match self.add_fr_description(bus, source) {
-            Ok(bus) => Some(bus),
-            Err(e) => {
-                self.fail(format!("FlexRay description read failed: {e}"));
-                None
-            }
-        }
     }
 
     /// Binds one FlexRay description to `bus`, merging it with the files
@@ -1033,20 +923,6 @@ impl App {
     /// Copies the frontend's parsed FlexRay databases into the bus core, which
     /// decodes arriving FlexRay frames against the one for their own bus.
     pub(crate) fn push_fr_db_to_core(&mut self) {
-        self.push_fr_db_to_core_with(Default::default());
-    }
-
-    /// [`Self::push_fr_db_to_core`] plus source files for buses that were
-    /// just inserted, before their models exist to answer for them.
-    #[cfg(test)]
-    pub(crate) fn push_fr_db_to_core_paths(
-        &mut self,
-        extra: std::collections::BTreeMap<u8, String>,
-    ) {
-        self.push_fr_db_to_core_with(extra);
-    }
-
-    fn push_fr_db_to_core_with(&mut self, extra: std::collections::BTreeMap<u8, String>) {
         let dbs: std::collections::BTreeMap<u8, _> = self
             .fr_buses
             .iter()
@@ -1062,10 +938,7 @@ impl App {
                     .cloned()
                     .filter(|list| !list.is_empty())
                     .unwrap_or_else(|| {
-                        let path = self
-                            .fr_description_path(*bus)
-                            .or_else(|| extra.get(bus).cloned())
-                            .unwrap_or_default();
+                        let path = self.fr_description_path(*bus).unwrap_or_default();
                         if path.trim().is_empty() {
                             vec![crate::model::ClusterSource::Manual]
                         } else {
@@ -1189,29 +1062,6 @@ impl App {
             return;
         };
         self.set_fr_watch(bus, Some(channel_index), &path);
-    }
-
-    /// Replaces a bus's primary database.
-    pub fn open_dbc_for(&mut self, ch: usize, path: String) {
-        let mut paths = self
-            .snap
-            .channels
-            .get(ch)
-            .map(|c| c.dbc_paths.clone())
-            .unwrap_or_default();
-        let new_path = path.clone();
-        if paths.is_empty() {
-            paths.push(path);
-        } else {
-            paths[0] = path;
-        }
-        self.send(crate::bus::BusCommand::LoadDbc {
-            ch: ch as u8,
-            paths,
-        });
-        if self.snap.channels.get(ch).is_some_and(|c| c.dbc.is_some()) {
-            self.push_recent_dbc(new_path);
-        }
     }
 
     /// Opens a file dropped onto the window: a DBC goes into the first

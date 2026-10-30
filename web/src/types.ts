@@ -810,7 +810,6 @@ export type Command =
       bitrate_kbps: number;
       fd_data_kbps: number;
     }
-  | { type: "load_dbc"; ch: number; path: string }
   | { type: "scan_arxml"; path: string }
   | {
       type: "add_bus_description";

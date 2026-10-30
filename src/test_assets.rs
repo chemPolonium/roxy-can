@@ -5,6 +5,39 @@
 use std::io::Read;
 use std::sync::OnceLock;
 
+use crate::app::App;
+
+/// Test-only convenience for the many fixtures that bind one description and
+/// treat a failure as "the file could not be read".
+pub trait TestBusLoad {
+    fn load_cluster_description(&mut self, path: &str, bus: Option<u8>) -> Option<u8>;
+    fn load_eth_description(&mut self, path: &str, bus: Option<u8>) -> Option<u8>;
+}
+
+impl TestBusLoad for App {
+    fn load_cluster_description(&mut self, path: &str, bus: Option<u8>) -> Option<u8> {
+        let bus = bus.or_else(|| self.next_flexray_bus())?;
+        match self.add_fr_description(bus, crate::channel::description_source(path, None)) {
+            Ok(bus) => Some(bus),
+            Err(e) => {
+                self.status = format!("FlexRay description read failed: {e}");
+                None
+            }
+        }
+    }
+
+    fn load_eth_description(&mut self, path: &str, bus: Option<u8>) -> Option<u8> {
+        let bus = bus.or_else(|| self.next_eth_bus())?;
+        match self.add_eth_description(bus, crate::channel::description_source(path, None)) {
+            Ok(bus) => Some(bus),
+            Err(e) => {
+                self.status = format!("Ethernet ARXML load failed: {e}");
+                None
+            }
+        }
+    }
+}
+
 /// One Ethernet cluster, frame, PDU and 16-bit signal. The frame length and
 /// PDU follow the parser's payload-length convention (no L2 header).
 const ETH_ARXML: &str = r#"<?xml version="1.0"?>
