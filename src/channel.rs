@@ -77,11 +77,7 @@ impl App {
     }
 
     pub fn message_name(&self, ch: u8, id: u32, ext: bool) -> Option<String> {
-        self.model_can_name(ch, id, ext).or_else(|| {
-            self.channel_dbc(ch)
-                .and_then(|db| db.message_name_of((id, ext)))
-                .map(str::to_string)
-        })
+        self.model_can_name(ch, id, ext)
     }
 
     pub fn channel_name(&self, ch: u8) -> String {
