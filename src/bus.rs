@@ -1604,8 +1604,8 @@ fn derived_ref_frame_matches(key: &SigKey, qualifier: &str, core: &BusCore) -> b
                 return true;
             }
             core.key_bus(key)
-                .and_then(|ch| core.channels.get(ch as usize))
-                .and_then(|channel| channel.dbc.as_ref())
+                .and_then(|ch| core.model_dbs.get(ch as usize))
+                .and_then(|db| db.as_ref())
                 .and_then(|db| db.message_name_of((*id, *ext)))
                 .is_some_and(|name| name == qualifier)
         }
@@ -1965,9 +1965,9 @@ impl BusCore {
                 if self.measuring {
                     let codecs = self.can_codec_map();
                     let dbc = self
-                        .channels
+                        .model_dbs
                         .get(channel as usize)
-                        .and_then(|c| c.dbc.clone());
+                        .and_then(|db| db.clone());
                     let keys = self.sysvar_keys();
                     let last = self.nodes.last_mut().expect("just added");
                     last.sysvar_keys = keys;
@@ -2011,9 +2011,9 @@ impl BusCore {
                     .and_then(|n| self.can_codec(n.channel));
                 if let Some(n) = self.nodes.iter_mut().find(|n| n.id == id) {
                     let dbc = self
-                        .channels
+                        .model_dbs
                         .get(n.channel as usize)
-                        .and_then(|c| c.dbc.clone());
+                        .and_then(|db| db.clone());
                     n.sysvar_keys = keys;
                     n.set_source(
                         source,
@@ -2035,9 +2035,9 @@ impl BusCore {
                     .and_then(|n| self.can_codec(n.channel));
                 if let Some(n) = self.nodes.iter_mut().find(|n| n.id == id) {
                     let dbc = self
-                        .channels
+                        .model_dbs
                         .get(n.channel as usize)
-                        .and_then(|c| c.dbc.clone());
+                        .and_then(|db| db.clone());
                     n.sysvar_keys = keys;
                     n.set_enabled(
                         on,
@@ -2070,9 +2070,9 @@ impl BusCore {
                         }
                         if self.measuring && n.enabled {
                             let dbc = self
-                                .channels
+                                .model_dbs
                                 .get(n.channel as usize)
-                                .and_then(|c| c.dbc.clone());
+                                .and_then(|db| db.clone());
                             n.sysvar_keys = keys.clone();
                             n.start_with(
                                 dbc,
@@ -2201,9 +2201,9 @@ impl BusCore {
                         );
                         if b.enabled {
                             let dbc = self
-                                .channels
+                                .model_dbs
                                 .get(b.channel as usize)
-                                .and_then(|c| c.dbc.clone());
+                                .and_then(|db| db.clone());
                             let node_ids = b
                                 .node_filter
                                 .as_deref()
@@ -2610,7 +2610,6 @@ impl BusCore {
             BusCommand::ClearDatabases => {
                 for c in &mut self.channels {
                     c.dbc_paths.clear();
-                    c.dbc = None;
                 }
                 self.model_comms.clear();
                 self.model_plans.clear();
@@ -2969,9 +2968,9 @@ impl BusCore {
         for node in &mut self.nodes {
             if node.enabled {
                 let dbc = self
-                    .channels
+                    .model_dbs
                     .get(node.channel as usize)
-                    .and_then(|c| c.dbc.clone());
+                    .and_then(|db| db.clone());
                 node.sysvar_keys = keys.clone();
                 node.start_with(
                     dbc,
@@ -4010,13 +4009,14 @@ impl BusCore {
             channels: self
                 .channels
                 .iter()
-                .map(|c| ChannelView {
+                .enumerate()
+                .map(|(index, c)| ChannelView {
                     name: c.name.clone(),
                     dbc_paths: c.dbc_paths.clone(),
                     bitrate_kbps: c.bitrate_kbps,
                     fd_data_kbps: c.fd_data_kbps,
                     node_roles: c.node_roles.clone(),
-                    dbc: c.dbc.clone(),
+                    dbc: self.model_dbs.get(index).and_then(|db| db.clone()),
                 })
                 .collect(),
             mode: self.mode,
@@ -4215,7 +4215,7 @@ impl BusCore {
         let index = ch as usize;
         let comm = self.model_comms.get(index)?.as_ref()?.clone();
         let plans = self.model_plans.get(index)?.as_ref()?.clone();
-        let db = self.channels.get(index)?.dbc.as_ref()?;
+        let db = self.model_dbs.get(index)?.as_ref()?;
         if !Arc::ptr_eq(self.model_dbs.get(index)?.as_ref()?, db) {
             return None;
         }
@@ -4421,8 +4421,8 @@ impl BusCore {
                 .unwrap_or_default(),
             SigKey::Can { id, ext, name, .. } => self
                 .key_bus(key)
-                .and_then(|ch| self.channels.get(ch as usize))
-                .and_then(|c| c.dbc.as_ref())
+                .and_then(|ch| self.model_dbs.get(ch as usize))
+                .and_then(|db| db.as_ref())
                 .and_then(|db| db.messages.get(&(*id, *ext)))
                 .and_then(|m| m.signals.iter().find(|s| &s.name == name))
                 .map(|s| s.type_tag.clone())
@@ -4624,7 +4624,6 @@ impl BusCore {
         self.bus_counter += 1;
         self.channels.push(Channel {
             name: format!("CAN{}", self.bus_counter),
-            dbc: None,
             dbc_paths: vec!["builtin:sample.dbc".to_string()],
             dbc_sums: Vec::new(),
             node_roles: std::collections::BTreeMap::new(),
@@ -4639,8 +4638,7 @@ impl BusCore {
         self.loads_dirty = true;
         let ch = self.channels.len() - 1;
         self.load_channel(ch, status);
-        let ids: Vec<u32> = self.channels[ch]
-            .dbc
+        let ids: Vec<u32> = self.model_dbs[ch]
             .as_ref()
             .map(|db| db.order.iter().map(|&(id, _)| id).collect())
             .unwrap_or_default();
@@ -4662,7 +4660,6 @@ impl BusCore {
         self.bus_counter += 1;
         self.channels.push(Channel {
             name: name.clone(),
-            dbc: Some(Arc::clone(&dbc)),
             dbc_paths: Vec::new(),
             dbc_sums: Vec::new(),
             node_roles: std::collections::BTreeMap::new(),
@@ -4672,7 +4669,7 @@ impl BusCore {
         self.model_comms.push(None);
         self.can_cluster_ids.push(self.cluster_ids.allocate());
         self.model_plans.push(None);
-        self.model_dbs.push(None);
+        self.model_dbs.push(Some(Arc::clone(&dbc)));
         self.bus_loads.push(crate::load::BusLoad::new());
         self.loads_dirty = true;
         self.nodes_dirty = true;
@@ -4694,7 +4691,6 @@ impl BusCore {
             return;
         };
         let name = channel.name.clone();
-        channel.dbc = Some(Arc::clone(&dbc));
         channel.dbc_paths.clear();
         channel.dbc_sums.clear();
         self.nodes_dirty = true;
@@ -4703,8 +4699,8 @@ impl BusCore {
                 node.refresh_named_signals(&dbc);
             }
         }
+        self.set_can_table(ch as usize, Some(dbc.clone()));
         self.seed_entries_for_simulated(ch as usize);
-        self.rebuild_can_model(ch as usize);
         *status = format!("{name} ARXML loaded: {} message(s)", dbc.order.len());
     }
 
@@ -4719,8 +4715,8 @@ impl BusCore {
             return false;
         };
         if channel.dbc_paths.iter().all(|p| p.trim().is_empty()) {
-            channel.dbc = None;
             channel.dbc_sums.clear();
+            self.set_can_table(ch, None);
             return false;
         }
         let name = channel.name.clone();
@@ -4760,7 +4756,7 @@ impl BusCore {
         let loaded = tables.len();
         let total: usize = tables.iter().map(|t| t.order.len()).sum();
         if tables.is_empty() {
-            channel.dbc = None;
+            self.set_can_table(ch, None);
             *status = match first_error {
                 Some(e) => format!("{name} DBC error: {e}"),
                 None => format!("{name} DBC error: no database file"),
@@ -4774,7 +4770,7 @@ impl BusCore {
         let merged = std::sync::Arc::new(merged);
         // Transmitter lists feed the role cards.
         self.nodes_dirty = true;
-        channel.dbc = Some(merged.clone());
+        self.set_can_table(ch, Some(merged.clone()));
         // `$报文::信号` 的名字→id 映射随库刷新：报文换了 id 或名字没了，
         // 节点的映射原地更新，变化进节点日志（静默错位由此可解释）。
         for node in &mut self.nodes {
@@ -4795,6 +4791,39 @@ impl BusCore {
         true
     }
 
+    /// Test hook for fixtures that used to assign `Channel::dbc` directly.
+    #[cfg(test)]
+    pub(crate) fn set_can_table_for_test(
+        &mut self,
+        ch: usize,
+        db: Option<Arc<crate::dbc::SymbolTable>>,
+    ) {
+        self.set_can_table(ch, db);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn copy_can_table_for_test(&mut self, from: usize, to: usize) {
+        let db = self.model_dbs.get(from).and_then(|db| db.clone());
+        self.set_can_table(to, db);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn move_can_table_for_test(&mut self, from: usize, to: usize) {
+        let db = self.model_dbs.get_mut(from).and_then(|db| db.take());
+        self.set_can_table(to, db);
+        self.rebuild_can_model(from);
+    }
+
+    /// Replaces the parsed table behind a CAN channel and rebuilds its model.
+    /// The table is the model adapter's guard, not separate bus state.
+    fn set_can_table(&mut self, ch: usize, db: Option<Arc<crate::dbc::SymbolTable>>) {
+        while self.model_dbs.len() <= ch {
+            self.model_dbs.push(None);
+        }
+        self.model_dbs[ch] = db;
+        self.rebuild_can_model(ch);
+    }
+
     /// Rebuilds the unified model and its decode plans for one CAN channel.
     /// The model is the source of signal values for every frame it knows,
     /// including multiplexed DBC messages (`mux_when`) and containers; the
@@ -4808,13 +4837,11 @@ impl BusCore {
         let Some(channel) = self.channels.get(ch) else {
             return;
         };
-        let Some(db) = channel.dbc.as_ref() else {
+        let Some(db) = self.model_dbs.get(ch).and_then(|db| db.clone()) else {
             self.model_comms[ch] = None;
             self.model_plans[ch] = None;
-            self.model_dbs[ch] = None;
             return;
         };
-        let db = Arc::clone(db);
         let name = channel.name.clone();
         let bitrate = channel.bitrate_kbps;
         let fd = channel.fd_data_kbps;
@@ -4869,7 +4896,7 @@ impl BusCore {
             return;
         };
         let label = channel.name.clone();
-        let channel_dbc = channel.dbc.clone();
+        let channel_dbc = self.model_dbs.get(ch).and_then(|db| db.clone());
         if self.model_comms.len() <= ch {
             self.model_comms.resize(ch + 1, None);
             self.model_plans.resize(ch + 1, None);
@@ -5034,10 +5061,6 @@ impl BusCore {
         let ch = f.channel as usize;
         let comm = self.model_comms.get(ch)?.as_ref()?;
         let plans = self.model_plans.get(ch)?.as_ref()?;
-        let db = self.channels.get(ch)?.dbc.as_ref()?;
-        if !Arc::ptr_eq(self.model_dbs.get(ch)?.as_ref()?, db) {
-            return None;
-        }
         let cluster = *self.can_cluster_ids.get(ch)?;
         let frame = comm.frames_in_cluster(cluster).find(|frame| {
             matches!(
@@ -5168,17 +5191,9 @@ impl BusCore {
             .model_plans
             .get(f.channel as usize)
             .and_then(|entry| entry.as_ref())?;
-        let db = self
-            .channels
-            .get(f.channel as usize)
-            .and_then(|channel| channel.dbc.as_ref())?;
-        let model_db = self
-            .model_dbs
+        self.model_dbs
             .get(f.channel as usize)
             .and_then(|entry| entry.as_ref())?;
-        if !Arc::ptr_eq(model_db, db) {
-            return None;
-        }
         let cluster = *self.can_cluster_ids.get(f.channel as usize)?;
         // A standard and an extended message can share one id; the class is
         // part of the frame's identity, not a check after the fact.
@@ -5521,9 +5536,10 @@ impl BusCore {
             .channels
             .iter()
             .enumerate()
-            .flat_map(|(ch, c)| {
-                c.dbc
-                    .as_ref()
+            .flat_map(|(ch, _)| {
+                self.model_dbs
+                    .get(ch)
+                    .and_then(|db| db.as_ref())
                     .map(|db| db.order.iter().map(move |&(id, _)| (ch as u8, id)))
                     .into_iter()
                     .flatten()
@@ -5789,9 +5805,9 @@ impl BusCore {
         );
         if block.enabled {
             let dbc = self
-                .channels
+                .model_dbs
                 .get(block.channel as usize)
-                .and_then(|c| c.dbc.clone());
+                .and_then(|db| db.clone());
             let node_ids = block
                 .node_filter
                 .as_deref()
@@ -5831,9 +5847,9 @@ impl BusCore {
         block.ids = ids;
         if block.enabled {
             let dbc = self
-                .channels
+                .model_dbs
                 .get(block.channel as usize)
-                .and_then(|c| c.dbc.clone());
+                .and_then(|db| db.clone());
             block.load_queue(dbc.as_deref(), self.sim_t_us);
         }
         *status = format!("replay block `{}` updated", block.name);
@@ -5863,9 +5879,9 @@ impl BusCore {
         block.enabled = on;
         if on {
             let dbc = self
-                .channels
+                .model_dbs
                 .get(block.channel as usize)
-                .and_then(|c| c.dbc.clone());
+                .and_then(|db| db.clone());
             block.load_queue_with(dbc.as_deref(), node_ids, self.sim_t_us);
             *status = match (&block.last_error, block.enabled) {
                 (Some(e), _) => format!("replay block `{}`: {e}", block.name),
@@ -5955,17 +5971,9 @@ impl BusCore {
             .model_plans
             .get(channel as usize)
             .and_then(|entry| entry.as_ref())?;
-        let db = self
-            .channels
-            .get(channel as usize)
-            .and_then(|channel| channel.dbc.as_ref())?;
-        let model_db = self
-            .model_dbs
+        self.model_dbs
             .get(channel as usize)
             .and_then(|entry| entry.as_ref())?;
-        if !Arc::ptr_eq(model_db, db) {
-            return None;
-        }
         let cluster = self.can_cluster_ids.get(channel as usize).copied()?;
         let frame = comm.frames_in_cluster(cluster).find(|frame| {
             frame.address.can_id() == Some(id)
@@ -6773,9 +6781,9 @@ impl BusCore {
         for block in &mut self.replay_blocks {
             if block.enabled {
                 let dbc = self
-                    .channels
+                    .model_dbs
                     .get(block.channel as usize)
-                    .and_then(|c| c.dbc.clone());
+                    .and_then(|db| db.clone());
                 block.load_queue(dbc.as_deref(), self.sim_t_us);
                 if let Some(e) = &block.last_error {
                     block_notes.push(format!("`{}`: {e}", block.name));
@@ -7267,14 +7275,12 @@ impl BusCore {
         let models: Vec<Option<ModelHandle>> = channels
             .iter()
             .enumerate()
-            .map(|(index, channel)| {
+            .map(|(index, _)| {
                 let cluster = *self.can_cluster_ids.get(index)?;
                 let comm = self.model_comms.get(index)?.as_ref()?;
                 let plans = self.model_plans.get(index)?.as_ref()?;
-                let model_db = self.model_dbs.get(index)?.as_ref()?;
-                let current = channel.dbc.as_ref()?;
-                Arc::ptr_eq(model_db, current)
-                    .then(|| (cluster, Arc::clone(comm), Arc::clone(plans)))
+                self.model_dbs.get(index)?.as_ref()?;
+                Some((cluster, Arc::clone(comm), Arc::clone(plans)))
             })
             .collect();
         let mut emitted: Vec<CanFrame> = Vec::new();
@@ -7854,9 +7860,7 @@ impl BusCore {
 
     /// The database loaded on bus `ch`, if any.
     pub(crate) fn channel_dbc(&self, ch: u8) -> Option<&crate::dbc::SymbolTable> {
-        self.channels
-            .get(ch as usize)
-            .and_then(|c| c.dbc.as_deref())
+        self.model_dbs.get(ch as usize)?.as_deref()
     }
 
     /// What the database declares for this message: `Some(0)` for an
@@ -7920,11 +7924,7 @@ impl BusCore {
 
     fn model_can_cycle_us(&self, ch: u8, id: u32) -> Option<u64> {
         let comm = self.model_comms.get(ch as usize)?.as_ref()?;
-        let model_db = self.model_dbs.get(ch as usize)?.as_ref()?;
-        let current = self.channels.get(ch as usize)?.dbc.as_ref()?;
-        if !Arc::ptr_eq(model_db, current) {
-            return None;
-        }
+        self.model_dbs.get(ch as usize)?.as_ref()?;
         let cluster = *self.can_cluster_ids.get(ch as usize)?;
         comm.frames_in_cluster(cluster)
             .find(|frame| frame.address.can_id() == Some(id))

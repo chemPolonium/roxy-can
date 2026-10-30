@@ -1119,9 +1119,12 @@ BO_ 768 WideMsg: 16 ECU
 /// carries `(t as f64 / 1e6) * hi`.
 fn driven_app(signal: &str, kind: crate::sim::SrcKind, lo: f64, hi: f64) -> App {
     let mut app = App::headless();
-    app.channels[0].dbc = Some(std::sync::Arc::new(
-        crate::dbc::load_dbc_str(WIDE_DBC).expect("wide dbc parses"),
-    ));
+    app.set_can_table_for_test(
+        0,
+        Some(std::sync::Arc::new(
+            crate::dbc::load_dbc_str(WIDE_DBC).expect("wide dbc parses"),
+        )),
+    );
     // The generator encodes through the unified model, so the fixture has to
     // build the model the direct table assignment skipped.
     app.rebuild_can_model(0);
@@ -1322,9 +1325,12 @@ fn new_generator_entries_inherit_the_declared_cycle() {
 #[test]
 fn an_event_triggered_message_is_never_auto_sent() {
     let mut app = App::headless();
-    app.channels[0].dbc = Some(std::sync::Arc::new(
-        crate::dbc::load_dbc_str(CYCLE_TEST_DBC).unwrap(),
-    ));
+    app.set_can_table_for_test(
+        0,
+        Some(std::sync::Arc::new(
+            crate::dbc::load_dbc_str(CYCLE_TEST_DBC).unwrap(),
+        )),
+    );
     // Generator metadata comes from the model, so the fixture has to build it
     // after assigning the table directly.
     app.rebuild_can_model(0);
@@ -1627,7 +1633,7 @@ fn the_role_gate_silences_a_node_even_after_its_dbc_is_gone() {
     app.settle();
     assert_eq!(active_ids(&app, 1).len(), 3);
 
-    app.channels[1].dbc = None;
+    app.set_can_table_for_test(1, None);
     app.refresh_snapshot();
     app.set_node_role(1, "ABS", NodeRole::Absent);
     app.settle();
@@ -1720,9 +1726,12 @@ fn the_declared_cycle_survives_a_hand_tuned_row() {
         "not whatever the row currently says"
     );
 
-    app.channels[0].dbc = Some(std::sync::Arc::new(
-        crate::dbc::load_dbc_str(CYCLE_TEST_DBC).unwrap(),
-    ));
+    app.set_can_table_for_test(
+        0,
+        Some(std::sync::Arc::new(
+            crate::dbc::load_dbc_str(CYCLE_TEST_DBC).unwrap(),
+        )),
+    );
     app.refresh_snapshot();
     assert_eq!(
         app.dbc_cycle_us(0, 4096),
@@ -1764,9 +1773,12 @@ BO_ 4096 Orphan: 8 Vector__XXX
 #[test]
 fn a_node_with_no_name_simulates_nothing() {
     let mut app = App::headless();
-    app.channels[0].dbc = Some(std::sync::Arc::new(
-        crate::dbc::load_dbc_str(NO_OWNER_DBC).unwrap(),
-    ));
+    app.set_can_table_for_test(
+        0,
+        Some(std::sync::Arc::new(
+            crate::dbc::load_dbc_str(NO_OWNER_DBC).unwrap(),
+        )),
+    );
     app.tx_list.retain(|t| t.channel != 0);
     app.add_tx(0, 4096);
     assert_eq!(entry_of(&app, 0, 4096).node, "", "unassigned");
@@ -1814,7 +1826,7 @@ fn tx_generator_emits_frames() {
 #[test]
 fn a_reference_log_decodes_the_selected_can_signals() {
     let app = App::headless();
-    let db = app.channels[0].dbc.as_ref().expect("sample DBC loaded");
+    let db = app.channel_dbc(0).expect("sample DBC loaded");
     let id = db.order[0].0;
     let name = db.messages[&(id, false)].signals[0].name.clone();
     let key = SigKey::can_in(crate::model::ClusterId(1), id, false, name);
@@ -2242,7 +2254,7 @@ fn a_derived_trigger_fires_inside_a_real_step() {
 #[test]
 fn aligned_signal_csv_writes_one_row_per_time_step() {
     let mut app = App::headless();
-    let db = app.channels[0].dbc.as_ref().expect("sample DBC loaded");
+    let db = app.channel_dbc(0).expect("sample DBC loaded");
     let id = db.order[0].0;
     let name = db.messages[&(id, false)].signals[0].name.clone();
     let key = SigKey::can_in(crate::model::ClusterId(1), id, false, name);
@@ -2539,8 +2551,12 @@ fn the_spec_report_export_includes_its_premises_and_rows() {
 fn two_channels_aggregate_separately() {
     let mut app = App::headless();
     assert_eq!(app.channels.len(), 2);
-    for (ch, c) in app.channels.iter().enumerate() {
-        assert!(c.dbc.is_some(), "CAN{} should load its DBC", ch + 1);
+    for (ch, _) in app.channels.iter().enumerate() {
+        assert!(
+            app.channel_dbc(ch as u8).is_some(),
+            "CAN{} should load its DBC",
+            ch + 1
+        );
     }
     // 角色开关：两条总线的节点全部模拟，条目才会发送。
     open_all_gates(&mut app);
@@ -2585,7 +2601,7 @@ fn two_channels_aggregate_separately() {
 #[test]
 fn csv_exports_match_window_state() {
     let mut app = App::headless();
-    let db = app.channels[0].dbc.as_ref().expect("sample DBC loaded");
+    let db = app.channel_dbc(0).expect("sample DBC loaded");
     let id = db.order[0].0;
     let sig = db.messages[&(id, false)].signals[0].name.clone();
     let key = SigKey::can_in(crate::model::ClusterId(1), id, false, sig);
@@ -3664,7 +3680,7 @@ fn dropping_a_dbc_loads_it_into_the_first_bus() {
         ["builtin:sample.dbc".to_string(), motbus.to_string()]
     );
     assert!(
-        app.channels[0].dbc.is_some(),
+        app.channel_dbc(0).is_some(),
         "dropped DBC is parsed into the first bus"
     );
     assert_eq!(app.recent_dbc[0], motbus);
@@ -3704,9 +3720,9 @@ fn new_project_starts_completely_empty() {
     let mut app = App::headless();
     app.new_project();
     assert!(
-        app.channels
-            .iter()
-            .all(|c| c.dbc.is_none() && c.dbc_paths.is_empty()),
+        (0..app.channels.len()).all(|ch| {
+            app.channel_dbc(ch as u8).is_none() && app.channels[ch].dbc_paths.is_empty()
+        }),
         "no DBCs on any bus"
     );
     assert!(app.trace_windows.is_empty());
@@ -3963,9 +3979,12 @@ BA_ "GenMsgCycleTime" BO_ 300 0;
 /// arrived through `receive`.
 fn spec_app() -> App {
     let mut app = App::headless();
-    app.channels[0].dbc = Some(std::sync::Arc::new(
-        crate::dbc::load_dbc_str(SPEC_DBC).unwrap(),
-    ));
+    app.set_can_table_for_test(
+        0,
+        Some(std::sync::Arc::new(
+            crate::dbc::load_dbc_str(SPEC_DBC).unwrap(),
+        )),
+    );
     app.tx_list.retain(|t| t.channel != 0);
     app.start_virtual();
     app
@@ -4030,7 +4049,7 @@ fn an_identifier_the_database_lacks_is_reported_unknown() {
 #[test]
 fn a_bus_with_no_database_reports_nothing_at_all() {
     let mut app = spec_app();
-    app.channels[0].dbc = None;
+    app.set_can_table_for_test(0, None);
     app.refresh_snapshot();
     assert!(app.channel_dbc(0).is_none(), "test setup: no database");
     receive(&mut app, 0, vec![frame_at(0, 0x777, 3, Direction::Rx)]);
@@ -4396,7 +4415,7 @@ fn a_verdict_follows_its_bus_when_an_earlier_bus_is_deleted() {
     let mut app = spec_app();
     // Move the fixture database onto the second bus and leave the first
     // without one, then delete the first.
-    app.channels[1].dbc = app.channels[0].dbc.take();
+    app.move_can_table_for_test(0, 1);
     receive(
         &mut app,
         0,
@@ -5349,10 +5368,7 @@ fn debug_default_model_availability() {
         .values()
         .map(|frame| format!("{} {:?}", frame.name, frame.address))
         .collect();
-    let db_ok = app.model_dbs[0]
-        .as_ref()
-        .zip(app.channels[0].dbc.as_ref())
-        .is_some_and(|(a, b)| std::sync::Arc::ptr_eq(a, b));
+    let db_ok = app.model_dbs[0].is_some();
     let frame = comm.frames_in_cluster(app.can_cluster_ids[0]).find(|frame| {
         matches!(frame.address, crate::model::FrameAddress::Can { id, extended, .. } if id == 0x100 && !extended)
     });
@@ -8060,7 +8076,7 @@ fn two_flexray_watches_feed_their_own_buses() {
 #[test]
 fn messages_rows_that_print_one_label_keep_their_own_ids() {
     let mut app = spec_app();
-    app.channels[1].dbc = app.channels[0].dbc.clone();
+    app.copy_can_table_for_test(0, 1);
     receive(
         &mut app,
         0,

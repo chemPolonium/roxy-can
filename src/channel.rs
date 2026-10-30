@@ -2,7 +2,6 @@
 //! load view divides wire bits by.
 
 use std::collections::BTreeMap;
-use std::sync::Arc;
 
 use crate::dbc::SymbolTable;
 
@@ -50,9 +49,6 @@ impl NodeRole {
 /// same allocation instead of a copy.
 pub struct Channel {
     pub name: String,
-    /// The **merged** database of every path in `dbc_paths`: decoded
-    /// lookups never need to know how many files back it.
-    pub dbc: Option<Arc<SymbolTable>>,
     /// The primary path (UI-editable) plus any extra databases attached
     /// to this bus. First entry is the primary; on duplicate message ids
     /// the earlier database wins.

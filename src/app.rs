@@ -367,7 +367,6 @@ impl App {
         core.channels = vec![
             Channel {
                 name: "CAN1".to_string(),
-                dbc: None,
                 dbc_paths: vec!["builtin:sample.dbc".to_string()],
                 dbc_sums: Vec::new(),
                 node_roles: std::collections::BTreeMap::new(),
@@ -376,7 +375,6 @@ impl App {
             },
             Channel {
                 name: "CAN2".to_string(),
-                dbc: None,
                 dbc_paths: vec!["builtin:motbus.dbc".to_string()],
                 dbc_sums: Vec::new(),
                 node_roles: std::collections::BTreeMap::new(),
