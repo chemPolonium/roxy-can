@@ -781,4 +781,43 @@ fn the_real_42_system_extract_imports_secured_and_group_e2e() {
             .any(|issue| issue.message.contains("counter continuity is not planned")),
         "no silent drop of the group-level declaration"
     );
+
+    // Bit-level golden through the secured frame: no header on this corpus,
+    // so the inner PDU starts at bit 0. CRC is byte 0, the 4-bit sequence
+    // counter sits at bit 8, little-endian.
+    let frame = comm
+        .frames
+        .values()
+        .find(|frame| frame.name == "Message3")
+        .expect("Message3 frame");
+    let (plan, issues) = crate::model::build_decode_plan(&comm, frame, 1);
+    assert!(
+        issues
+            .iter()
+            .all(|issue| issue.severity != crate::model::IssueSeverity::Error),
+        "{issues:?}"
+    );
+    let payload = [0xAA, 0x5B, 0, 0, 0, 0, 0, 0];
+    let decoded = crate::model::decode_payload(&comm, &plan, &payload);
+    let raw = |name: &str| {
+        decoded
+            .iter()
+            .find(|value| {
+                comm.signals
+                    .get(&value.signal)
+                    .is_some_and(|signal| signal.name == name)
+            })
+            .map(|value| value.raw)
+    };
+    assert_eq!(raw("message3_CRC"), Some(0xAA));
+    assert_eq!(raw("message3_SeqCounter"), Some(0xB));
+    let crc = comm
+        .signals
+        .values()
+        .find(|signal| signal.name == "message3_CRC")
+        .expect("crc signal")
+        .id;
+    let mut encoded = [0u8; 8];
+    crate::model::encode_payload(&comm, &plan, &[(crc, 0x55 as f64)], &mut encoded);
+    assert_eq!(encoded[0], 0x55, "the secured frame writes the inner bits");
 }
