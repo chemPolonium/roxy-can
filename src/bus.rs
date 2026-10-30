@@ -5165,6 +5165,12 @@ impl BusCore {
         }
         let mut comm = (*comm).clone();
         comm.rebind_cluster(self.can_cluster_ids[ch]);
+        let cluster = self.can_cluster_ids[ch];
+        for node in &mut self.nodes {
+            if node.channel as usize == ch {
+                node.refresh_named_signals_from_model(&comm, cluster);
+            }
+        }
         let (plans, plan_issues) = crate::model::PlanCache::build(&comm, 1);
         self.report_model_issues(&label, &comm.issues);
         self.report_model_issues(&label, &plan_issues);

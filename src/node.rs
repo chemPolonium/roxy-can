@@ -646,11 +646,40 @@ impl ScriptNode {
     /// it. The map refreshes in place and every change lands in the node
     /// log as a `[reload]` line, so a stale read is explainable.
     pub fn refresh_named_signals(&mut self, db: &crate::dbc::SymbolTable) {
+        self.refresh_named_with(&|message| db.message_id_by_name(message), &|message| {
+            db.message_key_by_name(message)
+        });
+    }
+
+    /// The same refresh against the unified model, for ARXML clusters that
+    /// no longer have a DBC-shaped table.
+    pub fn refresh_named_signals_from_model(
+        &mut self,
+        comm: &crate::model::Comm,
+        cluster: crate::model::ClusterId,
+    ) {
+        let frame = |name: &str| comm.frame_by_name(cluster, name);
+        self.refresh_named_with(
+            &|message| frame(message).and_then(|frame| frame.address.can_id()),
+            &|message| {
+                frame(message).and_then(|frame| match frame.address {
+                    crate::model::FrameAddress::Can { id, extended, .. } => Some((id, extended)),
+                    _ => None,
+                })
+            },
+        );
+    }
+
+    fn refresh_named_with(
+        &mut self,
+        id_of: &dyn Fn(&str) -> Option<u32>,
+        key_of: &dyn Fn(&str) -> Option<(u32, bool)>,
+    ) {
         let Some(rt) = self.runtime.as_mut() else {
             return;
         };
         for (msg, sig) in rt.vm.named_signal_refs().to_vec() {
-            let new_id = db.message_id_by_name(&msg);
+            let new_id = id_of(&msg);
             let old = rt.vm.named_messages.get(&msg).copied();
             match (old, new_id) {
                 (Some(o), Some(n)) if o == n => {}
@@ -701,7 +730,7 @@ impl ScriptNode {
         }
         let mut resolved = HashMap::new();
         for name in &names {
-            if let Some(key) = db.message_key_by_name(name)
+            if let Some(key) = key_of(name)
                 && taken.insert(key)
             {
                 resolved.insert(name.clone(), key);
