@@ -1183,7 +1183,7 @@ fn perf_snapshot_publish_under_load() {
 
     // Current design, worst case: every cache resampled this lap.
     let mut now = 1_000_000u64;
-    let t0 = std::time::Instant::now();
+    let mut dirty_laps = Vec::with_capacity(ROUNDS as usize);
     for _ in 0..ROUNDS {
         now += 20_000;
         for key in &keys {
@@ -1191,17 +1191,31 @@ fn perf_snapshot_publish_under_load() {
                 s.history_dirty = true;
             }
         }
+        let lap = std::time::Instant::now();
         app.tick(now);
+        dirty_laps.push(lap.elapsed().as_secs_f64() * 1e6);
     }
-    let dirty_lap_us = t0.elapsed().as_micros() as f64 / ROUNDS as f64;
+    let dirty_lap_us: f64 = dirty_laps.iter().sum::<f64>() / ROUNDS as f64;
+    let mut sorted = dirty_laps.clone();
+    sorted.sort_by(f64::total_cmp);
+    let dirty_p50 = sorted[sorted.len() / 2];
+    let dirty_p99 = sorted[sorted.len() * 99 / 100];
 
     // Current design, idle: nothing resampled, publish is pure sharing.
-    let t0 = std::time::Instant::now();
+    let mut idle_laps = Vec::with_capacity(ROUNDS as usize);
     for _ in 0..ROUNDS {
         now += 20_000;
+        let lap = std::time::Instant::now();
         app.tick(now);
+        idle_laps.push(lap.elapsed().as_secs_f64() * 1e6);
     }
-    let idle_lap_us = t0.elapsed().as_micros() as f64 / ROUNDS as f64;
+    let idle_lap_us: f64 = idle_laps.iter().sum::<f64>() / ROUNDS as f64;
+    let mut sorted = idle_laps.clone();
+    sorted.sort_by(f64::total_cmp);
+    let idle_p50 = sorted[sorted.len() / 2];
+    let idle_p99 = sorted[sorted.len() * 99 / 100];
+
+    let json_bytes = crate::web::state_json_size(&app);
 
     eprintln!();
     eprintln!(
@@ -1211,12 +1225,17 @@ fn perf_snapshot_publish_under_load() {
         crate::app::TRACE_LIMIT
     );
     eprintln!("old design, deep copy per publish : {old_publish_us:8.1} us");
-    eprintln!("now, worst case (all caches dirty): {dirty_lap_us:8.1} us");
-    eprintln!("now, idle (nothing resampled)     : {idle_lap_us:8.1} us");
+    eprintln!(
+        "now, worst case (all caches dirty): {dirty_lap_us:8.1} us mean, p50 {dirty_p50:.1}, p99 {dirty_p99:.1}"
+    );
+    eprintln!(
+        "now, idle (nothing resampled)     : {idle_lap_us:8.1} us mean, p50 {idle_p50:.1}, p99 {idle_p99:.1}"
+    );
     eprintln!(
         "worst-case ratio vs old design    : {:8.1}x cheaper",
         old_publish_us / dirty_lap_us.max(0.001)
     );
+    eprintln!("published snapshot JSON           : {json_bytes} bytes");
 }
 
 /// The same kind of probe on the FlexRay side: what one refresh of the Trace /

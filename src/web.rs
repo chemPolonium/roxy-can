@@ -5128,6 +5128,16 @@ fn eth_message_key(key: &crate::aggregate::EthFlowKey) -> String {
     key.message_key()
 }
 
+/// Test and performance hook: the byte size of the state JSON one browser
+/// poll receives for this app (empty live-series queue).
+#[cfg(test)]
+pub(crate) fn state_json_size(app: &App) -> usize {
+    let series = VecDeque::new();
+    serde_json::to_vec(&build_state(app, &series, 0.0))
+        .map(|json| json.len())
+        .unwrap_or(0)
+}
+
 fn build_state(app: &App, series: &VecDeque<WebSeriesPoint>, fps: f64) -> WebState {
     let snap = &app.snap;
     let buses: Vec<WebBus> = snap
