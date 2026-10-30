@@ -394,6 +394,65 @@ export function freeCursorTime(
   return null;
 }
 
+/// Nearest sample time across the plotted series, if it is within tolerance.
+export function nearestSampleTime(
+  lists: [number, number][][],
+  t: number,
+  tolerance: number,
+): number | null {
+  let best: number | null = null;
+  let bestDistance = tolerance;
+  for (const points of lists) {
+    if (points.length === 0) continue;
+    const index = lowerBound(points, t);
+    if (index < points.length) {
+      const distance = Math.abs(points[index][0] - t);
+      if (distance <= bestDistance) {
+        bestDistance = distance;
+        best = points[index][0];
+      }
+    }
+    if (index > 0) {
+      const distance = Math.abs(points[index - 1][0] - t);
+      if (distance < bestDistance) {
+        bestDistance = distance;
+        best = points[index - 1][0];
+      }
+    }
+  }
+  return best;
+}
+
+/// First sample strictly after `t` across the plotted series.
+export function nextSampleTime(
+  lists: [number, number][][],
+  t: number,
+): number | null {
+  let best = Number.POSITIVE_INFINITY;
+  for (const points of lists) {
+    const index = lowerBound(points, t + 1e-9);
+    if (index < points.length && points[index][0] < best) {
+      best = points[index][0];
+    }
+  }
+  return Number.isFinite(best) ? best : null;
+}
+
+/// Last sample strictly before `t` across the plotted series.
+export function prevSampleTime(
+  lists: [number, number][][],
+  t: number,
+): number | null {
+  let best = Number.NEGATIVE_INFINITY;
+  for (const points of lists) {
+    const index = lowerBound(points, t);
+    if (index > 0 && points[index - 1][0] > best) {
+      best = points[index - 1][0];
+    }
+  }
+  return Number.isFinite(best) ? best : null;
+}
+
 /// Stacked signal lanes on one canvas. Curves are min/max decimated to the
 /// pixel columns, so a 12k-point series costs one vertical span per column
 /// instead of one line segment per sample.
@@ -430,7 +489,7 @@ export function SignalChart({
   view: SignalView;
   onView: (update: (old: SignalView) => SignalView) => void;
   cursors: ChartCursor[];
-  onAddCursor: (t: number) => void;
+  onAddCursor: (t: number) => number;
   onMoveCursor: (id: number, t: number) => void;
   onClearCursors: () => void;
   onSignalAction: (key: string, action: ChartSignalAction) => void;
@@ -462,6 +521,7 @@ export function SignalChart({
     null,
   );
   const [hoverCursorId, setHoverCursorId] = useState<number | null>(null);
+  const [activeCursorId, setActiveCursorId] = useState<number | null>(null);
   const [nameTip, setNameTip] = useState<{
     x: number;
     y: number;
@@ -514,18 +574,28 @@ export function SignalChart({
     };
   };
 
+  const cursorTolerance = () =>
+    Math.max(1e-9, (view.windowS / plotWidth()) * 2);
+
+  const snapTime = (t: number): number => {
+    const lists = series.map((signal) => signal.points);
+    return nearestSampleTime(lists, t, cursorTolerance() * 2.5) ?? t;
+  };
+
   const placeCursorAt = (t: number) => {
     if (series.length === 0 && !hasReadout) return;
     const { start, end } = viewWindow();
     const from = Math.max(start, timeBounds.first);
     const to = Math.min(end, timeBounds.last);
     if (!(to > from)) return;
-    const at = clamp(t, from, to);
-    const tolerance = Math.max(1e-9, (view.windowS / plotWidth()) * 2);
+    const at = clamp(snapTime(clamp(t, from, to)), from, to);
+    const tolerance = cursorTolerance();
     if (cursors.some((cursor) => Math.abs(cursor.t - at) <= tolerance)) {
       return;
     }
-    onAddCursor(at);
+    const id = onAddCursor(at);
+    setActiveCursorId(id);
+    canvasRef.current?.focus({ preventScroll: true });
   };
 
   const addCursor = () => {
@@ -535,14 +605,43 @@ export function SignalChart({
     // freshly started run does not drop the cursor into empty time.
     const from = Math.max(start, timeBounds.first);
     const to = Math.min(end, timeBounds.last);
-    const tolerance = Math.max(1e-9, (view.windowS / plotWidth()) * 2);
-    const t = freeCursorTime(
+    const tolerance = cursorTolerance();
+    const center = freeCursorTime(
       from,
       to,
       cursors.map((cursor) => cursor.t),
       tolerance,
     );
-    if (t !== null) onAddCursor(t);
+    if (center === null) return;
+    const at = clamp(snapTime(center), from, to);
+    if (cursors.some((cursor) => Math.abs(cursor.t - at) <= tolerance)) {
+      return;
+    }
+    const id = onAddCursor(at);
+    setActiveCursorId(id);
+    canvasRef.current?.focus({ preventScroll: true });
+  };
+
+  const nudgeCursor = (direction: -1 | 1): boolean => {
+    const id = activeCursorId ?? cursors[cursors.length - 1]?.id;
+    const cursor = cursors.find((item) => item.id === id);
+    if (!cursor) return false;
+    const lists = series.map((signal) => signal.points);
+    const next =
+      direction > 0
+        ? nextSampleTime(lists, cursor.t)
+        : prevSampleTime(lists, cursor.t);
+    if (next !== null) {
+      onMoveCursor(cursor.id, next);
+      return true;
+    }
+    if (lists.every((points) => points.length === 0)) {
+      onMoveCursor(
+        cursor.id,
+        cursor.t + direction * (view.windowS / plotWidth()),
+      );
+    }
+    return true;
   };
 
   const cursorAt = (clientX: number, clientY: number): number | null => {
@@ -1150,7 +1249,7 @@ export function SignalChart({
         const color = colors.cursorColors[labelIndex % colors.cursorColors.length];
         ctx.strokeStyle = color;
         ctx.globalAlpha = 0.9;
-        ctx.lineWidth = 1;
+        ctx.lineWidth = cursor.id === activeCursorId ? 1.6 : 1;
         ctx.beginPath();
         ctx.moveTo(x + 0.5, TOP);
         ctx.lineTo(x + 0.5, height - AXIS_H);
@@ -1250,6 +1349,7 @@ export function SignalChart({
     cursors,
     fullscreen,
     hoverCursorId,
+    activeCursorId,
     measuring,
     paused,
     reference,
@@ -1289,11 +1389,21 @@ export function SignalChart({
         class={`signal-chart ${reorder ? "reordering" : ""} ${hoverCursorId !== null ? "cursor-hover" : ""}`}
         ref={canvasRef}
         aria-label="Live signal curves"
+        tabIndex={0}
         title={
           overlay
-            ? "Click a legend row to show or hide a signal · drag a cursor to move it · Shift+click adds a cursor · wheel zooms"
-            : "Drag a signal name to reorder · drag a cursor to move it · Shift+click adds a cursor · wheel zooms"
+            ? "Click a legend row to show or hide a signal · drag a cursor to move it · Shift+click adds a cursor · ←/→ steps it · wheel zooms"
+            : "Drag a signal name to reorder · drag a cursor to move it · Shift+click adds a cursor · ←/→ steps it · wheel zooms"
         }
+        onKeyDown={(event) => {
+          if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+          if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) {
+            return;
+          }
+          if (nudgeCursor(event.key === "ArrowLeft" ? -1 : 1)) {
+            event.preventDefault();
+          }
+        }}
         onWheel={(event) => {
           event.preventDefault();
           const canvas = canvasRef.current;
@@ -1327,6 +1437,7 @@ export function SignalChart({
         onPointerDown={(event) => {
           if (event.button !== 0) return;
           setNameTip(null);
+          event.currentTarget.focus({ preventScroll: true });
           if (event.shiftKey) {
             const rect = event.currentTarget.getBoundingClientRect();
             if (event.clientX - rect.left >= GUTTER) {
@@ -1338,6 +1449,7 @@ export function SignalChart({
           const cursor = cursorAt(event.clientX, event.clientY);
           if (cursor !== null) {
             setHoverCursorId(cursor);
+            setActiveCursorId(cursor);
             event.currentTarget.setPointerCapture(event.pointerId);
             cursorDragRef.current = cursor;
             return;
@@ -1382,7 +1494,7 @@ export function SignalChart({
           const cursor = cursorDragRef.current;
           if (cursor !== null) {
             setHoverCursorId(cursor);
-            onMoveCursor(cursor, timeAt(event.clientX));
+            onMoveCursor(cursor, snapTime(timeAt(event.clientX)));
             return;
           }
           const reordering = reorderRef.current;
@@ -1516,7 +1628,10 @@ export function SignalChart({
           <button
             type="button"
             title="Remove all time cursors"
-            onClick={onClearCursors}
+            onClick={() => {
+              setActiveCursorId(null);
+              onClearCursors();
+            }}
           >
             Clear
           </button>

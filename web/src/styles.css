@@ -2686,6 +2686,15 @@ body.row-resizing {
   touch-action: none;
 }
 
+.signal-chart:focus {
+  outline: none;
+}
+
+.signal-chart:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+}
+
 .signal-chart:active,
 .signal-chart.reordering {
   cursor: grabbing;

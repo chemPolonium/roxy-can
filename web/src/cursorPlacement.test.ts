@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { freeCursorTime } from "./components/SignalChart";
+import {
+  freeCursorTime,
+  nearestSampleTime,
+  nextSampleTime,
+  prevSampleTime,
+} from "./components/SignalChart";
 
 describe("cursor placement", () => {
   it("starts at the middle of the covered range", () => {
@@ -22,5 +27,30 @@ describe("cursor placement", () => {
         0,
       ),
     ).toBeNull();
+  });
+});
+
+describe("sample snapping", () => {
+  const a: [number, number][] = [
+    [0, 10],
+    [1, 20],
+    [2, 30],
+  ];
+  const b: [number, number][] = [
+    [0.5, 1],
+    [1.5, 2],
+  ];
+
+  it("snaps only when a sample is close enough", () => {
+    expect(nearestSampleTime([a], 1.04, 0.05)).toBe(1);
+    expect(nearestSampleTime([a], 1.2, 0.05)).toBeNull();
+    expect(nearestSampleTime([a, b], 0.6, 0.2)).toBe(0.5);
+  });
+
+  it("walks the union of sample times in both directions", () => {
+    expect(nextSampleTime([a, b], 1)).toBe(1.5);
+    expect(prevSampleTime([a, b], 1)).toBe(0.5);
+    expect(nextSampleTime([a, b], 2)).toBeNull();
+    expect(prevSampleTime([a], 0)).toBeNull();
   });
 });

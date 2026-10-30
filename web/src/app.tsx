@@ -975,6 +975,7 @@ export function App() {
   const addChartCursor = (t: number) => {
     const id = chartCursorSeq.current++;
     setChartCursors((old) => [...old, { id, t }]);
+    return id;
   };
 
   const moveChartCursor = (id: number, t: number) => {
