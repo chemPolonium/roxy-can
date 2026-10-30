@@ -1797,7 +1797,10 @@ enum WebCommand {
     SetBusMode {
         real: bool,
     },
-    AddBus,
+    AddBus {
+        #[serde(default)]
+        kind: String,
+    },
     RemoveBus {
         ch: u8,
     },
@@ -1815,10 +1818,6 @@ enum WebCommand {
         node: String,
         simulated: bool,
     },
-    LoadFrDescription {
-        path: String,
-        bus: Option<u8>,
-    },
     RemoveFrBus {
         bus: u8,
     },
@@ -1829,8 +1828,27 @@ enum WebCommand {
         ch: u8,
         path: String,
     },
-    ImportArxml {
+    /// Lists the clusters of an uploaded ARXML so the UI can ask which one
+    /// belongs to the bus the user picked.
+    ScanArxml {
         path: String,
+    },
+    /// Binds one description to a bus. `kind` is `can`, `flexray` or
+    /// `ethernet`; `path` is a DBC/ARXML/FIBEX file. A DBC is `kind: can`
+    /// with a `.dbc` path.
+    AddBusDescription {
+        bus: u8,
+        kind: String,
+        path: String,
+        #[serde(default)]
+        cluster: String,
+    },
+    RemoveBusDescription {
+        bus: u8,
+        kind: String,
+        path: String,
+        #[serde(default)]
+        cluster: String,
     },
     SaveProject {
         path: Option<String>,
@@ -2574,11 +2592,19 @@ fn app_loop(
                 WebCommand::SetBusMode { real } => {
                     app.send(BusCommand::SetBusMode { real });
                 }
-                WebCommand::AddBus => {
+                WebCommand::AddBus { kind } => {
                     if app.snap.measuring {
                         app.stop();
                     }
-                    app.add_channel();
+                    match kind.as_str() {
+                        "flexray" | "fr" => {
+                            app.add_flexray_bus();
+                        }
+                        "ethernet" | "eth" => {
+                            app.add_eth_bus();
+                        }
+                        _ => app.add_empty_channel(),
+                    }
                 }
                 WebCommand::RemoveBus { ch } => {
                     if app.snap.measuring {
@@ -2625,11 +2651,63 @@ fn app_loop(
                         node_roles: None,
                     });
                 }
-                WebCommand::ImportArxml { path } => {
+                WebCommand::ScanArxml { path } => {
+                    app.scan_arxml(&path);
+                }
+                WebCommand::AddBusDescription {
+                    bus,
+                    kind,
+                    path,
+                    cluster,
+                } => {
                     if app.snap.measuring {
                         app.stop();
                     }
-                    app.import_arxml_path(&path);
+                    let cluster = (!cluster.trim().is_empty()).then_some(cluster.as_str());
+                    match kind.as_str() {
+                        "can" if path.to_ascii_lowercase().ends_with(".dbc") => {
+                            app.add_can_dbc(bus, &path);
+                        }
+                        "can" => {
+                            if let Some(cluster) = cluster
+                                && let Err(e) = app.load_can_arxml_on_bus(&path, cluster, bus)
+                            {
+                                app.status = format!("CAN{}: {e}", bus + 1);
+                            }
+                        }
+                        "flexray" | "fr" => {
+                            let source = crate::channel::description_source(&path, cluster);
+                            if let Err(e) = app.add_fr_description(bus, source) {
+                                app.status = format!("FR{bus}: {e}");
+                            }
+                        }
+                        "ethernet" | "eth" => {
+                            let source = crate::channel::ethernet_source(&path, cluster);
+                            if let Err(e) = app.add_eth_description(bus, source) {
+                                app.status = format!("ETH{bus}: {e}");
+                            }
+                        }
+                        other => app.status = format!("unknown bus kind: {other}"),
+                    }
+                }
+                WebCommand::RemoveBusDescription {
+                    bus,
+                    kind,
+                    path,
+                    cluster,
+                } => {
+                    if app.snap.measuring {
+                        app.stop();
+                    }
+                    match kind.as_str() {
+                        "can" if path.to_ascii_lowercase().ends_with(".dbc") => {
+                            app.remove_can_dbc(bus, &path);
+                        }
+                        "can" => app.remove_can_arxml(bus, &path, &cluster),
+                        "flexray" | "fr" => app.remove_fr_description(bus, &path, &cluster),
+                        "ethernet" | "eth" => app.remove_eth_description(bus, &path, &cluster),
+                        other => app.status = format!("unknown bus kind: {other}"),
+                    }
                 }
                 WebCommand::SaveProject { path } => {
                     let target = path
@@ -3026,12 +3104,6 @@ fn app_loop(
                             crate::app::NodeRole::Absent
                         },
                     });
-                }
-                WebCommand::LoadFrDescription { path, bus } => {
-                    if app.snap.measuring {
-                        app.stop();
-                    }
-                    app.load_cluster_description(&path, bus);
                 }
                 WebCommand::RemoveFrBus { bus } => {
                     if app.snap.measuring {
@@ -4229,6 +4301,16 @@ fn channel_signature(app: &App) -> String {
                 .unwrap_or(0);
             format!("{}:{}:{table}", channel.name, channel.dbc_paths.join(","))
         })
+        .enumerate()
+        .map(|(index, text)| {
+            let model = app
+                .model_comms
+                .get(index)
+                .and_then(Option::as_ref)
+                .map(|comm| Arc::as_ptr(comm) as usize)
+                .unwrap_or(0);
+            format!("{text}:{model}")
+        })
         .collect();
     let fr: Vec<String> = app
         .fr_buses
@@ -4533,6 +4615,9 @@ struct WebState {
     clusters: Vec<WebCluster>,
     fr_buses: Vec<WebFrBus>,
     eth_buses: Vec<WebEthBus>,
+    /// The last scanned ARXML's cluster list, shown as the binding chooser.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    arxml_scan: Option<WebArxmlScan>,
     real_bus: bool,
     hw_refresh: u64,
     tx: Vec<WebTx>,
@@ -4575,6 +4660,7 @@ struct WebFrBus {
     name: String,
     path: String,
     cluster: String,
+    descriptions: Vec<WebDescription>,
     frames: usize,
     attached: bool,
     channel: i32,
@@ -4586,6 +4672,7 @@ struct WebEthBus {
     bus: u8,
     name: String,
     path: String,
+    descriptions: Vec<WebDescription>,
     clusters: usize,
     frames: usize,
 }
@@ -4599,6 +4686,40 @@ struct WebCluster {
     bus: u8,
     source: String,
     frames: usize,
+}
+
+#[derive(Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WebArxmlScan {
+    path: String,
+    clusters: Vec<WebArxmlCluster>,
+}
+
+#[derive(Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WebArxmlCluster {
+    kind: String,
+    name: String,
+}
+
+fn description_view(source: &crate::model::ClusterSource) -> WebDescription {
+    match source {
+        crate::model::ClusterSource::Arxml { path, cluster } => WebDescription {
+            kind: "arxml".to_string(),
+            path: path.clone(),
+            cluster: cluster.clone(),
+        },
+        crate::model::ClusterSource::Fibex { path } => WebDescription {
+            kind: "fibex".to_string(),
+            path: path.clone(),
+            cluster: String::new(),
+        },
+        _ => WebDescription {
+            kind: "manual".to_string(),
+            path: String::new(),
+            cluster: String::new(),
+        },
+    }
 }
 
 #[derive(Clone, Default, Serialize)]
@@ -4681,10 +4802,22 @@ struct WebBus {
     index: u8,
     name: String,
     dbc_paths: Vec<String>,
+    /// Every description bound to the bus, DBC and ARXML alike, in binding
+    /// order. `dbc_paths` stays for the existing cell.
+    descriptions: Vec<WebDescription>,
     bitrate_kbps: u32,
     fd_data_kbps: u32,
     nodes: Vec<WebNode>,
     attached: Option<WebHwAttachment>,
+}
+
+#[derive(Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WebDescription {
+    kind: String,
+    path: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    cluster: String,
 }
 
 #[derive(Clone, Default, Serialize)]
@@ -5138,6 +5271,23 @@ fn build_state(app: &App, series: &VecDeque<WebSeriesPoint>, fps: f64) -> WebSta
             index: index as u8,
             name: ch.name.clone(),
             dbc_paths: ch.dbc_paths.clone(),
+            descriptions: ch
+                .dbc_paths
+                .iter()
+                .filter(|path| !path.trim().is_empty())
+                .map(|path| WebDescription {
+                    kind: "dbc".to_string(),
+                    path: path.clone(),
+                    cluster: String::new(),
+                })
+                .chain(app.can_arxml.get(&(index as u8)).into_iter().flatten().map(
+                    |(path, cluster)| WebDescription {
+                        kind: "arxml".to_string(),
+                        path: path.clone(),
+                        cluster: cluster.clone(),
+                    },
+                ))
+                .collect(),
             bitrate_kbps: ch.bitrate_kbps,
             fd_data_kbps: ch.fd_data_kbps,
             nodes: ch
@@ -5461,9 +5611,19 @@ fn build_state(app: &App, series: &VecDeque<WebSeriesPoint>, fps: f64) -> WebSta
                 bus: *bus,
                 name: app.fr_bus_name(*bus),
                 path: app.fr_description_path(*bus).unwrap_or_default(),
-                cluster: model
-                    .map(|cluster| cluster.name.clone())
+                cluster: app
+                    .fr_clusters
+                    .get(bus)
+                    .cloned()
+                    .or_else(|| model.map(|cluster| cluster.name.clone()))
                     .unwrap_or_else(|| cfg.params.name.clone()),
+                descriptions: app
+                    .fr_sources
+                    .get(bus)
+                    .into_iter()
+                    .flatten()
+                    .map(description_view)
+                    .collect(),
                 frames: model
                     .map(|cluster| {
                         app.fr_models
@@ -5485,6 +5645,13 @@ fn build_state(app: &App, series: &VecDeque<WebSeriesPoint>, fps: f64) -> WebSta
             bus: *bus,
             name: app.eth_bus_label(*bus),
             path: app.eth_description_path(*bus).unwrap_or_default(),
+            descriptions: app
+                .eth_sources
+                .get(bus)
+                .into_iter()
+                .flatten()
+                .map(description_view)
+                .collect(),
             clusters: app
                 .eth_models
                 .get(bus)
@@ -6176,6 +6343,17 @@ fn build_state(app: &App, series: &VecDeque<WebSeriesPoint>, fps: f64) -> WebSta
         clusters,
         fr_buses,
         eth_buses,
+        arxml_scan: app.arxml_scan.as_ref().map(|scan| WebArxmlScan {
+            path: scan.path.clone(),
+            clusters: scan
+                .clusters
+                .iter()
+                .map(|(kind, name)| WebArxmlCluster {
+                    kind: kind.clone(),
+                    name: name.clone(),
+                })
+                .collect(),
+        }),
         real_bus: snap.real_bus,
         hw_refresh: snap.hw_refresh,
         tx,
@@ -6246,6 +6424,55 @@ mod tests {
             plain,
             WebCommand::RunPanelAction { value: None, .. }
         ));
+    }
+
+    #[test]
+    fn bus_binding_commands_deserialize() {
+        let add: WebCommand = serde_json::from_value(serde_json::json!({
+            "type": "add_bus_description",
+            "bus": 1,
+            "kind": "can",
+            "path": "Matrix.arxml",
+            "cluster": "CanA",
+        }))
+        .expect("add description command");
+        assert!(matches!(
+            add,
+            WebCommand::AddBusDescription {
+                bus: 1,
+                ref kind,
+                ref path,
+                ref cluster,
+            } if kind == "can" && path == "Matrix.arxml" && cluster == "CanA"
+        ));
+        let remove: WebCommand = serde_json::from_value(serde_json::json!({
+            "type": "remove_bus_description",
+            "bus": 0,
+            "kind": "flexray",
+            "path": "bus.xml",
+        }))
+        .expect("remove description command");
+        assert!(matches!(
+            remove,
+            WebCommand::RemoveBusDescription {
+                bus: 0,
+                ref kind,
+                ref path,
+                ref cluster,
+            } if kind == "flexray" && path == "bus.xml" && cluster.is_empty()
+        ));
+        let scan: WebCommand = serde_json::from_value(serde_json::json!({
+            "type": "scan_arxml",
+            "path": "Matrix.arxml",
+        }))
+        .expect("scan command");
+        assert!(matches!(scan, WebCommand::ScanArxml { .. }));
+        let bus: WebCommand = serde_json::from_value(serde_json::json!({
+            "type": "add_bus",
+            "kind": "ethernet",
+        }))
+        .expect("add bus command");
+        assert!(matches!(bus, WebCommand::AddBus { ref kind } if kind == "ethernet"));
     }
 
     #[test]

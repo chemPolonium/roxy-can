@@ -255,16 +255,22 @@ pub struct App {
     /// Ethernet buses and the ARXML matrices loaded for them. Separate index
     /// space from CAN and FlexRay.
     pub eth_buses: std::collections::BTreeMap<u8, std::sync::Arc<crate::eth::db::EthDb>>,
-    /// CAN buses whose database came from one named cluster of an ARXML
-    /// matrix: bus -> (file path, cluster). The parsed table lives on the
-    /// channel like a DBC's; this is the source identity the project saves and
-    /// the Buses cell shows.
-    pub can_arxml: std::collections::BTreeMap<u8, (String, String)>,
-    /// FlexRay buses imported from one named cluster of a multi-cluster file.
-    /// Absent means the whole file (the manual Add FlexRay path).
+    /// CAN ARXML descriptions bound to a bus, in binding order: each entry is
+    /// (file path, cluster inside the matrix). A bus may carry several, which
+    /// is how files from different suppliers describe one physical bus.
+    pub can_arxml: std::collections::BTreeMap<u8, Vec<(String, String)>>,
+    /// FlexRay descriptions bound to a bus, in binding order. An ARXML entry
+    /// names its cluster; a FIBEX entry addresses the whole file.
+    pub fr_sources: std::collections::BTreeMap<u8, Vec<crate::model::ClusterSource>>,
+    /// Ethernet AUTOSAR matrices bound to a bus, in binding order.
+    pub eth_sources: std::collections::BTreeMap<u8, Vec<crate::model::ClusterSource>>,
+    /// The first cluster name of a FlexRay bus, kept for labels and attach.
     pub fr_clusters: std::collections::BTreeMap<u8, String>,
-    /// The same for Ethernet buses imported from one named cluster.
+    /// The same for Ethernet buses.
     pub eth_clusters: std::collections::BTreeMap<u8, String>,
+    /// The last uploaded ARXML's cluster list, waiting for the user to pick
+    /// which one belongs to the bus they were binding.
+    pub arxml_scan: Option<crate::channel::ArxmlScan>,
     /// Whether the matrix's `FRAME-LENGTH` includes the 14-byte L2 header.
     /// The capture payload never does; this is the project-level convention
     /// that makes the two lengths comparable.
@@ -447,8 +453,11 @@ impl App {
             fr_names: Default::default(),
             eth_buses: Default::default(),
             can_arxml: Default::default(),
+            fr_sources: Default::default(),
+            eth_sources: Default::default(),
             fr_clusters: Default::default(),
             eth_clusters: Default::default(),
+            arxml_scan: None,
             eth_length_includes_header: false,
             record_filter_text: String::new(),
             trace_limit: TRACE_LIMIT,

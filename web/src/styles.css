@@ -3545,8 +3545,10 @@ button.mini.on {
 }
 
 .bus-remove {
+  flex: 0 0 auto;
   padding: 2px 7px;
   font-size: 10px;
+  white-space: nowrap;
   color: #d8a0a0;
 }
 
@@ -3574,6 +3576,88 @@ button.mini.on {
   flex: 0 0 54px;
   color: var(--muted);
   font-size: 10px;
+}
+
+.bus-descriptions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 5px 10px;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.bus-descriptions-label {
+  flex: 0 0 54px;
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.bus-description-list {
+  display: flex;
+  flex: 1 1 auto;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+
+.description-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 100%;
+  padding: 2px 4px 2px 6px;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  background: var(--panel);
+  color: var(--text);
+  font-size: 10px;
+}
+
+.description-chip em {
+  color: var(--muted);
+  font-size: 9px;
+  font-style: normal;
+  letter-spacing: 0.05em;
+}
+
+.description-cluster {
+  color: var(--accent, #8fc5ff);
+}
+
+.description-remove {
+  padding: 0 4px;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.description-remove:hover {
+  color: var(--bad, #ff8a8a);
+}
+
+.arxml-chooser {
+  flex: 1 1 100%;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 4px 6px;
+  border: 1px dashed var(--line);
+  border-radius: 3px;
+  background: var(--panel-alt, var(--panel));
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.proto-row .bus-descriptions {
+  flex: 1 1 auto;
+  padding: 0;
+  border-bottom: none;
 }
 
 .bus-nodes {

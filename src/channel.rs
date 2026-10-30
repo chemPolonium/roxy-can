@@ -56,6 +56,67 @@ use crate::workspace::SigScope;
 /// screen.
 pub const DETACH_LABEL: &str = "Detach";
 
+/// The clusters found in one uploaded ARXML, as `(kind, name)` pairs with
+/// `kind` spelled the way the web state and commands spell it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ArxmlScan {
+    pub path: String,
+    pub clusters: Vec<(String, String)>,
+}
+
+/// One description file bound to a bus: an ARXML cluster or a FIBEX file.
+/// The extension decides, so the same picker serves both.
+pub(crate) fn description_source(path: &str, cluster: Option<&str>) -> crate::model::ClusterSource {
+    if path.to_ascii_lowercase().ends_with(".arxml") {
+        crate::model::ClusterSource::Arxml {
+            path: path.to_string(),
+            cluster: cluster.unwrap_or_default().to_string(),
+        }
+    } else {
+        crate::model::ClusterSource::Fibex {
+            path: path.to_string(),
+        }
+    }
+}
+
+pub(crate) fn ethernet_source(path: &str, cluster: Option<&str>) -> crate::model::ClusterSource {
+    crate::model::ClusterSource::Arxml {
+        path: path.to_string(),
+        cluster: cluster.unwrap_or_default().to_string(),
+    }
+}
+
+fn file_label(path: &str) -> String {
+    std::path::Path::new(path)
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| path.to_string())
+}
+
+fn source_label(source: &crate::model::ClusterSource) -> String {
+    match source {
+        crate::model::ClusterSource::Arxml { path, cluster } if !cluster.is_empty() => {
+            format!("{path}#{cluster}")
+        }
+        _ => source.path().unwrap_or("manual").to_string(),
+    }
+}
+
+fn list_len_label(list: Option<&Vec<crate::model::ClusterSource>>) -> String {
+    let count = list.map_or(0, Vec::len);
+    format!("{count} description{}", if count == 1 { "" } else { "s" })
+}
+
+/// The first named cluster among a bus's descriptions, used as its label.
+fn description_cluster(sources: &[crate::model::ClusterSource]) -> Option<String> {
+    sources.iter().find_map(|source| match source {
+        crate::model::ClusterSource::Arxml { cluster, .. } if !cluster.is_empty() => {
+            Some(cluster.clone())
+        }
+        _ => None,
+    })
+}
+
 impl App {
     /// The bus's database, from this frame's snapshot. Test-only: production
     /// reads go through the model.
@@ -154,6 +215,11 @@ impl App {
     /// generator. All on the bus via the command.
     pub fn add_channel(&mut self) {
         self.send(crate::bus::BusCommand::AddChannel);
+    }
+
+    /// Adds a CAN bus without a database, for raw monitoring.
+    pub fn add_empty_channel(&mut self) {
+        self.send(crate::bus::BusCommand::AddEmptyChannel);
     }
 
     /// Removes a bus and remaps every channel-indexed reference one step
@@ -279,85 +345,142 @@ impl App {
         // The status line ("bus CANx removed") came from the command.
     }
 
-    /// Loads a cluster description **without** attaching a watch: a replayed
-    /// recording can hold two clusters (BLF states which one each frame came
-    /// from), and the second one needs its own description to be named or
-    /// decoded at all -- which has nothing to do with opening a port for it.
-    /// `bus` is the FlexRay 路 the user says this file describes; the log
-    /// itself never names its clusters, so guessing (first free bus, in file
-    /// picking order) silently reads one network's slots against the other's
-    /// schedule -- plausible wrong names, the worst possible failure here.
     /// Loads one Ethernet AUTOSAR matrix. A `None` bus picks the first free
-    /// Ethernet index; cancelling the picker adds nothing.
+    /// Ethernet index; adding to a bus that already has descriptions merges
+    /// them into the same physical cluster.
     #[cfg(test)]
     pub fn load_eth_description(&mut self, path: &str, bus: Option<u8>) -> Option<u8> {
         self.load_eth_description_inner(path, bus, None)
     }
 
-    /// Loads one named Ethernet cluster out of a multi-cluster ARXML matrix.
-    pub fn load_eth_description_cluster(
-        &mut self,
-        path: &str,
-        bus: Option<u8>,
-        cluster: &str,
-    ) -> Option<u8> {
-        self.load_eth_description_inner(path, bus, Some(cluster))
-    }
-
+    #[cfg(test)]
     fn load_eth_description_inner(
         &mut self,
         path: &str,
         bus: Option<u8>,
         cluster: Option<&str>,
     ) -> Option<u8> {
-        let Ok(bytes) = std::fs::read(path) else {
-            self.fail(format!("ARXML read failed: {path}"));
-            return None;
+        let source = ethernet_source(path, cluster);
+        let bus = match bus {
+            Some(bus) => bus,
+            None => match self.next_eth_bus() {
+                Some(bus) => bus,
+                None => {
+                    self.fail("Ethernet bus index exhausted (256 buses)");
+                    return None;
+                }
+            },
         };
-        let text = crate::dbc::text_from_bytes(bytes);
-        let parsed = match cluster {
-            Some(name) => crate::eth::db::EthDb::parse_cluster(&text, name),
-            None => crate::eth::db::EthDb::parse(&text),
-        };
-        let db = match parsed {
-            Ok(db) => db,
+        match self.add_eth_description(bus, source) {
+            Ok(bus) => Some(bus),
             Err(e) => {
-                self.fail(format!("Ethernet ARXML parse failed: {e}"));
-                return None;
+                self.fail(format!("Ethernet ARXML load failed: {e}"));
+                None
             }
+        }
+    }
+
+    /// Binds one Ethernet description to `bus`, merging frames with the files
+    /// already bound there. Duplicates keep the first declaration and are
+    /// reported to the Write log.
+    pub fn add_eth_description(
+        &mut self,
+        bus: u8,
+        source: crate::model::ClusterSource,
+    ) -> Result<u8, String> {
+        let bound = self
+            .eth_sources
+            .get(&bus)
+            .is_some_and(|list| !list.is_empty());
+        if self
+            .eth_sources
+            .get(&bus)
+            .is_some_and(|list| list.contains(&source))
+        {
+            return Err(format!("{} is already bound", source_label(&source)));
+        }
+        let parsed = Self::parse_eth_source(&source)?;
+        let frames = parsed.frames.len();
+        let vlans: usize = parsed.clusters.iter().map(|c| c.vlans.len()).sum();
+        let mut warnings = Vec::new();
+        let db = match self.eth_buses.get(&bus).filter(|_| bound) {
+            Some(existing) => {
+                let mut base = (**existing).clone();
+                warnings = base.merge(parsed);
+                base
+            }
+            None => parsed,
         };
-        let bus = bus.unwrap_or_else(|| {
-            (0..=u8::MAX)
-                .find(|b| !self.eth_buses.contains_key(b))
-                .unwrap_or(u8::MAX)
-        });
-        let cluster_label = db
+        let label = db
             .clusters
             .first()
             .map(|c| c.name.clone())
-            .unwrap_or_else(|| "-".to_string());
-        let frames = db.frames.len();
-        let vlans: usize = db.clusters.iter().map(|c| c.vlans.len()).sum();
-        let persist_cluster = cluster
-            .map(str::to_string)
-            .or_else(|| (db.clusters.len() == 1).then(|| db.clusters[0].name.clone()));
+            .unwrap_or_else(|| format!("ETH{bus}"));
+        self.report_merge_warnings(&format!("ETH{bus}"), warnings);
+        self.eth_sources.entry(bus).or_default().push(source);
         self.eth_buses.insert(bus, std::sync::Arc::new(db));
-        match persist_cluster {
-            Some(name) => {
-                self.eth_clusters.insert(bus, name);
-            }
-            None => {
-                self.eth_clusters.remove(&bus);
-            }
-        }
-        self.push_eth_db_to_core_with([(bus, path.to_string())].into_iter().collect());
-        if let Some(name) = self.eth_clusters.get(&bus).cloned() {
-            self.apply_eth_arxml_model(bus, &text, path, &name);
-        }
+        self.eth_clusters.insert(bus, label.clone());
+        self.push_eth_db_to_core();
         self.status = format!(
-            "Loaded Ethernet matrix ETH{bus} ({cluster_label}, {vlans} VLANs, {frames} frames): {path}"
+            "ETH{bus}: bound `{label}` ({vlans} VLANs, {frames} frames) from {}",
+            list_len_label(self.eth_sources.get(&bus))
         );
-        Some(bus)
+        Ok(bus)
+    }
+
+    /// Drops one Ethernet description and rebuilds the bus from the rest.
+    pub fn remove_eth_description(&mut self, bus: u8, path: &str, cluster: &str) {
+        let source = ethernet_source(path, (!cluster.is_empty()).then_some(cluster));
+        let Some(list) = self.eth_sources.get_mut(&bus) else {
+            return;
+        };
+        let before = list.len();
+        list.retain(|item| item != &source);
+        if list.len() == before {
+            return;
+        }
+        if list.is_empty() {
+            self.eth_buses
+                .insert(bus, std::sync::Arc::new(crate::eth::db::EthDb::default()));
+            self.eth_clusters.remove(&bus);
+            self.push_eth_db_to_core();
+            self.status = format!("ETH{bus}: removed {}", source_label(&source));
+            return;
+        }
+        self.rebuild_eth_from_sources(bus);
+        self.status = format!("ETH{bus}: removed {}", source_label(&source));
+    }
+
+    fn rebuild_eth_from_sources(&mut self, bus: u8) {
+        let sources = self.eth_sources.get(&bus).cloned().unwrap_or_default();
+        let mut merged: Option<crate::eth::db::EthDb> = None;
+        let mut warnings = Vec::new();
+        for source in &sources {
+            match Self::parse_eth_source(source) {
+                Ok(parsed) => match &mut merged {
+                    Some(base) => warnings.extend(base.merge(parsed)),
+                    None => merged = Some(parsed),
+                },
+                Err(e) => self.log_status(
+                    crate::bus::WriteKind::Error,
+                    format!("ETH{bus}: {}: {e}", source_label(source)),
+                ),
+            }
+        }
+        self.report_merge_warnings(&format!("ETH{bus}"), warnings);
+        match merged {
+            Some(db) => {
+                let label = db
+                    .clusters
+                    .first()
+                    .map(|c| c.name.clone())
+                    .unwrap_or_else(|| format!("ETH{bus}"));
+                self.eth_clusters.insert(bus, label);
+                self.eth_buses.insert(bus, std::sync::Arc::new(db));
+                self.push_eth_db_to_core();
+            }
+            None => self.remove_eth_bus(bus),
+        }
     }
 
     /// The next free Ethernet bus index, the same "first gap" rule FlexRay uses.
@@ -365,28 +488,210 @@ impl App {
         (0..=u8::MAX).find(|b| !self.eth_buses.contains_key(b))
     }
 
-    /// Loads one named CAN cluster into an existing bus. The caller has
-    /// already decided the bus exists; the document model replaces its table.
+    /// Adds an empty FlexRay bus. It has no hardware and no frames until a
+    /// description is bound to it, which is what makes bus-first binding work
+    /// for the protocols whose bus index is not a CAN channel.
+    pub fn add_flexray_bus(&mut self) -> Option<u8> {
+        let bus = self.next_flexray_bus()?;
+        self.fr_buses
+            .insert(bus, std::sync::Arc::new(crate::fr_db::FrDb::default()));
+        self.fr_sources.entry(bus).or_default();
+        self.push_fr_db_to_core();
+        self.status = format!("Added FlexRay bus FR{bus}");
+        Some(bus)
+    }
+
+    /// Adds an empty Ethernet bus, the Ethernet twin of [`Self::add_flexray_bus`].
+    pub fn add_eth_bus(&mut self) -> Option<u8> {
+        let bus = self.next_eth_bus()?;
+        self.eth_buses
+            .insert(bus, std::sync::Arc::new(crate::eth::db::EthDb::default()));
+        self.eth_sources.entry(bus).or_default();
+        self.push_eth_db_to_core();
+        self.status = format!("Added Ethernet bus ETH{bus}");
+        Some(bus)
+    }
+
+    /// Creates a CAN bus whose first description is one ARXML cluster. The
+    /// bus may take more descriptions afterwards, exactly like an added one.
+    #[cfg(test)]
+    pub fn add_can_arxml_bus(
+        &mut self,
+        path: &str,
+        cluster: &str,
+        name: &str,
+    ) -> Result<u8, String> {
+        let bytes = std::fs::read(path).map_err(|e| format!("{path}: {e}"))?;
+        let text = crate::dbc::text_from_bytes(bytes);
+        let comm = Self::can_arxml_comm(&text, path, cluster)
+            .ok_or_else(|| format!("{path}: cluster `{cluster}` has no frames"))?;
+        let bus = self.snap.channel_count as u8;
+        let source = crate::model::ClusterSource::Arxml {
+            path: path.to_string(),
+            cluster: cluster.to_string(),
+        };
+        self.send(crate::bus::BusCommand::AddChannelWithModel {
+            name: name.to_string(),
+            comm: std::sync::Arc::new(comm),
+            sources: vec![source],
+        });
+        self.can_arxml
+            .insert(bus, vec![(path.to_string(), cluster.to_string())]);
+        self.status = format!("Added CAN bus {name} from `{cluster}`");
+        Ok(bus)
+    }
+
+    /// Reads an uploaded ARXML and lists its clusters for the binding chooser.
+    pub fn scan_arxml(&mut self, path: &str) {
+        let result = std::fs::read(path)
+            .map_err(|e| format!("{path}: {e}"))
+            .map(crate::dbc::text_from_bytes)
+            .and_then(|text| crate::model::scan_clusters(&text));
+        match result {
+            Ok(clusters) if clusters.is_empty() => {
+                self.arxml_scan = None;
+                self.status = format!("{path}: no CAN, FlexRay or Ethernet cluster");
+            }
+            Ok(clusters) => {
+                let count = clusters.len();
+                self.arxml_scan = Some(ArxmlScan {
+                    path: path.to_string(),
+                    clusters: clusters
+                        .into_iter()
+                        .map(|cluster| {
+                            let kind = match cluster.kind {
+                                crate::model::ClusterKind::Can => "can",
+                                crate::model::ClusterKind::FlexRay => "flexray",
+                                crate::model::ClusterKind::Ethernet => "ethernet",
+                            };
+                            (kind.to_string(), cluster.name)
+                        })
+                        .collect(),
+                });
+                self.status = format!("{path}: {count} cluster(s) found");
+            }
+            Err(e) => {
+                self.arxml_scan = None;
+                self.fail(format!("ARXML scan failed: {e}"));
+            }
+        }
+    }
+
+    /// Appends a DBC to a CAN bus. Dropping it on the same bus twice is a
+    /// no-op, mirroring the drop handler.
+    pub fn add_can_dbc(&mut self, bus: u8, path: &str) {
+        let mut paths = self.can_paths(bus as usize);
+        if paths.iter().any(|known| known == path) {
+            self.status = format!("{path} is already bound");
+            return;
+        }
+        paths.retain(|known| !known.trim().is_empty());
+        paths.push(path.to_string());
+        self.send(crate::bus::BusCommand::LoadDbc { ch: bus, paths });
+        self.push_recent_dbc(path.to_string());
+        self.status = format!("CAN{}: bound {}", bus + 1, file_label(path));
+    }
+
+    /// Drops one DBC from a CAN bus; the last one leaves a raw-monitoring bus.
+    pub fn remove_can_dbc(&mut self, bus: u8, path: &str) {
+        let mut paths = self.can_paths(bus as usize);
+        let before = paths.len();
+        paths.retain(|known| known != path);
+        if paths.len() == before {
+            return;
+        }
+        self.send(crate::bus::BusCommand::LoadDbc { ch: bus, paths });
+        self.status = format!("CAN{}: removed {}", bus + 1, file_label(path));
+    }
+
+    /// Binds one named CAN cluster to a bus. A bus may carry any number of
+    /// ARXML descriptions: the merged document model is rebuilt from the
+    /// whole ordered list each time, so removing one source never leaves the
+    /// other files' structure behind by accident.
     pub fn load_can_arxml_on_bus(
         &mut self,
         path: &str,
         cluster: &str,
         bus: u8,
     ) -> Result<(), String> {
-        let bytes = std::fs::read(path).map_err(|e| format!("{path}: {e}"))?;
-        let text = crate::dbc::text_from_bytes(bytes);
-        let comm = Self::can_arxml_comm(&text, path, cluster)
-            .ok_or_else(|| format!("{path}: cluster `{cluster}` has no frames"))?;
+        if bus as usize >= self.snap.channel_count {
+            return Err(format!("CAN bus {} does not exist", bus + 1));
+        }
+        let entry = (path.to_string(), cluster.to_string());
+        let list = self.can_arxml.entry(bus).or_default();
+        if list.contains(&entry) {
+            return Err(format!("{path}: cluster `{cluster}` is already bound"));
+        }
+        list.push(entry);
+        match self.rebuild_can_xml(bus) {
+            Ok(()) => {
+                self.status = format!("CAN{}: bound cluster `{cluster}`", bus + 1);
+                Ok(())
+            }
+            Err(e) => {
+                if let Some(list) = self.can_arxml.get_mut(&bus) {
+                    list.retain(|item| item != &(path.to_string(), cluster.to_string()));
+                }
+                Err(e)
+            }
+        }
+    }
+
+    /// Drops one ARXML description from a bus and rebuilds the merged model.
+    pub fn remove_can_arxml(&mut self, bus: u8, path: &str, cluster: &str) {
+        let entry = (path.to_string(), cluster.to_string());
+        let Some(list) = self.can_arxml.get_mut(&bus) else {
+            return;
+        };
+        let before = list.len();
+        list.retain(|item| item != &entry);
+        if list.len() == before {
+            return;
+        }
+        if list.is_empty() {
+            self.can_arxml.remove(&bus);
+        }
+        match self.rebuild_can_xml(bus) {
+            Ok(()) => self.status = format!("CAN{}: removed cluster `{cluster}`", bus + 1),
+            Err(e) => self.status = format!("CAN{}: {e}", bus + 1),
+        }
+    }
+
+    /// Re-imports every ARXML source bound to `bus` and hands the merged
+    /// model plus the full source list to the core.
+    fn rebuild_can_xml(&mut self, bus: u8) -> Result<(), String> {
+        let list = self.can_arxml.get(&bus).cloned().unwrap_or_default();
+        if list.is_empty() {
+            self.send(crate::bus::BusCommand::SetChannelModel {
+                ch: bus,
+                comm: None,
+                sources: Vec::new(),
+            });
+            return Ok(());
+        }
+        let mut merged: Option<crate::model::Comm> = None;
+        for (path, cluster) in &list {
+            let bytes = std::fs::read(path).map_err(|e| format!("{path}: {e}"))?;
+            let text = crate::dbc::text_from_bytes(bytes);
+            let comm = Self::can_arxml_comm(&text, path, cluster)
+                .ok_or_else(|| format!("{path}: cluster `{cluster}` has no frames"))?;
+            match &mut merged {
+                Some(base) => base.merge_from(comm, crate::model::ClusterId(0)),
+                None => merged = Some(comm),
+            }
+        }
+        let sources: Vec<crate::model::ClusterSource> = list
+            .iter()
+            .map(|(path, cluster)| crate::model::ClusterSource::Arxml {
+                path: path.clone(),
+                cluster: cluster.clone(),
+            })
+            .collect();
         self.send(crate::bus::BusCommand::SetChannelModel {
             ch: bus,
-            comm: Some(std::sync::Arc::new(comm)),
-            sources: vec![crate::model::ClusterSource::Arxml {
-                path: path.to_string(),
-                cluster: cluster.to_string(),
-            }],
+            comm: merged.map(std::sync::Arc::new),
+            sources,
         });
-        self.can_arxml
-            .insert(bus, (path.to_string(), cluster.to_string()));
         Ok(())
     }
 
@@ -408,298 +713,62 @@ impl App {
         (!outcome.comm.clusters.is_empty()).then_some(outcome.comm)
     }
 
-    fn apply_fr_arxml_model(&mut self, bus: u8, text: &str, path: &str, cluster: &str) {
-        let source = crate::model::ClusterSource::Arxml {
-            path: path.to_string(),
-            cluster: cluster.to_string(),
-        };
-        let mut ids = crate::model::ElementIds::new();
-        let outcome = crate::model::import_cluster(
-            text,
-            cluster,
-            crate::model::ClusterId(0),
-            &source,
-            &mut ids,
-        );
-        if outcome.comm.clusters.is_empty() {
-            return;
+    /// Reads one bound FlexRay description. An ARXML entry names its cluster;
+    /// a FIBEX entry covers the whole file.
+    fn parse_fr_source(source: &crate::model::ClusterSource) -> Result<crate::fr_db::FrDb, String> {
+        let path = source
+            .path()
+            .ok_or_else(|| "a manual source has no file".to_string())?;
+        let bytes = std::fs::read(path).map_err(|e| format!("{path}: {e}"))?;
+        let text = crate::dbc::text_from_bytes(bytes);
+        match source {
+            crate::model::ClusterSource::Arxml { cluster, .. } if !cluster.is_empty() => {
+                crate::fr_db::FrDb::parse_cluster(&text, cluster)
+            }
+            _ => crate::fr_db::FrDb::parse(&text),
         }
-        self.send(crate::bus::BusCommand::SetFrModel {
-            bus,
-            comm: std::sync::Arc::new(outcome.comm),
-        });
     }
 
-    fn apply_eth_arxml_model(&mut self, bus: u8, text: &str, path: &str, cluster: &str) {
-        let source = crate::model::ClusterSource::Arxml {
-            path: path.to_string(),
-            cluster: cluster.to_string(),
-        };
-        let mut ids = crate::model::ElementIds::new();
-        let outcome = crate::model::import_cluster(
-            text,
-            cluster,
-            crate::model::ClusterId(0),
-            &source,
-            &mut ids,
-        );
-        if outcome.comm.clusters.is_empty() {
-            return;
+    /// Reads one bound Ethernet matrix.
+    fn parse_eth_source(
+        source: &crate::model::ClusterSource,
+    ) -> Result<crate::eth::db::EthDb, String> {
+        let path = source
+            .path()
+            .ok_or_else(|| "a manual source has no file".to_string())?;
+        let bytes = std::fs::read(path).map_err(|e| format!("{path}: {e}"))?;
+        let text = crate::dbc::text_from_bytes(bytes);
+        match source {
+            crate::model::ClusterSource::Arxml { cluster, .. } if !cluster.is_empty() => {
+                crate::eth::db::EthDb::parse_cluster(&text, cluster)
+            }
+            _ => crate::eth::db::EthDb::parse(&text),
         }
-        self.send(crate::bus::BusCommand::SetEthModel {
-            bus,
-            comm: std::sync::Arc::new(outcome.comm),
-        });
+    }
+
+    fn report_merge_warnings(&mut self, label: &str, warnings: Vec<String>) {
+        for warning in warnings {
+            self.log_status(
+                crate::bus::WriteKind::Warning,
+                format!("{label}: {warning}"),
+            );
+        }
     }
 
     /// Re-reads every ARXML cluster's model, for paths where the cluster ids
     /// were replaced after the load (project open restores persisted ids and
     /// rebuilds the adapter models, which drops the document's structure).
     pub(crate) fn reload_arxml_models(&mut self) {
-        let can: Vec<(u8, String, String)> = self
-            .can_arxml
-            .iter()
-            .map(|(bus, (path, cluster))| (*bus, path.clone(), cluster.clone()))
-            .collect();
-        let fr: Vec<(u8, String, String)> = self
-            .fr_buses
-            .keys()
-            .filter_map(|bus| {
-                self.fr_clusters.get(bus).map(|cluster| {
-                    (
-                        *bus,
-                        self.fr_description_path(*bus).unwrap_or_default(),
-                        cluster.clone(),
-                    )
-                })
-            })
-            .collect();
-        let eth: Vec<(u8, String, String)> = self
-            .eth_buses
-            .keys()
-            .filter_map(|bus| {
-                self.eth_clusters.get(bus).map(|cluster| {
-                    (
-                        *bus,
-                        self.eth_description_path(*bus).unwrap_or_default(),
-                        cluster.clone(),
-                    )
-                })
-            })
-            .collect();
-        for (bus, path, cluster) in can {
-            if let Ok(bytes) = std::fs::read(&path) {
-                let text = crate::dbc::text_from_bytes(bytes);
-                if let Some(comm) = Self::can_arxml_comm(&text, &path, &cluster) {
-                    self.send(crate::bus::BusCommand::SetChannelModel {
-                        ch: bus,
-                        comm: Some(std::sync::Arc::new(comm)),
-                        sources: vec![crate::model::ClusterSource::Arxml {
-                            path: path.clone(),
-                            cluster: cluster.clone(),
-                        }],
-                    });
-                }
+        let buses: Vec<u8> = self.can_arxml.keys().copied().collect();
+        for bus in buses {
+            if let Err(e) = self.rebuild_can_xml(bus) {
+                self.fail(format!("CAN{}: {e}", bus + 1));
             }
         }
-        for (bus, path, cluster) in fr {
-            if let Ok(bytes) = std::fs::read(&path) {
-                self.apply_fr_arxml_model(
-                    bus,
-                    &crate::dbc::text_from_bytes(bytes),
-                    &path,
-                    &cluster,
-                );
-            }
-        }
-        for (bus, path, cluster) in eth {
-            if let Ok(bytes) = std::fs::read(&path) {
-                self.apply_eth_arxml_model(
-                    bus,
-                    &crate::dbc::text_from_bytes(bytes),
-                    &path,
-                    &cluster,
-                );
-            }
-        }
-    }
-
-    pub fn import_arxml_path(&mut self, path: &str) {
-        self.settle();
-        let bytes = match std::fs::read(path) {
-            Ok(b) => b,
-            Err(e) => {
-                self.fail(format!("ARXML read failed: {path}: {e}"));
-                return;
-            }
-        };
-        let text = crate::dbc::text_from_bytes(bytes);
-        let clusters = match crate::model::scan_clusters(&text) {
-            Ok(c) => c,
-            Err(e) => {
-                self.fail(format!("ARXML parse failed: {e}"));
-                return;
-            }
-        };
-        if clusters.is_empty() {
-            self.fail("ARXML import: the file declares no CAN, FlexRay or Ethernet cluster");
-            return;
-        }
-
-        let mut added = 0usize;
-        let mut updated = 0usize;
-        let mut errors: Vec<String> = Vec::new();
-        let mut next_can = self.snap.channel_count as u32;
-        for info in clusters {
-            let existing: Option<u8> = match info.kind {
-                crate::model::ClusterKind::Can => self
-                    .can_arxml
-                    .iter()
-                    .find(|(_, (p, c))| p == path && c == &info.name)
-                    .map(|(bus, _)| *bus),
-                crate::model::ClusterKind::FlexRay => self
-                    .fr_buses
-                    .iter()
-                    .find(|(bus, _)| {
-                        self.fr_description_path(**bus).as_deref() == Some(path)
-                            && self.fr_clusters.get(bus).is_some_and(|c| c == &info.name)
-                    })
-                    .map(|(bus, _)| *bus),
-                crate::model::ClusterKind::Ethernet => self
-                    .eth_buses
-                    .iter()
-                    .find(|(bus, _)| {
-                        self.eth_description_path(**bus).as_deref() == Some(path)
-                            && self.eth_clusters.get(bus).is_some_and(|c| c == &info.name)
-                    })
-                    .map(|(bus, _)| *bus),
-            };
-            match info.kind {
-                crate::model::ClusterKind::Can => {
-                    if existing.is_none() && next_can > u8::MAX as u32 {
-                        errors.push(format!(
-                            "{} {}: CAN bus index exhausted",
-                            info.kind.label(),
-                            info.name
-                        ));
-                        continue;
-                    }
-                    match Self::can_arxml_comm(&text, path, &info.name) {
-                        Some(comm) => {
-                            let comm = std::sync::Arc::new(comm);
-                            let source = crate::model::ClusterSource::Arxml {
-                                path: path.to_string(),
-                                cluster: info.name.clone(),
-                            };
-                            let bus = match existing {
-                                Some(bus) => {
-                                    self.send(crate::bus::BusCommand::SetChannelModel {
-                                        ch: bus,
-                                        comm: Some(comm.clone()),
-                                        sources: vec![source],
-                                    });
-                                    updated += 1;
-                                    bus
-                                }
-                                None => {
-                                    let bus = next_can as u8;
-                                    self.send(crate::bus::BusCommand::AddChannelWithModel {
-                                        name: info.name.clone(),
-                                        comm: comm.clone(),
-                                        sources: vec![source],
-                                    });
-                                    next_can += 1;
-                                    added += 1;
-                                    bus
-                                }
-                            };
-                            self.can_arxml
-                                .insert(bus, (path.to_string(), info.name.clone()));
-                        }
-                        None => errors.push(format!(
-                            "{} {}: no frames in the cluster",
-                            info.kind.label(),
-                            info.name
-                        )),
-                    }
-                }
-                crate::model::ClusterKind::FlexRay => {
-                    let bus = match existing {
-                        Some(bus) => Some(bus),
-                        None => self.next_flexray_bus(),
-                    };
-                    let Some(bus) = bus else {
-                        errors.push(format!(
-                            "{} {}: FlexRay bus index exhausted",
-                            info.kind.label(),
-                            info.name
-                        ));
-                        continue;
-                    };
-                    if self
-                        .load_cluster_description_cluster(path, Some(bus), &info.name)
-                        .is_some()
-                    {
-                        if existing.is_some() {
-                            updated += 1;
-                        } else {
-                            added += 1;
-                        }
-                    } else {
-                        errors.push(format!(
-                            "{} {}: cluster could not be loaded",
-                            info.kind.label(),
-                            info.name
-                        ));
-                    }
-                }
-                crate::model::ClusterKind::Ethernet => {
-                    let bus = match existing {
-                        Some(bus) => Some(bus),
-                        None => self.next_eth_bus(),
-                    };
-                    let Some(bus) = bus else {
-                        errors.push(format!(
-                            "{} {}: Ethernet bus index exhausted",
-                            info.kind.label(),
-                            info.name
-                        ));
-                        continue;
-                    };
-                    if self
-                        .load_eth_description_cluster(path, Some(bus), &info.name)
-                        .is_some()
-                    {
-                        if existing.is_some() {
-                            updated += 1;
-                        } else {
-                            added += 1;
-                        }
-                    } else {
-                        errors.push(format!(
-                            "{} {}: cluster could not be loaded",
-                            info.kind.label(),
-                            info.name
-                        ));
-                    }
-                }
-            }
-        }
-        self.settle();
-        for e in &errors {
-            self.log_status(crate::bus::WriteKind::Error, format!("ARXML import: {e}"));
-        }
-        let mut summary = format!("ARXML import: {added} cluster(s) added");
-        if updated > 0 {
-            summary.push_str(&format!(", {updated} updated"));
-        }
-        if !errors.is_empty() {
-            summary.push_str(&format!(", {} failed (see Write)", errors.len()));
-        }
-        self.status = summary;
     }
 
     pub fn remove_eth_bus(&mut self, bus: u8) {
+        self.eth_sources.remove(&bus);
         if self.eth_buses.remove(&bus).is_some() {
             self.eth_clusters.remove(&bus);
             self.push_eth_db_to_core();
@@ -713,13 +782,6 @@ impl App {
         self.push_eth_db_to_core_with(Default::default());
     }
 
-    pub(crate) fn push_eth_db_to_core_paths(
-        &mut self,
-        extra: std::collections::BTreeMap<u8, String>,
-    ) {
-        self.push_eth_db_to_core_with(extra);
-    }
-
     fn push_eth_db_to_core_with(&mut self, extra: std::collections::BTreeMap<u8, String>) {
         let dbs: std::collections::BTreeMap<u8, _> = self
             .eth_buses
@@ -730,17 +792,24 @@ impl App {
             .eth_buses
             .keys()
             .map(|bus| {
-                let path = self
-                    .eth_description_path(*bus)
-                    .or_else(|| extra.get(bus).cloned())
-                    .unwrap_or_default();
-                let cluster = self.eth_clusters.get(bus).cloned().unwrap_or_default();
-                let source = if path.trim().is_empty() {
-                    crate::model::ClusterSource::Manual
-                } else {
-                    crate::model::ClusterSource::Arxml { path, cluster }
-                };
-                (*bus, vec![source])
+                let list = self
+                    .eth_sources
+                    .get(bus)
+                    .cloned()
+                    .filter(|list| !list.is_empty())
+                    .unwrap_or_else(|| {
+                        let path = self
+                            .eth_description_path(*bus)
+                            .or_else(|| extra.get(bus).cloned())
+                            .unwrap_or_default();
+                        let cluster = self.eth_clusters.get(bus).cloned().unwrap_or_default();
+                        if path.trim().is_empty() {
+                            vec![crate::model::ClusterSource::Manual]
+                        } else {
+                            vec![crate::model::ClusterSource::Arxml { path, cluster }]
+                        }
+                    });
+                (*bus, list)
             })
             .collect();
         self.send(crate::bus::BusCommand::SetEthDbs { dbs, sources });
@@ -797,65 +866,81 @@ impl App {
     /// file put on the wrong 路 gets moved. A watched 路 refuses: its port was
     /// configured from the file already there. Returns the bus index, having
     /// set a failure status if it did not.
+    #[cfg(test)]
     pub fn load_cluster_description(&mut self, path: &str, bus: Option<u8>) -> Option<u8> {
         self.load_cluster_description_inner(path, bus, None)
     }
 
-    /// Loads one named FlexRay cluster out of a multi-cluster ARXML matrix.
-    /// The cluster becomes the bus identity stored with the project.
-    pub fn load_cluster_description_cluster(
-        &mut self,
-        path: &str,
-        bus: Option<u8>,
-        cluster: &str,
-    ) -> Option<u8> {
-        self.load_cluster_description_inner(path, bus, Some(cluster))
-    }
-
+    #[cfg(test)]
     fn load_cluster_description_inner(
         &mut self,
         path: &str,
         bus: Option<u8>,
         cluster: Option<&str>,
     ) -> Option<u8> {
-        let Ok(bytes) = std::fs::read(path) else {
-            self.fail(format!("FIBEX read failed: {path}"));
-            return None;
-        };
-        let text = crate::dbc::text_from_bytes(bytes);
-        let parsed = match cluster {
-            Some(name) => crate::fr_db::FrDb::parse_cluster(&text, name),
-            None => crate::fr_db::FrDb::parse(&text),
-        };
-        let db = match parsed {
-            Ok(db) => db,
-            Err(e) => {
-                self.fail(format!("FlexRay description parse failed: {e}"));
-                return None;
-            }
-        };
+        let source = description_source(path, cluster);
         let bus = match bus {
-            Some(want) => {
-                if self.snap.fr_watches.iter().any(|w| w.bus == want) {
-                    self.status = format!(
-                        "{} is attached: click {DETACH_LABEL} on its row before loading a new description",
-                        self.fr_bus_label(want)
-                    );
-                    return None;
-                }
-                want
-            }
-            None => match (0..=u8::MAX).find(|b| !self.fr_buses.contains_key(b)) {
-                Some(free) => free,
+            Some(bus) => bus,
+            None => match self.next_flexray_bus() {
+                Some(bus) => bus,
                 None => {
                     self.status = "FlexRay bus index exhausted (256 buses)".to_string();
                     return None;
                 }
             },
         };
-        let cluster_name = cluster
-            .map(str::to_string)
-            .or_else(|| (!db.params.name.is_empty()).then(|| db.params.name.clone()));
+        match self.add_fr_description(bus, source) {
+            Ok(bus) => Some(bus),
+            Err(e) => {
+                self.fail(format!("FlexRay description read failed: {e}"));
+                None
+            }
+        }
+    }
+
+    /// Binds one FlexRay description to `bus`, merging it with the files
+    /// already there. The cluster timing must agree across every file -- two
+    /// suppliers describing different schedules are two networks, not one.
+    pub fn add_fr_description(
+        &mut self,
+        bus: u8,
+        source: crate::model::ClusterSource,
+    ) -> Result<u8, String> {
+        if self.snap.fr_watches.iter().any(|w| w.bus == bus) {
+            return Err(format!(
+                "{} is attached: click {DETACH_LABEL} on its row before changing its descriptions",
+                self.fr_bus_label(bus)
+            ));
+        }
+        if self
+            .fr_sources
+            .get(&bus)
+            .is_some_and(|list| list.contains(&source))
+        {
+            return Err(format!("{} is already bound", source_label(&source)));
+        }
+        let parsed = Self::parse_fr_source(&source)?;
+        let mut warnings = Vec::new();
+        let bound = self
+            .fr_sources
+            .get(&bus)
+            .is_some_and(|list| !list.is_empty());
+        let db = match self.fr_buses.get(&bus).filter(|_| bound) {
+            Some(existing) => {
+                let mut base = (**existing).clone();
+                warnings = base.merge(parsed)?;
+                base
+            }
+            None => parsed,
+        };
+        let cluster_name = match &source {
+            crate::model::ClusterSource::Arxml { cluster, .. } if !cluster.is_empty() => {
+                Some(cluster.clone())
+            }
+            _ => (!db.params.name.is_empty()).then(|| db.params.name.clone()),
+        };
+        self.report_merge_warnings(&format!("FR{bus}"), warnings);
+        self.fr_sources.entry(bus).or_default().push(source);
         self.fr_buses.insert(bus, std::sync::Arc::new(db));
         match cluster_name {
             Some(name) => {
@@ -865,11 +950,99 @@ impl App {
                 self.fr_clusters.remove(&bus);
             }
         }
-        self.push_fr_db_to_core_with([(bus, path.to_string())].into_iter().collect());
-        if let Some(name) = self.fr_clusters.get(&bus).cloned() {
-            self.apply_fr_arxml_model(bus, &text, path, &name);
+        self.push_fr_db_to_core();
+        let count = self.fr_sources.get(&bus).map_or(0, Vec::len);
+        self.status = format!(
+            "{}: {count} description{} bound",
+            self.fr_bus_label(bus),
+            if count == 1 { "" } else { "s" }
+        );
+        Ok(bus)
+    }
+
+    /// Drops one FlexRay description and rebuilds the bus from the rest.
+    pub fn remove_fr_description(&mut self, bus: u8, path: &str, cluster: &str) {
+        if self.snap.fr_watches.iter().any(|w| w.bus == bus) {
+            self.status = format!(
+                "{} is attached: click {DETACH_LABEL} before removing a description",
+                self.fr_bus_label(bus)
+            );
+            return;
         }
-        Some(bus)
+        let source = description_source(path, (!cluster.is_empty()).then_some(cluster));
+        let Some(list) = self.fr_sources.get_mut(&bus) else {
+            return;
+        };
+        let before = list.len();
+        list.retain(|item| item != &source);
+        if list.len() == before {
+            return;
+        }
+        if list.is_empty() {
+            self.fr_buses
+                .insert(bus, std::sync::Arc::new(crate::fr_db::FrDb::default()));
+            self.fr_clusters.remove(&bus);
+            self.push_fr_db_to_core();
+            self.status = format!(
+                "{}: removed {}",
+                self.fr_bus_label(bus),
+                source_label(&source)
+            );
+            return;
+        }
+        self.rebuild_fr_from_sources(bus);
+        self.status = format!(
+            "{}: removed {}",
+            self.fr_bus_label(bus),
+            source_label(&source)
+        );
+    }
+
+    fn rebuild_fr_from_sources(&mut self, bus: u8) {
+        let sources = self.fr_sources.get(&bus).cloned().unwrap_or_default();
+        let mut merged: Option<crate::fr_db::FrDb> = None;
+        let mut warnings = Vec::new();
+        let mut failed = false;
+        for source in &sources {
+            match Self::parse_fr_source(source) {
+                Ok(parsed) => match &mut merged {
+                    Some(base) => match base.merge(parsed) {
+                        Ok(items) => warnings.extend(items),
+                        Err(e) => {
+                            self.log_status(crate::bus::WriteKind::Error, format!("FR{bus}: {e}"));
+                            failed = true;
+                            break;
+                        }
+                    },
+                    None => merged = Some(parsed),
+                },
+                Err(e) => {
+                    self.log_status(
+                        crate::bus::WriteKind::Error,
+                        format!("FR{bus}: {}: {e}", source_label(source)),
+                    );
+                }
+            }
+        }
+        self.report_merge_warnings(&format!("FR{bus}"), warnings);
+        match merged {
+            Some(db) if !failed => {
+                let label = description_cluster(&sources)
+                    .filter(|name| !name.is_empty())
+                    .or_else(|| (!db.params.name.is_empty()).then(|| db.params.name.clone()));
+                match label {
+                    Some(name) => {
+                        self.fr_clusters.insert(bus, name);
+                    }
+                    None => {
+                        self.fr_clusters.remove(&bus);
+                    }
+                }
+                self.fr_buses.insert(bus, std::sync::Arc::new(db));
+                self.push_fr_db_to_core();
+            }
+            _ => self.remove_fr_bus(bus),
+        }
     }
 
     /// Copies the frontend's parsed FlexRay databases into the bus core, which
@@ -880,6 +1053,7 @@ impl App {
 
     /// [`Self::push_fr_db_to_core`] plus source files for buses that were
     /// just inserted, before their models exist to answer for them.
+    #[cfg(test)]
     pub(crate) fn push_fr_db_to_core_paths(
         &mut self,
         extra: std::collections::BTreeMap<u8, String>,
@@ -897,19 +1071,26 @@ impl App {
             .fr_buses
             .keys()
             .map(|bus| {
-                let path = self
-                    .fr_description_path(*bus)
-                    .or_else(|| extra.get(bus).cloned())
-                    .unwrap_or_default();
-                let cluster = self.fr_clusters.get(bus).cloned().unwrap_or_default();
-                let source = if path.trim().is_empty() {
-                    crate::model::ClusterSource::Manual
-                } else if path.to_ascii_lowercase().ends_with(".arxml") {
-                    crate::model::ClusterSource::Arxml { path, cluster }
-                } else {
-                    crate::model::ClusterSource::Fibex { path }
-                };
-                (*bus, vec![source])
+                let list = self
+                    .fr_sources
+                    .get(bus)
+                    .cloned()
+                    .filter(|list| !list.is_empty())
+                    .unwrap_or_else(|| {
+                        let path = self
+                            .fr_description_path(*bus)
+                            .or_else(|| extra.get(bus).cloned())
+                            .unwrap_or_default();
+                        if path.trim().is_empty() {
+                            vec![crate::model::ClusterSource::Manual]
+                        } else {
+                            vec![description_source(
+                                &path,
+                                self.fr_clusters.get(bus).map(String::as_str),
+                            )]
+                        }
+                    });
+                (*bus, list)
             })
             .collect();
         self.send(crate::bus::BusCommand::SetFrDbs { dbs, sources });
@@ -949,6 +1130,7 @@ impl App {
             .copied()
             .map(crate::model::ClusterId);
         self.fr_buses.remove(&bus);
+        self.fr_sources.remove(&bus);
         self.fr_clusters.remove(&bus);
         self.fr_names.remove(&bus);
         // The picker's remembered port goes with the row: it echoes a choice
@@ -1029,7 +1211,6 @@ impl App {
 
     /// Replaces a bus's primary database.
     pub fn open_dbc_for(&mut self, ch: usize, path: String) {
-        self.can_arxml.remove(&(ch as u8));
         let mut paths = self
             .snap
             .channels
@@ -1083,7 +1264,8 @@ impl App {
                 self.load_log(&path.to_string_lossy());
             }
             Some("arxml") => {
-                self.import_arxml_path(&path.to_string_lossy());
+                self.status =
+                    "open an ARXML from a bus row so its cluster can be chosen".to_string();
             }
             _ => {
                 let name = path

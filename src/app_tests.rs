@@ -466,15 +466,18 @@ fn arxml_can_import_reaches_the_unified_model_and_survives_reopen() {
     let arxml = dir.join("two.arxml");
     std::fs::write(&arxml, crate::test_assets::CAN_ARXML_SAMPLE).unwrap();
     let mut app = App::headless();
-    app.import_arxml_path(arxml.to_string_lossy().as_ref());
-    app.settle();
     let bus = app
-        .snap
-        .channels
-        .iter()
-        .position(|c| c.name == "CanA")
-        .expect("CanA became a channel");
-    let model = app.model_comms[bus].as_ref().expect("the cluster's model");
+        .add_can_arxml_bus(arxml.to_string_lossy().as_ref(), "CanA", "CanA")
+        .expect("CanA binds to a new CAN bus");
+    app.settle();
+    assert_eq!(
+        app.snap.channels.get(bus as usize).map(|c| c.name.as_str()),
+        Some("CanA"),
+        "the chosen cluster becomes the bus"
+    );
+    let model = app.model_comms[bus as usize]
+        .as_ref()
+        .expect("the cluster's model");
     let cluster = model.clusters.values().next().expect("one cluster");
     assert!(
         matches!(
@@ -486,7 +489,7 @@ fn arxml_can_import_reaches_the_unified_model_and_survives_reopen() {
     );
     assert_eq!(
         cluster.id,
-        crate::model::ClusterId(app.snap.cluster_ids.can[bus]),
+        crate::model::ClusterId(app.snap.cluster_ids.can[bus as usize]),
         "the document model is rebound to the channel's global id"
     );
     assert!(
@@ -518,6 +521,101 @@ fn arxml_can_import_reaches_the_unified_model_and_survives_reopen() {
         cluster.sources
     );
     assert_eq!(cluster.id.0, restored.snap.cluster_ids.can[bus]);
+}
+
+/// One physical bus may be described by several suppliers' files. The second
+/// ARXML cluster joins the first bus instead of becoming its own channel, and
+/// the merged document model carries both frames.
+#[test]
+fn two_arxml_clusters_share_one_can_bus_and_survive_reopen() {
+    let dir = std::env::temp_dir().join("roxy_can_multi_can");
+    std::fs::create_dir_all(&dir).unwrap();
+    let arxml = dir.join("two.arxml");
+    std::fs::write(&arxml, crate::test_assets::CAN_ARXML_SAMPLE).unwrap();
+    let path = arxml.to_string_lossy().into_owned();
+
+    let mut app = App::headless();
+    let bus = app.add_can_arxml_bus(&path, "CanA", "CanA").unwrap();
+    app.load_can_arxml_on_bus(&path, "CanB", bus).unwrap();
+    app.settle();
+    assert_eq!(app.snap.channel_count, 3, "the second cluster reused bus 2");
+    assert_eq!(app.can_arxml.get(&bus).map(Vec::len), Some(2));
+    let model = app.model_comms[bus as usize]
+        .as_ref()
+        .expect("the merged model");
+    assert!(
+        model.frames.values().any(|frame| frame.name == "A")
+            && model.frames.values().any(|frame| frame.name == "B"),
+        "both documents' frames are decoded on the same bus"
+    );
+    let cluster = model.clusters.values().next().expect("one cluster");
+    assert_eq!(
+        cluster.sources.len(),
+        2,
+        "the bus lists both descriptions: {:?}",
+        cluster.sources
+    );
+
+    let project = dir.join("multi.rxproj");
+    assert!(app.save_project(Some(project.clone())));
+    let mut restored = App::headless();
+    restored.open_project_path(&project);
+    restored.settle();
+    let bus = restored
+        .snap
+        .channels
+        .iter()
+        .position(|channel| channel.name == "CanA")
+        .expect("CanA is still a channel");
+    assert_eq!(
+        restored.can_arxml.get(&(bus as u8)).map(Vec::len),
+        Some(2),
+        "both descriptions are saved and rebound on open"
+    );
+    let model = restored.model_comms[bus]
+        .as_ref()
+        .expect("the merged model after reopen");
+    assert!(
+        model.frames.values().any(|frame| frame.name == "A")
+            && model.frames.values().any(|frame| frame.name == "B"),
+        "both frames survive the project round trip"
+    );
+}
+
+/// Ethernet matrices merge per bus; a renamed second file adds a second
+/// cluster and its frame rather than replacing the first.
+#[test]
+fn a_second_ethernet_matrix_joins_the_same_bus() {
+    let dir = std::env::temp_dir().join("roxy_can_multi_eth");
+    std::fs::create_dir_all(&dir).unwrap();
+    let first = dir.join("eth1.arxml");
+    std::fs::write(&first, crate::test_assets::ETH_ARXML_SAMPLE).unwrap();
+    let second = dir.join("eth2.arxml");
+    let text = crate::test_assets::ETH_ARXML_SAMPLE
+        .replace("EthCluster", "EthCluster2")
+        .replace("EthFrame", "EthFrame2")
+        .replace("Pdu", "Pdu2")
+        .replace("Sig", "Sig2")
+        .replace("Cm", "Cm2");
+    std::fs::write(&second, text).unwrap();
+
+    let mut app = App::headless();
+    let bus = app.add_eth_bus().expect("an Ethernet bus index");
+    app.add_eth_description(
+        bus,
+        crate::channel::ethernet_source(&first.to_string_lossy(), Some("EthCluster")),
+    )
+    .unwrap();
+    app.add_eth_description(
+        bus,
+        crate::channel::ethernet_source(&second.to_string_lossy(), Some("EthCluster2")),
+    )
+    .unwrap();
+    app.settle();
+    assert_eq!(app.eth_sources.get(&bus).map(Vec::len), Some(2));
+    let db = app.eth_db(bus).expect("the merged matrix");
+    assert_eq!(db.clusters.len(), 2, "both clusters are on the bus");
+    assert_eq!(db.frames.len(), 2, "and both frames decode there");
 }
 
 #[test]
@@ -10984,7 +11082,9 @@ fn a_description_lands_on_the_bus_it_is_pointed_at() {
     assert_eq!(app.load_cluster_description(second, Some(0)), Some(0));
     let (on_first, on_second) = (sig(&app, 1), sig(&app, 0));
     assert_ne!(on_first, on_second, "the two assets are told apart");
-    // Replacing is how a misplaced file gets moved off a 路.
+    // A misplaced file moves off a 路 by removing the description and binding
+    // the wanted one; binding is additive, never a silent replacement.
+    app.remove_fr_description(0, second, "");
     assert_eq!(app.load_cluster_description(first, Some(0)), Some(0));
     assert_eq!(
         sig(&app, 0),

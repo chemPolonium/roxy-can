@@ -108,7 +108,9 @@
 | Transformation 类别未知 | 显示 raw 值，物理值列留空并标注 `unsupported` |
 | Ethernet 帧匹配歧义 | 不解码，显示候选数；等待项目绑定 |
 | FRAME-LENGTH 约定不确定 | 按项目开关解释；匹配失败时在诊断里写明当前约定 |
-| 多 cluster 引用 | 按源文件/cluster 名分别建 cluster；不再“取第一个” |
+| 多 cluster 引用 | 绑定到总线的是用户选中的 cluster；一条总线可绑定多个文件，合并失败/重复声明有诊断 |
+| 同一总线多个描述 | CAN 合并 `Comm`、FR 合并 `FrDb`（调度参数不一致则拒绝）、ETH 合并 `EthDb`；重复项保留第一份 |
+| 一个 ARXML 多个 cluster | Buses 里先选总线，再用扫描结果选择要绑定的 cluster；不自动摊成多条总线 |
 
 ---
 
@@ -650,62 +652,31 @@ derived:{definition_id}                     例：derived:brk_pressure
 `busMap` 只负责在打开时换回路号。
 ---
 
-## 5. 现有代码引用图（第 4 阶段迁移面）
+## 5. 当前代码地图
 
-### 5.1 后端
+迁移已经完成；下面只列当前形状，不再保留待迁移表。
 
-| 位置 | 现状 | v2 替换 | 阶段 |
-| --- | --- | --- | --- |
-| [`src/observe.rs:391`](../src/observe.rs#L391) | `SigKey::{Can,Fr,Eth,Derived}` | `SignalKey` + `derived:` 分支 | 4 |
-| `src/observe.rs:460-490` | `text()` / `from_text()` 四种文本 | `sig:` 规范文本 + 旧解析器 | 4 |
-| [`src/channel.rs:51`](../src/channel.rs#L51) | `Channel`（CAN 专用 + DBC） | `Cluster` + `Network` + `CanParams` | 1-3 |
-| [`src/app.rs:46`](../src/app.rs#L46) | `FrBusCfg { path, db }` | `Cluster` + `sources` | 1-3 |
-| [`src/app.rs:53`](../src/app.rs#L53) | `EthBusCfg { path, db }` | `Cluster` + `sources` | 1-3 |
-| `src/app.rs:266/274/279/284` | `fr_buses`、`eth_buses`、`can_arxml`、`eth_clusters` 四张表 | `ClusterRegistry` / `Comm` | 1-4 |
-| `src/channel.rs:371-722` | `import_arxml_path`、`next_eth_bus`、`load_*_description_cluster` | 统一 importer + cluster registry | 2-4 |
-| `src/can_arxml.rs` | ARXML → DBC 形状 `SymbolTable` | 直接建统一模型；DBC 形状只留给 DBC importer | 2 |
-| `src/fr_db.rs` / `src/eth/db.rs` | 各自 `FrDb` / `EthDb` + 解码索引 | 统一模型 + `DecodePlan` | 2-4 |
-| `src/config.rs:614` | `Config` 顶层 | v2 顶层（§4.1） | 7 |
-| `src/config.rs:80/237/290/307/317/388/429/455/501/548/560/571` | `ChannelCfg`、`SignalCfg`、`GfxCfg`、`DataCfg`、`MonitorRowCfg`、`StateCfg`、`TxCfg`、`FrTxCfg`、`TriggerCfg`、`FrBusFile`、`EthBusFile`、`CanArxmlFile` | 全部改为 cluster + `signalRef` | 7 |
-| `src/bus.rs` | `Vec<Channel>` 解码、`SigKey::can/fr/eth` 路由、Panel 发送 | cluster 路由 + `DecodePlan` + 统一编码器 | 4-5 |
-| `src/replay_map.rs:42` | `can/fr/eth` 三张 `BTreeMap<u8, Option<u8>>` | `BTreeMap<(LogBusKind,u8), ClusterId>` | 5 |
-| `src/generator.rs` | CAN/FR 生成器按 bus 索引 | cluster + frame id | 5 |
-| `src/trigger.rs` | `TriggerCfg {ch,id,ext}` | cluster + `SignalKey` | 4-5 |
-| `src/script/compiler.rs:286,841` | `send_frame` 的 frame 路径与 bus 解析 | cluster + frame id；旧路径经 resolver | 5 |
-| `src/script/mod.rs` | `Script.frame_consts`、`send_refs` | 同上 | 5 |
-| `src/reference.rs` | 参考回放的 `SigKey` / ETH 帧匹配 | `SignalKey` + `FrameRoute` | 5 |
-| `src/export.rs` | CSV/ASC/BLF 导出按 `SigKey.text()` | 写 `sig:` + 显示列 | 5 |
-| `src/state_seg.rs` | 状态分段按 `SigKey` 键 | `SignalKey` | 4 |
-| `src/workspace.rs` | `Pick::{Can,Fr,Eth}` | `Pick::{Frame,Flow}` + cluster id | 4-7 |
-| `src/hw/vector.rs` / `src/hw/kvaser.rs` | CAN 通道序号 | 会话级 cluster→硬件通道绑定 | 5 |
-| `src/web.rs:4420-4457` | `WebState.buses/fr_buses/eth_buses` 三份 | `WebState.clusters` + `busMap` | 4-7 |
-| `src/web.rs:5359-5376` | `WebFrBus` / `WebEthBus` 序列化 | 统一 `WebCluster` | 7 |
-| `src/web.rs:4166` | `WebCatalogChannel` 三类拼接 | 统一 catalog（cluster+frame+signal） | 4-7 |
+| 位置 | 职责 |
+| --- | --- |
+| `src/model/` | `Comm` / `Cluster` / `Network` / `Frame` / `Pdu` / `Signal`、导入器、`PlanCache`、project v2 schema |
+| `src/can_arxml.rs` | CAN ARXML → DBC 形状 `SymbolTable` 的只读适配器；统一模型走 `model::arxml` |
+| `src/fr_db.rs` / `src/eth/db.rs` | FIBEX / AUTOSAR 以太网矩阵的只读解析与合并（`merge`），供统一模型导入 |
+| `src/bus.rs` | `BusCore`：按 `ClusterId` 保存模型/计划、解码、生成器、触发、硬件绑定 |
+| `src/channel.rs` | App 侧的 bus-first 描述绑定：CAN DBC/ARXML、FR ARXML/FIBEX、ETH ARXML 的 Add/Remove 与合并 |
+| `src/config.rs` / `src/project.rs` | 工程 v2 的保存/打开；`clusters[].sources` 是描述文件的唯一持久化位置 |
+| `src/web.rs` | Web 宿主、`WebCommand`、`WebState`（buses/fr_buses/eth_buses 各自带 `descriptions`，另有 `arxmlScan`） |
+| `web/src/components/BusesModal.tsx` | **Add bus**（CAN/FlexRay/Ethernet）、单总线详情、描述列表、ARXML cluster 选择器 |
+| `web/src/types.ts` | `BusDescription`、`ArxmlScan` 与 `add_bus_description` / `remove_bus_description` / `scan_arxml` 命令 |
 
-### 5.2 前端
+### 5.1 测试与夹具
 
-| 位置 | 现状 | v2 替换 | 阶段 |
-| --- | --- | --- | --- |
-| [`web/src/types.ts:41`](../web/src/types.ts#L41) | `frBuses`、`ethBuses` 与 `channels` 并列 | `clusters` + `busMap` | 7 |
-| `web/src/types.ts:131-147` | `FrBus`、`EthBus` | `Cluster`（kind 字段区分） | 7 |
-| `web/src/types.ts:477-482` | `Channel` 只有 CAN | `Cluster` + `Network` | 7 |
-| `web/src/components/BusesModal.tsx:14-15,378-612` | 三套加载入口 | **Add cluster** + 按扩展名/importer 选择；详情按 kind | 7 |
-| `web/src/derived.ts` | `DerivedReference {key,bus,frame,frameId}` | `signalRef` 字符串 + 解析结果 | 4-7 |
-| `web/src/components/DerivedPanel.tsx` | 三栏 bus/frame/signal | cluster/frame/signal，引用写 `sig:` | 4-7 |
-| `web/src/components/SignalPicker.tsx` | `ch/id/ext/fr_slot/eth_frame` | `signalRef` | 7 |
-| `web/src/components/PagePanel.tsx` / `panelPage.ts` | frame action 的 `bus/source/frameId/ext` | `cluster/source/key` | 7 |
-| `web/src/components/TraceTable.tsx` / `SignalChart.tsx` | 行/曲线按 bus 编号 | cluster id + key | 4-7 |
-| `web/src/app.tsx` | workspace、选择、命令拼接 bus 字段 | `busMap` 迁移后全部用 cluster | 7 |
-
-### 5.3 测试与夹具
-
-| 位置 | 用途 | v2 处理 |
-| --- | --- | --- |
-| `src/app_tests.rs`（55 处 `SigKey`） | 运行时行为 | 第 4 阶段按新 key 迁移；断言保留 |
-| `src/headless_tests.rs`（12 处） | 端到端命令 | 第 4-5 阶段迁移 |
-| `src/can_arxml_tests.rs` | CAN ARXML 解析 | 第 2-3 阶段换成统一模型断言 |
-| `src/test_assets.rs` / `test_assets_data.rs` | FR/ETH 夹具 | 第 2 阶段补多协议样本 |
-| `web/src/*.test.ts` | 前端纯函数 | 第 7 阶段随 `signalRef` 迁移 |
+| 位置 | 用途 |
+| --- | --- |
+| `src/app_tests.rs` | App 行为，含多描述合并、ARXML cluster 选择、工程重开 |
+| `src/headless_tests.rs` | 端到端命令与线程化 core |
+| `src/fr_db.rs::multi_description_tests` | FR 调度冲突拒绝 / 相同调度合并 |
+| `src/test_assets.rs` / `test_assets_data.rs` | 运行时生成 DBC/ARXML/FIBEX/ETH 夹具 |
+| `web/src/*.test.ts` | 前端纯函数 |
 
 ---
 
@@ -717,8 +688,8 @@ derived:{definition_id}                     例：derived:brk_pressure
 | --- | --- | --- | --- |
 | `PowerTrain.arxml` | `src/test_assets_data.rs::POWERTRAIN_ARXML_GZ`（gzip 内嵌，运行时写到 `target/test-assets`） | FlexRay cluster、48 帧、24 PDU、compu | FR 基线 |
 | `PowerTrain_v2.xml` / `PowerTrain2_v2.xml` | 同上 `POWERTRAIN_FIBEX_GZ` / `POWERTRAIN_FIBEX2_GZ` | FIBEX FR | FIBEX 适配器 |
-| `EthSample.arxml` | `src/test_assets.rs::ETH_ARXML`（运行时生成） | 单 ETH cluster、VLAN 100、帧/PDU/16 位信号 | ETH 基线 |
-| CAN ARXML 内联夹具 | `src/can_arxml_tests.rs` | CAN cluster、地址、帧、PDU、信号、compu | CAN 基线 |
+| `EthSample.arxml` | `src/test_assets.rs::ETH_ARXML_SAMPLE`（运行时生成） | 单 ETH cluster、VLAN 100、帧/PDU/16 位信号 | ETH 基线 |
+| CAN ARXML 内联夹具 | `src/test_assets.rs::CAN_ARXML_SAMPLE` | 两个 CAN cluster、地址、帧、PDU、信号、compu | CAN / 多描述基线 |
 | Container / Mux / Secured 夹具 | `roxy-arxml/src/import_tests/{container,multiplexed,secured}.rs`（只读参考） | 元素形状与引用结构 | 第 2/6 阶段改写为 roxy-can 夹具 |
 
 ### 6.2 必须补的三类样本

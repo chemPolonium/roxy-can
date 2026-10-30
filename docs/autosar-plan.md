@@ -57,14 +57,19 @@ CAN/FlexRay/Ethernet 的首选描述来源，DBC/FIBEX 只作为导入适配器�
 
 ## 3. 当前基线
 
-- ARXML 导入已能一次扫描 CAN/FlexRay/Ethernet cluster，并分别落到三种
-  内部总线（`src/channel.rs::import_arxml_path`）。
+- ARXML 采用 **bus-first 绑定**：先加 CAN/FlexRay/Ethernet 总线，再把文件中
+  的某个 cluster 绑到该 bus（`App::load_can_arxml_on_bus` /
+  `add_fr_description` / `add_eth_description`）。不再保留“一个 ARXML 自动
+  摊成多条总线”的导入入口；`model::scan_clusters` 只用于选择 cluster。
+- 一条物理总线可以绑定多个描述文件（不同供应商的 DBC/ARXML、FR 的
+  ARXML+FIBEX）：CAN 合并 `Comm`，FR 合并 `FrDb`（调度参数必须一致），
+  ETH 合并 `EthDb`；重复声明保留第一份并写 Write 警告。
 - 运行时曾是三套模型：CAN `Vec<Channel>`，FR/ETH 各自
   `BTreeMap<bus, Cfg>`；`SigKey` 按 `Can {ch}` / `Fr {bus}` / `Eth {bus}`
   分空间（`src/observe.rs`）。迁移已完成：三协议都以 cluster 为身份，CAN
   通道的配置也来自模型，`Channel`/`FrBusCfg`/`EthBusCfg` 已不存在。
-- Buses 的 **Add bus** 只接 CAN（`web/src/components/BusesModal.tsx`）；
-  FR/ETH 入口分散在各自的 Load database 区域。
+- Buses 的 **Add bus** 提供 CAN/FlexRay/Ethernet 三种；描述文件在选中总线的
+  详情里逐个 Add/Remove。
 - CAN ARXML 解析器（`src/can_arxml.rs`）目前先转成 DBC 形状的
   `SymbolTable`；FR/ETH 分别有自己的数据库结构。
 - 已有审计：`docs/arxml-communication-audit.md`（部分缺口随后续批次已变化，

@@ -1829,7 +1829,8 @@ export function App() {
     void run({ type: "detach_fr_hardware", bus });
   const setRealBus = (real: boolean) =>
     void run({ type: "set_bus_mode", real });
-  const addBus = () => void run({ type: "add_bus" });
+  const addBus = (kind: "can" | "flexray" | "ethernet") =>
+    void run({ type: "add_bus", kind });
   const removeBus = (bus: number) => void run({ type: "remove_bus", ch: bus });
   const renameBus = (bus: number, name: string) =>
     void run({ type: "rename_bus", ch: bus, name });
@@ -1840,8 +1841,34 @@ export function App() {
       bitrate_kbps: arb,
       fd_data_kbps: fd,
     });
-  const loadDbc = (bus: number, path: string) =>
-    void run({ type: "load_dbc", ch: bus, path });
+  const scanArxml = (path: string) =>
+    void run({ type: "scan_arxml", path });
+  const addBusDescription = (
+    bus: number,
+    kind: string,
+    path: string,
+    cluster?: string,
+  ) =>
+    void run({
+      type: "add_bus_description",
+      bus,
+      kind,
+      path,
+      cluster: cluster ?? "",
+    });
+  const removeBusDescription = (
+    bus: number,
+    kind: string,
+    path: string,
+    cluster?: string,
+  ) =>
+    void run({
+      type: "remove_bus_description",
+      bus,
+      kind,
+      path,
+      cluster: cluster ?? "",
+    });
   const setEntryActive = (entry: TxEntry, on: boolean) =>
     void run({ type: "set_entry_active", ch: entry.channel, id: entry.id, on });
   const setEntryCycle = (entry: TxEntry, cycleUs: number) =>
@@ -4083,13 +4110,12 @@ export function App() {
           onRemoveBus={removeBus}
           onRenameBus={renameBus}
           onSetRates={setBusRates}
-          onLoadDbc={loadDbc}
-          onImportArxml={(path) => void run({ type: "import_arxml", path })}
+          onAddDescription={addBusDescription}
+          onRemoveDescription={removeBusDescription}
+          arxmlScan={state?.arxmlScan ?? null}
+          onScanArxml={scanArxml}
           onSetNodeRole={(bus, node, simulated) =>
             void run({ type: "set_node_role", bus, node, simulated })
-          }
-          onLoadFr={(path) =>
-            void run({ type: "load_fr_description", path, bus: null })
           }
           onRemoveFr={(bus) => void run({ type: "remove_fr_bus", bus })}
           onRemoveEth={(bus) => void run({ type: "remove_eth_bus", bus })}

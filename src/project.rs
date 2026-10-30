@@ -125,8 +125,10 @@ impl App {
         let ids = &self.snap.cluster_ids;
         let mut fr_order: Vec<u8> = config.fr_buses.iter().map(|bus| bus.bus).collect();
         fr_order.sort_unstable();
+        fr_order.dedup();
         let mut eth_order: Vec<u8> = config.eth_buses.iter().map(|bus| bus.bus).collect();
         eth_order.sort_unstable();
+        eth_order.dedup();
         let mut can_index = 0usize;
         let mut fr_index = 0usize;
         let mut eth_index = 0usize;
@@ -709,37 +711,47 @@ fn restore_buses_from_clusters(project: &crate::model::ProjectV2, cfg: &mut Conf
                 can += 1;
             }
             ClusterKind::FlexRay => {
-                let (path, name) = description_source(&cluster.sources);
-                cfg.fr_buses.push(crate::config::FrBusFile {
-                    bus: fr,
-                    path,
-                    cluster: name,
-                });
+                for source in &cluster.sources {
+                    match source {
+                        ClusterSource::Arxml {
+                            path,
+                            cluster: name,
+                        } => {
+                            cfg.fr_buses.push(crate::config::FrBusFile {
+                                bus: fr,
+                                path: path.clone(),
+                                cluster: name.clone(),
+                            });
+                        }
+                        ClusterSource::Fibex { path } => {
+                            cfg.fr_buses.push(crate::config::FrBusFile {
+                                bus: fr,
+                                path: path.clone(),
+                                cluster: String::new(),
+                            });
+                        }
+                        _ => {}
+                    }
+                }
                 cfg.fr_names.push((fr, cluster.name.clone()));
                 fr += 1;
             }
             ClusterKind::Ethernet => {
-                let (path, name) = description_source(&cluster.sources);
-                cfg.eth_buses.push(crate::config::EthBusFile {
-                    bus: eth,
-                    path,
-                    cluster: name,
-                });
+                for source in &cluster.sources {
+                    if let ClusterSource::Arxml {
+                        path,
+                        cluster: name,
+                    } = source
+                    {
+                        cfg.eth_buses.push(crate::config::EthBusFile {
+                            bus: eth,
+                            path: path.clone(),
+                            cluster: name.clone(),
+                        });
+                    }
+                }
                 eth += 1;
             }
         }
     }
-}
-
-fn description_source(sources: &[crate::model::ClusterSource]) -> (String, String) {
-    for source in sources {
-        match source {
-            crate::model::ClusterSource::Arxml { path, cluster } => {
-                return (path.clone(), cluster.clone());
-            }
-            crate::model::ClusterSource::Fibex { path } => return (path.clone(), String::new()),
-            _ => {}
-        }
-    }
-    (String::new(), String::new())
 }

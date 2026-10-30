@@ -44,6 +44,8 @@ const ETH_ARXML: &str = r#"<?xml version="1.0"?>
  </ELEMENTS></AR-PACKAGE></AR-PACKAGES>
 </AUTOSAR>"#;
 
+pub const ETH_ARXML_SAMPLE: &str = ETH_ARXML;
+
 fn write_gzip(name: &str, compressed: &[u8]) {
     let mut bytes = Vec::new();
     flate2::read::GzDecoder::new(compressed)

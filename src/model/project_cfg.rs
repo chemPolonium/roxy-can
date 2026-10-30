@@ -17,21 +17,26 @@ pub fn project_from_config(config: &Config) -> ProjectV2 {
         next_id += 1;
     }
 
-    let mut fr_buses: Vec<&FrBusFile> = config.fr_buses.iter().collect();
-    fr_buses.sort_by_key(|bus| bus.bus);
-    for bus in fr_buses {
+    let mut fr_by_bus: std::collections::BTreeMap<u8, Vec<&FrBusFile>> = Default::default();
+    for file in &config.fr_buses {
+        fr_by_bus.entry(file.bus).or_default().push(file);
+    }
+    for (bus, files) in fr_by_bus {
         let alias = config
             .fr_names
             .iter()
-            .find(|(index, _)| *index == bus.bus)
+            .find(|(index, _)| *index == bus)
             .map(|(_, name)| name.clone())
-            .unwrap_or_else(|| format!("FR{}", bus.bus));
+            .unwrap_or_else(|| format!("FR{bus}"));
         clusters.push(ClusterCfg {
             id: next_id,
             kind: ClusterKind::FlexRay,
             name: alias,
             aliases: Vec::new(),
-            sources: vec![source_for_path(&bus.path, Some(&bus.cluster))],
+            sources: files
+                .iter()
+                .map(|file| source_for_path(&file.path, Some(&file.cluster)))
+                .collect(),
             can: None,
             flexray: Some(FlexRayCfg::default()),
             ether: None,
@@ -40,15 +45,20 @@ pub fn project_from_config(config: &Config) -> ProjectV2 {
         next_id += 1;
     }
 
-    let mut eth_buses: Vec<&EthBusFile> = config.eth_buses.iter().collect();
-    eth_buses.sort_by_key(|bus| bus.bus);
-    for bus in eth_buses {
+    let mut eth_by_bus: std::collections::BTreeMap<u8, Vec<&EthBusFile>> = Default::default();
+    for file in &config.eth_buses {
+        eth_by_bus.entry(file.bus).or_default().push(file);
+    }
+    for (bus, files) in eth_by_bus {
         clusters.push(ClusterCfg {
             id: next_id,
             kind: ClusterKind::Ethernet,
-            name: format!("ETH{}", bus.bus),
+            name: format!("ETH{bus}"),
             aliases: Vec::new(),
-            sources: vec![source_for_path(&bus.path, Some(&bus.cluster))],
+            sources: files
+                .iter()
+                .map(|file| source_for_path(&file.path, Some(&file.cluster)))
+                .collect(),
             can: None,
             flexray: None,
             ether: Some(EtherCfg {

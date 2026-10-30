@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from "preact/hooks";
 import type {
+  ArxmlScan,
   Bus,
+  BusDescription,
   Cluster,
   EthBus,
   FrBus,
@@ -22,14 +24,25 @@ interface Props {
   error: string;
   onError: (message: string) => void;
   onRefresh: () => void;
-  onAddBus: () => void;
+  onAddBus: (kind: "can" | "flexray" | "ethernet") => void;
   onRemoveBus: (bus: number) => void;
   onRenameBus: (bus: number, name: string) => void;
   onSetRates: (bus: number, arb: number, fd: number) => void;
-  onLoadDbc: (bus: number, path: string) => void;
-  onImportArxml: (path: string) => void;
+  onAddDescription: (
+    bus: number,
+    kind: string,
+    path: string,
+    cluster?: string,
+  ) => void;
+  onRemoveDescription: (
+    bus: number,
+    kind: string,
+    path: string,
+    cluster?: string,
+  ) => void;
+  arxmlScan: ArxmlScan | null;
+  onScanArxml: (path: string) => void;
   onSetNodeRole: (bus: number, node: string, simulated: boolean) => void;
-  onLoadFr: (path: string) => void;
   onRemoveFr: (bus: number) => void;
   onRemoveEth: (bus: number) => void;
   onAttach: (bus: number, driver: string, index: number) => void;
@@ -78,6 +91,119 @@ function rateOptions(standard: number[], current: number): number[] {
   return values.sort((a, b) => a - b);
 }
 
+function DescriptionList({
+  bus,
+  kind,
+  descriptions,
+  scan,
+  onScan,
+  onAdd,
+  onRemove,
+  onError,
+  accept,
+  allowCluster,
+}: {
+  bus: number;
+  kind: string;
+  descriptions: BusDescription[];
+  scan: ArxmlScan | null;
+  onScan: (path: string) => void;
+  onAdd: (bus: number, kind: string, path: string, cluster?: string) => void;
+  onRemove: (bus: number, kind: string, path: string, cluster?: string) => void;
+  onError: (message: string) => void;
+  accept: string;
+  allowCluster: boolean;
+}) {
+  const [pending, setPending] = useState<string | null>(null);
+  const matches =
+    pending && scan?.path === pending
+      ? scan.clusters.filter((cluster) => cluster.kind === kind)
+      : [];
+
+  useEffect(() => {
+    if (!pending || !scan || scan.path !== pending) return;
+    const usable = scan.clusters.filter((cluster) => cluster.kind === kind);
+    if (usable.length === 1 && allowCluster) {
+      onAdd(bus, kind, pending, usable[0].name);
+      setPending(null);
+    } else if (usable.length === 0) {
+      onError(
+        `That ARXML declares no ${kind === "can" ? "CAN" : kind === "flexray" ? "FlexRay" : "Ethernet"} cluster`,
+      );
+      setPending(null);
+    }
+  }, [pending, scan, kind, bus, allowCluster, onAdd, onError]);
+
+  const pick = (path: string) => {
+    if (path.toLowerCase().endsWith(".arxml") && allowCluster) {
+      setPending(path);
+      onScan(path);
+      return;
+    }
+    onAdd(bus, kind, path);
+  };
+
+  return (
+    <div class="bus-descriptions">
+      <span class="bus-descriptions-label">Descriptions</span>
+      <div class="bus-description-list">
+        {descriptions.length === 0 && (
+          <span class="hint">None bound; frames stay raw.</span>
+        )}
+        {descriptions.map((desc) => (
+          <span
+            class="description-chip"
+            key={`${desc.kind}:${desc.path}:${desc.cluster ?? ""}`}
+            title={desc.cluster ? `${desc.path} · ${desc.cluster}` : desc.path}
+          >
+            <em>{desc.kind.toUpperCase()}</em>
+            {fileName(desc.path)}
+            {desc.cluster && <span class="description-cluster">{desc.cluster}</span>}
+            <button
+              type="button"
+              class="description-remove"
+              aria-label={`Remove ${fileName(desc.path)}`}
+              onClick={() =>
+                onRemove(bus, kind, desc.path, desc.cluster || undefined)
+              }
+            >
+              ×
+            </button>
+          </span>
+        ))}
+      </div>
+      {pending && (
+        <div class="arxml-chooser" role="group" aria-label="Choose a cluster">
+          <span title={pending}>
+            {fileName(pending)}: choose the cluster for this bus
+          </span>
+          {matches.map((cluster) => (
+            <button
+              type="button"
+              key={cluster.name}
+              onClick={() => {
+                onAdd(bus, kind, pending, cluster.name);
+                setPending(null);
+              }}
+            >
+              {cluster.name}
+            </button>
+          ))}
+          <button type="button" class="mini" onClick={() => setPending(null)}>
+            Cancel
+          </button>
+        </div>
+      )}
+      <FilePick
+        label="Add description…"
+        accept={accept}
+        onError={onError}
+        onPick={pick}
+      />
+    </div>
+  );
+}
+
 function BusCard({
   bus,
   channels,
@@ -88,7 +214,10 @@ function BusCard({
   onRemove,
   onRename,
   onSetRates,
-  onLoadDbc,
+  scan,
+  onScan,
+  onAddDescription,
+  onRemoveDescription,
   onSetNodeRole,
   onError,
 }: {
@@ -101,13 +230,25 @@ function BusCard({
   onRemove: (bus: number) => void;
   onRename: (bus: number, name: string) => void;
   onSetRates: (bus: number, arb: number, fd: number) => void;
-  onLoadDbc: (bus: number, path: string) => void;
+  scan: ArxmlScan | null;
+  onScan: (path: string) => void;
+  onAddDescription: (
+    bus: number,
+    kind: string,
+    path: string,
+    cluster?: string,
+  ) => void;
+  onRemoveDescription: (
+    bus: number,
+    kind: string,
+    path: string,
+    cluster?: string,
+  ) => void;
   onSetNodeRole: (bus: number, node: string, simulated: boolean) => void;
   onError: (message: string) => void;
 }) {
   const [name, setName] = useState(bus.name);
   const nameRef = useRef(bus.name);
-  const [dbc, setDbc] = useState("");
   const [arb, setArb] = useState(bus.bitrateKbps);
   const [fd, setFd] = useState(bus.fdDataKbps);
   const ratesRef = useRef({ arb: bus.bitrateKbps, fd: bus.fdDataKbps });
@@ -223,9 +364,11 @@ function BusCard({
           </select>
         </label>
         <span class="bus-dbcs">
-          {bus.dbcPaths.length > 0
-            ? bus.dbcPaths.map(fileName).join(", ")
-            : "no database"}
+          {bus.descriptions.length > 0
+            ? `${bus.descriptions.length} description${
+                bus.descriptions.length === 1 ? "" : "s"
+              }`
+            : "no description"}
         </span>
         <button
           type="button"
@@ -244,35 +387,18 @@ function BusCard({
         </button>
       </div>
 
-      <div class="bus-dbc-row">
-        <span>Database</span>
-        <input
-          value={dbc}
-          placeholder="Host path to a CAN database (.dbc / ARXML)"
-          onInput={(event) => setDbc((event.target as HTMLInputElement).value)}
-          onKeyDown={(event) => {
-            if (event.key === "Enter" && dbc.trim()) {
-              onLoadDbc(bus.index, dbc.trim());
-            }
-          }}
-        />
-        <button
-          type="button"
-          disabled={!dbc.trim()}
-          onClick={() => onLoadDbc(bus.index, dbc.trim())}
-        >
-          Load database
-        </button>
-        <FilePick
-          label="Choose…"
-          accept=".dbc,.arxml"
-          onError={onError}
-          onPick={(path) => {
-            setDbc(path);
-            onLoadDbc(bus.index, path);
-          }}
-        />
-      </div>
+      <DescriptionList
+        bus={bus.index}
+        kind="can"
+        descriptions={bus.descriptions}
+        scan={scan}
+        onScan={onScan}
+        onAdd={onAddDescription}
+        onRemove={onRemoveDescription}
+        onError={onError}
+        accept=".dbc,.arxml"
+        allowCluster
+      />
 
       {bus.nodes.length > 0 && (
         <div class="bus-nodes">
@@ -404,10 +530,11 @@ export function BusesModal({
   onRemoveBus,
   onRenameBus,
   onSetRates,
-  onLoadDbc,
-  onImportArxml,
+  onAddDescription,
+  onRemoveDescription,
+  arxmlScan,
+  onScanArxml,
   onSetNodeRole,
-  onLoadFr,
   onRemoveFr,
   onRemoveEth,
   onAttach,
@@ -581,39 +708,24 @@ export function BusesModal({
                 Add cluster
               </button>
               {addOpen && (
-                <div class="add-cluster-menu" role="menu" aria-label="Add cluster">
-                  <FilePick
-                    menuItem
-                    class="add-cluster-item"
-                    label="ARXML (all clusters)…"
-                    accept=".arxml"
-                    onError={onError}
-                    onPick={(path) => {
-                      setAddOpen(false);
-                      onImportArxml(path);
-                    }}
-                  />
-                  <button
-                    type="button"
-                    role="menuitem"
-                    onClick={() => {
-                      setAddOpen(false);
-                      onAddBus();
-                    }}
-                  >
-                    CAN cluster
-                  </button>
-                  <FilePick
-                    menuItem
-                    class="add-cluster-item"
-                    label="FlexRay FIBEX…"
-                    accept=".xml,.arxml,.fibex"
-                    onError={onError}
-                    onPick={(path) => {
-                      setAddOpen(false);
-                      onLoadFr(path);
-                    }}
-                  />
+                <div class="add-cluster-menu" role="menu" aria-label="Add bus">
+                  {[
+                    ["can", "CAN bus"],
+                    ["flexray", "FlexRay bus"],
+                    ["ethernet", "Ethernet bus"],
+                  ].map(([kind, label]) => (
+                    <button
+                      type="button"
+                      role="menuitem"
+                      key={kind}
+                      onClick={() => {
+                        setAddOpen(false);
+                        onAddBus(kind as "can" | "flexray" | "ethernet");
+                      }}
+                    >
+                      {label}
+                    </button>
+                  ))}
                 </div>
               )}
             </div>
@@ -863,7 +975,10 @@ export function BusesModal({
               onRemove={onRemoveBus}
               onRename={onRenameBus}
               onSetRates={onSetRates}
-              onLoadDbc={onLoadDbc}
+              scan={arxmlScan}
+              onScan={onScanArxml}
+              onAddDescription={onAddDescription}
+              onRemoveDescription={onRemoveDescription}
               onSetNodeRole={onSetNodeRole}
               onError={onError}
             />
@@ -926,15 +1041,24 @@ export function BusesModal({
                     ))}
                   </select>
                 )}
-                <span class="proto-path" title={bus.path}>
-                  {fileName(bus.path)}
-                </span>
+                <DescriptionList
+                  bus={bus.bus}
+                  kind="flexray"
+                  descriptions={bus.descriptions}
+                  scan={arxmlScan}
+                  onScan={onScanArxml}
+                  onAdd={onAddDescription}
+                  onRemove={onRemoveDescription}
+                  onError={onError}
+                  accept=".xml,.arxml,.fibex"
+                  allowCluster
+                />
                 <button
                   type="button"
                   class="bus-remove"
                   onClick={() => onRemoveFr(bus.bus)}
                 >
-                  Remove
+                  Remove bus
                 </button>
               </div>
             ))}
@@ -955,15 +1079,24 @@ export function BusesModal({
                 <span>
                   {bus.clusters} clusters · {bus.frames} frames
                 </span>
-                <span class="proto-path" title={bus.path}>
-                  {fileName(bus.path)}
-                </span>
+                <DescriptionList
+                  bus={bus.bus}
+                  kind="ethernet"
+                  descriptions={bus.descriptions}
+                  scan={arxmlScan}
+                  onScan={onScanArxml}
+                  onAdd={onAddDescription}
+                  onRemove={onRemoveDescription}
+                  onError={onError}
+                  accept=".arxml"
+                  allowCluster
+                />
                 <button
                   type="button"
                   class="bus-remove"
                   onClick={() => onRemoveEth(bus.bus)}
                 >
-                  Remove
+                  Remove bus
                 </button>
               </div>
             ))}

@@ -2990,3 +2990,39 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod multi_description_tests {
+    use super::*;
+
+    fn db(speed_kbps: u32, cycle_time_ms: f64) -> FrDb {
+        FrDb {
+            params: FrClusterParams {
+                speed_kbps,
+                cycle_time_ms,
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+    }
+
+    /// Two files describing the same physical FlexRay bus must agree on the
+    /// schedule; different timing is a different network and is refused.
+    #[test]
+    fn merging_clusters_with_different_timing_is_refused() {
+        let mut base = db(10_000, 5.0);
+        let err = base.merge(db(10_000, 10.0)).unwrap_err();
+        assert!(err.contains("timing differs"), "{err}");
+        assert_eq!(base.params.cycle_time_ms, 5.0, "the first stays intact");
+    }
+
+    #[test]
+    fn merging_clusters_with_the_same_timing_keeps_both_ecus() {
+        let mut base = db(10_000, 5.0);
+        base.ecus.push("ECU_A".to_string());
+        let mut other = db(10_000, 5.0);
+        other.ecus.push("ECU_B".to_string());
+        base.merge(other).expect("same timing merges");
+        assert_eq!(base.ecus, ["ECU_A", "ECU_B"]);
+    }
+}

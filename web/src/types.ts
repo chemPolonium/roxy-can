@@ -41,6 +41,7 @@ export interface State {
   clusters: Cluster[];
   frBuses: FrBus[];
   ethBuses: EthBus[];
+  arxmlScan?: ArxmlScan;
   realBus: boolean;
   hwRefresh: number;
   tx: TxEntry[];
@@ -131,11 +132,23 @@ export interface ReplayMap {
   eth: ReplayMapRow[];
 }
 
+export interface BusDescription {
+  kind: "dbc" | "arxml" | "fibex" | "manual" | string;
+  path: string;
+  cluster?: string;
+}
+
+export interface ArxmlScan {
+  path: string;
+  clusters: { kind: "can" | "flexray" | "ethernet" | string; name: string }[];
+}
+
 export interface FrBus {
   bus: number;
   name: string;
   path: string;
   cluster: string;
+  descriptions: BusDescription[];
   frames: number;
   attached: boolean;
   channel: number;
@@ -145,6 +158,7 @@ export interface EthBus {
   bus: number;
   name: string;
   path: string;
+  descriptions: BusDescription[];
   clusters: number;
   frames: number;
 }
@@ -168,6 +182,7 @@ export interface Bus {
   index: number;
   name: string;
   dbcPaths: string[];
+  descriptions: BusDescription[];
   bitrateKbps: number;
   fdDataKbps: number;
   nodes: BusNode[];
@@ -790,7 +805,7 @@ export type Command =
   | { type: "detach_fr_hardware"; bus: number }
   | { type: "refresh_hardware" }
   | { type: "set_bus_mode"; real: boolean }
-  | { type: "add_bus" }
+  | { type: "add_bus"; kind: "can" | "flexray" | "ethernet" }
   | { type: "remove_bus"; ch: number }
   | { type: "rename_bus"; ch: number; name: string }
   | {
@@ -800,9 +815,22 @@ export type Command =
       fd_data_kbps: number;
     }
   | { type: "load_dbc"; ch: number; path: string }
-  | { type: "import_arxml"; path: string }
+  | { type: "scan_arxml"; path: string }
+  | {
+      type: "add_bus_description";
+      bus: number;
+      kind: string;
+      path: string;
+      cluster?: string;
+    }
+  | {
+      type: "remove_bus_description";
+      bus: number;
+      kind: string;
+      path: string;
+      cluster?: string;
+    }
   | { type: "set_node_role"; bus: number; node: string; simulated: boolean }
-  | { type: "load_fr_description"; path: string; bus: number | null }
   | { type: "remove_fr_bus"; bus: number }
   | { type: "remove_eth_bus"; bus: number }
   | { type: "set_entry_active"; ch: number; id: number; on: boolean }

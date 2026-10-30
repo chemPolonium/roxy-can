@@ -888,6 +888,71 @@ impl Default for Config {
 
 impl Config {
     pub fn from_app(app: &App, base: Option<&Path>) -> Self {
+        let rel = |p: &String| match base {
+            Some(b) => relativize(p, b),
+            None => p.clone(),
+        };
+        // One project entry per bound description file, so several files on
+        // one bus survive the round trip. A bus whose description was put
+        // there by a test or an adapter (no App-side list) still saves its
+        // first source, as before.
+        let mut fr_buses: Vec<FrBusFile> = app
+            .fr_sources
+            .iter()
+            .flat_map(|(bus, sources)| {
+                sources.iter().filter_map(move |source| match source {
+                    crate::model::ClusterSource::Arxml { path, cluster } => Some(FrBusFile {
+                        bus: *bus,
+                        path: rel(path),
+                        cluster: cluster.clone(),
+                    }),
+                    crate::model::ClusterSource::Fibex { path } => Some(FrBusFile {
+                        bus: *bus,
+                        path: rel(path),
+                        cluster: String::new(),
+                    }),
+                    _ => None,
+                })
+            })
+            .collect();
+        for bus in app.fr_buses.keys() {
+            if !app.fr_sources.contains_key(bus) {
+                fr_buses.push(FrBusFile {
+                    bus: *bus,
+                    path: app
+                        .fr_description_path(*bus)
+                        .map(|path| rel(&path))
+                        .unwrap_or_default(),
+                    cluster: app.fr_clusters.get(bus).cloned().unwrap_or_default(),
+                });
+            }
+        }
+        let mut eth_buses: Vec<EthBusFile> = app
+            .eth_sources
+            .iter()
+            .flat_map(|(bus, sources)| {
+                sources.iter().filter_map(move |source| match source {
+                    crate::model::ClusterSource::Arxml { path, cluster } => Some(EthBusFile {
+                        bus: *bus,
+                        path: rel(path),
+                        cluster: cluster.clone(),
+                    }),
+                    _ => None,
+                })
+            })
+            .collect();
+        for bus in app.eth_buses.keys() {
+            if !app.eth_sources.contains_key(bus) {
+                eth_buses.push(EthBusFile {
+                    bus: *bus,
+                    path: app
+                        .eth_description_path(*bus)
+                        .map(|path| rel(&path))
+                        .unwrap_or_default(),
+                    cluster: app.eth_clusters.get(bus).cloned().unwrap_or_default(),
+                });
+            }
+        }
         // Bus-side reads go through the snapshot, like every other
         // frontend read of the bus.
         Config {
@@ -921,36 +986,22 @@ impl Config {
                 })
                 .collect(),
             bus_counter: app.snap.bus_counter,
-            fr_buses: app
-                .fr_buses
-                .keys()
-                .map(|bus| FrBusFile {
-                    bus: *bus,
-                    path: app.fr_description_path(*bus).unwrap_or_default(),
-                    cluster: app.fr_clusters.get(bus).cloned().unwrap_or_default(),
-                })
-                .collect(),
+            fr_buses,
             fr_names: app
                 .fr_names
                 .iter()
                 .map(|(bus, name)| (*bus, name.clone()))
                 .collect(),
-            eth_buses: app
-                .eth_buses
-                .keys()
-                .map(|bus| EthBusFile {
-                    bus: *bus,
-                    path: app.eth_description_path(*bus).unwrap_or_default(),
-                    cluster: app.eth_clusters.get(bus).cloned().unwrap_or_default(),
-                })
-                .collect(),
+            eth_buses,
             can_arxml: app
                 .can_arxml
                 .iter()
-                .map(|(bus, (path, cluster))| CanArxmlFile {
-                    bus: *bus,
-                    path: path.clone(),
-                    cluster: cluster.clone(),
+                .flat_map(|(bus, sources)| {
+                    sources.iter().map(move |(path, cluster)| CanArxmlFile {
+                        bus: *bus,
+                        path: rel(path),
+                        cluster: cluster.clone(),
+                    })
                 })
                 .collect(),
             eth_frame_length_includes_header: app.eth_length_includes_header,
@@ -1276,6 +1327,12 @@ impl Config {
         for f in &mut self.fr_buses {
             f.path = resolve_dbc(&f.path, base);
         }
+        for f in &mut self.eth_buses {
+            f.path = resolve_dbc(&f.path, base);
+        }
+        for f in &mut self.can_arxml {
+            f.path = resolve_dbc(&f.path, base);
+        }
     }
 
     /// Overwrites the freshly built defaults with the saved workspace.
@@ -1295,6 +1352,8 @@ impl Config {
         // Description sources are rebuilt from this file; a project that
         // carries none must not inherit the previous project's cluster maps.
         app.can_arxml.clear();
+        app.fr_sources.clear();
+        app.eth_sources.clear();
         app.fr_clusters.clear();
         app.eth_clusters.clear();
 
@@ -1680,58 +1739,32 @@ impl Config {
         } else {
             self.replay_speed.clamp(0.01, 100.0)
         };
-        // The FlexRay descriptions: each bus's file is parsed back into that
-        // bus's database so a FlexRay replay decodes against the same network.
-        // A file that moved or broke is reported, not fatal.
+        // FlexRay and Ethernet descriptions are rebound one file at a time;
+        // several files may describe the same bus, so the merge rules decide
+        // duplicates and timing conflicts. A file that moved or broke is a
+        // problem row, not a failed project load.
         for file in &self.fr_buses {
-            let path = &file.path;
-            let parsed = std::fs::read(path)
-                .map_err(|e| e.to_string())
-                .map(crate::dbc::text_from_bytes)
-                .and_then(|t| {
-                    if file.cluster.is_empty() {
-                        crate::fr_db::FrDb::parse(&t)
-                    } else {
-                        crate::fr_db::FrDb::parse_cluster(&t, &file.cluster)
-                    }
-                });
-            match parsed {
-                Ok(db) => {
-                    let cluster = if file.cluster.is_empty() {
-                        db.params.name.clone()
-                    } else {
-                        file.cluster.clone()
-                    };
-                    app.fr_buses.insert(file.bus, std::sync::Arc::new(db));
-                    if !cluster.is_empty() {
-                        app.fr_clusters.insert(file.bus, cluster);
-                    }
+            let source = if file.path.to_ascii_lowercase().ends_with(".arxml") {
+                crate::model::ClusterSource::Arxml {
+                    path: file.path.clone(),
+                    cluster: file.cluster.clone(),
                 }
-                Err(e) => problems.push(format!("FlexRay description load failed: {e}")),
+            } else {
+                crate::model::ClusterSource::Fibex {
+                    path: file.path.clone(),
+                }
+            };
+            if let Err(e) = app.add_fr_description(file.bus, source) {
+                problems.push(format!("FlexRay description load failed: {e}"));
             }
         }
-        // Ethernet matrices load the same way; a moved or broken file is a
-        // problem row, not a failed project load.
         for file in &self.eth_buses {
-            let path = &file.path;
-            let parsed = std::fs::read(path)
-                .map_err(|e| e.to_string())
-                .map(crate::dbc::text_from_bytes)
-                .and_then(|t| {
-                    if file.cluster.is_empty() {
-                        crate::eth::db::EthDb::parse(&t).map_err(|e| e.to_string())
-                    } else {
-                        crate::eth::db::EthDb::parse_cluster(&t, &file.cluster)
-                    }
-                });
-            match parsed {
-                Ok(db) => {
-                    app.eth_buses.insert(file.bus, std::sync::Arc::new(db));
-                    if !file.cluster.is_empty() {
-                        app.eth_clusters.insert(file.bus, file.cluster.clone());
-                    }
-                }
-                Err(e) => problems.push(format!("Ethernet ARXML load failed: {e}")),
+            let source = crate::model::ClusterSource::Arxml {
+                path: file.path.clone(),
+                cluster: file.cluster.clone(),
+            };
+            if let Err(e) = app.add_eth_description(file.bus, source) {
+                problems.push(format!("Ethernet ARXML load failed: {e}"));
             }
         }
         // Names come back before anything that labels a bus, and they survive a
@@ -1739,21 +1772,6 @@ impl Config {
         for (bus, name) in &self.fr_names {
             app.set_flexray_name(*bus, name);
         }
-        // The descriptions move to the core with the rest of the restored bus
-        // state, so a replay or a watch attach finds them where the user left
-        // them -- no lazy re-push at the moment of use.
-        let fr_paths: std::collections::BTreeMap<u8, String> = self
-            .fr_buses
-            .iter()
-            .map(|file| (file.bus, file.path.clone()))
-            .collect();
-        let eth_paths: std::collections::BTreeMap<u8, String> = self
-            .eth_buses
-            .iter()
-            .map(|file| (file.bus, file.path.clone()))
-            .collect();
-        app.push_fr_db_to_core_paths(fr_paths);
-        app.push_eth_db_to_core_paths(eth_paths);
         app.set_eth_length_includes_header(self.eth_frame_length_includes_header);
         // The FlexRay generator entries are rebuilt *after* the descriptions
         // land, because their name, payload length and send period are read out

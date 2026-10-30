@@ -211,7 +211,10 @@ pub enum BusCommand {
     /// Add a bus with the sample DBC path, load it, and pre-populate its
     /// generator.
     AddChannel,
+    /// Add a bus with no description: raw monitoring until files are bound.
+    AddEmptyChannel,
     /// Append a CAN bus straight from an ARXML cluster's unified model.
+    #[cfg(test)]
     AddChannelWithModel {
         name: String,
         comm: Arc<crate::model::Comm>,
@@ -268,12 +271,8 @@ pub enum BusCommand {
     },
     /// The same for a FlexRay bus, whose document also carries structure the
     /// FIBEX-shaped database cannot hold.
+    #[cfg(test)]
     SetFrModel {
-        bus: u8,
-        comm: Arc<crate::model::Comm>,
-    },
-    /// The same for an Ethernet bus.
-    SetEthModel {
         bus: u8,
         comm: Arc<crate::model::Comm>,
     },
@@ -1941,6 +1940,8 @@ impl BusCore {
             BusCommand::ClearAggregates => self.clear_aggregates(status),
             BusCommand::SetRunMode(mode) => self.run_mode = mode,
             BusCommand::AddChannel => self.add_channel(status),
+            BusCommand::AddEmptyChannel => self.add_empty_channel(status),
+            #[cfg(test)]
             BusCommand::AddChannelWithModel {
                 name,
                 comm,
@@ -2257,8 +2258,8 @@ impl BusCore {
             BusCommand::SetChannelModel { ch, comm, sources } => {
                 self.set_channel_model(ch, comm, sources)
             }
+            #[cfg(test)]
             BusCommand::SetFrModel { bus, comm } => self.set_fr_model(bus, comm),
-            BusCommand::SetEthModel { bus, comm } => self.set_eth_model(bus, comm),
             BusCommand::SetClusterIds { next, can, fr, eth } => {
                 self.cluster_ids = crate::model::ClusterIds::new(next);
                 let old_can = std::mem::take(&mut self.can_cluster_ids);
@@ -4878,6 +4879,30 @@ impl BusCore {
         }
     }
 
+    /// Adds a CAN bus with no description at all: raw monitoring, and the
+    /// Buses detail binds DBC/ARXML files afterwards.
+    fn add_empty_channel(&mut self, status: &mut String) {
+        self.bus_counter += 1;
+        let name = format!("CAN{}", self.bus_counter);
+        let cluster = self.cluster_ids.allocate();
+        self.can_cluster_ids.push(cluster);
+        self.model_comms
+            .push(Some(Arc::new(crate::model::empty_can_comm(
+                &name,
+                cluster,
+                &[],
+                crate::model::CanParams::DEFAULT_BITRATE_KBPS,
+                crate::model::CanParams::DEFAULT_FD_DATA_KBPS,
+            ))));
+        self.model_plans.push(None);
+        self.model_dbs.push(None);
+        self.can_xml_models.push(None);
+        self.bus_loads.push(crate::load::BusLoad::new());
+        self.loads_dirty = true;
+        self.nodes_dirty = true;
+        *status = format!("{name} added");
+    }
+
     /// Test hook: append a bus from a parsed table, the shape fixtures still
     /// use to seed a specific CAN database.
     #[cfg(test)]
@@ -4918,6 +4943,7 @@ impl BusCore {
     /// Appends a CAN bus from an already-built ARXML model. No description
     /// table is created: the model is the runtime source, and the generator
     /// rows come from its CAN frames.
+    #[cfg(test)]
     fn add_channel_with_model(
         &mut self,
         name: String,
@@ -5257,6 +5283,7 @@ impl BusCore {
         }
     }
 
+    #[cfg(test)]
     fn set_fr_model(&mut self, bus: u8, comm: Arc<crate::model::Comm>) {
         if !self.fr_dbs.contains_key(&bus) {
             return;
@@ -5278,29 +5305,6 @@ impl BusCore {
         self.fr_model_plans.insert(bus, Arc::new(plans));
         self.fr_model_dbs
             .insert(bus, Arc::clone(&self.fr_dbs[&bus]));
-    }
-
-    fn set_eth_model(&mut self, bus: u8, comm: Arc<crate::model::Comm>) {
-        if !self.eth_dbs.contains_key(&bus) {
-            return;
-        }
-        let id = match self.eth_cluster_ids.get(&bus) {
-            Some(id) => *id,
-            None => {
-                let id = self.cluster_ids.allocate();
-                self.eth_cluster_ids.insert(bus, id);
-                id
-            }
-        };
-        let mut comm = (*comm).clone();
-        comm.rebind_cluster(id);
-        let (plans, plan_issues) = crate::model::PlanCache::build(&comm, 1);
-        self.report_model_issues(&format!("ETH{bus}"), &comm.issues);
-        self.report_model_issues(&format!("ETH{bus}"), &plan_issues);
-        self.eth_models.insert(bus, Arc::new(comm));
-        self.eth_model_plans.insert(bus, Arc::new(plans));
-        self.eth_model_dbs
-            .insert(bus, Arc::clone(&self.eth_dbs[&bus]));
     }
 
     fn rebuild_fr_models(&mut self) {
