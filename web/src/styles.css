@@ -3337,8 +3337,8 @@ button.mini.on {
 .buses-modal {
   display: flex;
   flex-direction: column;
-  width: min(780px, 100%);
-  max-height: min(820px, 92vh);
+  width: min(1020px, 96vw);
+  max-height: min(860px, 94vh);
   overflow: hidden;
   background: #10141a;
   border: 1px solid #2b3542;
@@ -3356,18 +3356,45 @@ button.mini.on {
 
 .buses-clusters table {
   width: 100%;
+  table-layout: fixed;
   border-collapse: collapse;
   font-size: 11.5px;
 }
 
 .buses-clusters th,
 .buses-clusters td {
-  padding: 3px 8px;
+  padding: 4px 8px;
   text-align: left;
+  vertical-align: middle;
   border-bottom: 1px solid var(--line);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.buses-clusters th:nth-child(1),
+.buses-clusters td:nth-child(1) {
+  width: 74px;
+}
+
+.buses-clusters th:nth-child(2),
+.buses-clusters td:nth-child(2) {
+  width: 180px;
+}
+
+.buses-clusters th:nth-child(3),
+.buses-clusters td:nth-child(3) {
+  width: 68px;
+}
+
+.buses-clusters th:nth-child(4),
+.buses-clusters td:nth-child(4) {
+  width: 130px;
+}
+
+.buses-clusters th:nth-child(6),
+.buses-clusters td:nth-child(6) {
+  width: 52px;
 }
 
 .buses-clusters th {
@@ -3654,9 +3681,15 @@ button.mini.on {
   font-size: 10px;
 }
 
+.proto-row > .bus-remove {
+  margin-left: auto;
+}
+
 .proto-row .bus-descriptions {
-  flex: 1 1 auto;
-  padding: 0;
+  flex: 1 0 100%;
+  margin-top: 2px;
+  padding: 6px 0 0;
+  border-top: 1px solid var(--line-soft);
   border-bottom: none;
 }
 
@@ -3686,6 +3719,7 @@ button.mini.on {
 
 .proto-row {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 8px;
   padding: 3px 0;

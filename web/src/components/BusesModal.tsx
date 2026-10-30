@@ -63,7 +63,10 @@ function channelLabel(channel: HwChannel): string {
 
 function fileName(path: string): string {
   const cut = Math.max(path.lastIndexOf("\\"), path.lastIndexOf("/"));
-  return cut >= 0 ? path.slice(cut + 1) : path;
+  const base = cut >= 0 ? path.slice(cut + 1) : path;
+  // Uploads land in the per-user folder as <nanosecond-stamp>_<name>; the
+  // stamp is storage detail, not part of the file the user picked.
+  return base.replace(/^\d{10,}_/, "");
 }
 
 function slotLabel(bus: Bus): string {
@@ -1019,6 +1022,13 @@ export function BusesModal({
                   ))}
                 </select>
               )}
+              <button
+                type="button"
+                class="bus-remove"
+                onClick={() => onRemoveFr(selectedFrBus.index)}
+              >
+                Remove bus
+              </button>
               <DescriptionList
                 bus={selectedFrBus.index}
                 kind="flexray"
@@ -1031,13 +1041,6 @@ export function BusesModal({
                 accept=".xml,.arxml,.fibex"
                 allowCluster
               />
-              <button
-                type="button"
-                class="bus-remove"
-                onClick={() => onRemoveFr(selectedFrBus.index)}
-              >
-                Remove bus
-              </button>
             </div>
           </section>
           )}
@@ -1055,6 +1058,13 @@ export function BusesModal({
                 {selectedEthBus.ethernet?.clusters ?? 0} clusters ·{" "}
                 {selectedEthBus.frames} frames
               </span>
+              <button
+                type="button"
+                class="bus-remove"
+                onClick={() => onRemoveEth(selectedEthBus.index)}
+              >
+                Remove bus
+              </button>
               <DescriptionList
                 bus={selectedEthBus.index}
                 kind="ethernet"
@@ -1067,13 +1077,6 @@ export function BusesModal({
                 accept=".arxml"
                 allowCluster
               />
-              <button
-                type="button"
-                class="bus-remove"
-                onClick={() => onRemoveEth(selectedEthBus.index)}
-              >
-                Remove bus
-              </button>
             </div>
           </section>
           )}
@@ -1176,7 +1179,7 @@ export function BusesModal({
 
         <p class="hint picker-hint">
           Add/remove, names, rates and database paths are host-side edits. Removing a
-          cluster stops measurement and may remap the remaining CAN channels.
+          bus stops measurement and may remap the remaining CAN channels.
         </p>
       </div>
     </div>
