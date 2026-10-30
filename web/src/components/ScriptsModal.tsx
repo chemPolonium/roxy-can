@@ -2775,7 +2775,7 @@ export function ScriptsModal({
                 }
               >
                 <option value="">unbound script</option>
-                {(buses[newChannel]?.nodes ?? []).map((node) => (
+                {(buses[newChannel]?.can?.nodes ?? []).map((node) => (
                   <option key={node.name} value={`${newChannel}:${node.name}`}>
                     {node.name}
                   </option>

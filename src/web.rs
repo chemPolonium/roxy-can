@@ -4583,12 +4583,9 @@ struct WebState {
     /// streams under `derived:<id>` keys.
     derived: Vec<WebDerivedDef>,
     replay_map: WebReplayMap,
+    /// One row per CAN/FlexRay/Ethernet bus; `can`/`flexray`/`ethernet`
+    /// carries the kind-specific detail.
     buses: Vec<WebBus>,
-    /// Unified cluster list: one row per CAN/FR/ETH cluster, with its global
-    /// id and kind.
-    clusters: Vec<WebCluster>,
-    fr_buses: Vec<WebFrBus>,
-    eth_buses: Vec<WebEthBus>,
     /// The last scanned ARXML's cluster list, shown as the binding chooser.
     #[serde(skip_serializing_if = "Option::is_none")]
     arxml_scan: Option<WebArxmlScan>,
@@ -4630,11 +4627,7 @@ struct WebSeriesPoint {
 #[derive(Clone, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct WebFrBus {
-    bus: u8,
-    name: String,
     cluster: String,
-    descriptions: Vec<WebDescription>,
-    frames: usize,
     attached: bool,
     channel: i32,
 }
@@ -4642,22 +4635,7 @@ struct WebFrBus {
 #[derive(Clone, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct WebEthBus {
-    bus: u8,
-    name: String,
-    descriptions: Vec<WebDescription>,
     clusters: usize,
-    frames: usize,
-}
-
-#[derive(Clone, Default, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct WebCluster {
-    id: u32,
-    kind: String,
-    name: String,
-    bus: u8,
-    source: String,
-    frames: usize,
 }
 
 #[derive(Clone, Default, Serialize)]
@@ -4772,10 +4750,25 @@ fn replay_rows(
 #[serde(rename_all = "camelCase")]
 struct WebBus {
     index: u8,
+    id: u32,
+    kind: String,
     name: String,
+    frames: usize,
+    source: String,
     /// Every description bound to the bus, DBC and ARXML alike, in binding
     /// order.
     descriptions: Vec<WebDescription>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    can: Option<WebCanBus>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    flexray: Option<WebFrBus>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    ethernet: Option<WebEthBus>,
+}
+
+#[derive(Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WebCanBus {
     bitrate_kbps: u32,
     fd_data_kbps: u32,
     nodes: Vec<WebNode>,
@@ -5233,14 +5226,12 @@ pub(crate) fn state_json_size(app: &App) -> usize {
 
 fn build_state(app: &App, series: &VecDeque<WebSeriesPoint>, fps: f64) -> WebState {
     let snap = &app.snap;
-    let buses: Vec<WebBus> = snap
+    let mut buses: Vec<WebBus> = snap
         .channels
         .iter()
         .enumerate()
-        .map(|(index, ch)| WebBus {
-            index: index as u8,
-            name: ch.name.clone(),
-            descriptions: ch
+        .map(|(index, ch)| {
+            let descriptions: Vec<WebDescription> = ch
                 .dbc_paths
                 .iter()
                 .filter(|path| !path.trim().is_empty())
@@ -5256,44 +5247,159 @@ fn build_state(app: &App, series: &VecDeque<WebSeriesPoint>, fps: f64) -> WebSta
                         cluster: cluster.clone(),
                     },
                 ))
-                .collect(),
-            bitrate_kbps: ch.bitrate_kbps,
-            fd_data_kbps: ch.fd_data_kbps,
-            nodes: ch
-                .dbc
-                .as_ref()
-                .map(|db| {
-                    db.nodes
-                        .iter()
-                        .map(|node| WebNode {
-                            name: node.clone(),
-                            simulated: ch.role_of(node) == crate::app::NodeRole::Simulated,
-                            entries: snap
-                                .tx
+                .collect();
+            let frames = {
+                let model = snap
+                    .model_frames
+                    .keys()
+                    .filter(|(ch, _, _)| usize::from(*ch) == index)
+                    .count();
+                if model > 0 {
+                    model
+                } else {
+                    ch.dbc.as_ref().map_or(0, |db| db.order.len())
+                }
+            };
+            WebBus {
+                index: index as u8,
+                id: snap.cluster_ids.can.get(index).copied().unwrap_or(0),
+                kind: "can".to_string(),
+                name: ch.name.clone(),
+                frames,
+                source: descriptions
+                    .first()
+                    .map(|description| description.path.clone())
+                    .unwrap_or_default(),
+                descriptions,
+                can: Some(WebCanBus {
+                    bitrate_kbps: ch.bitrate_kbps,
+                    fd_data_kbps: ch.fd_data_kbps,
+                    nodes: ch
+                        .dbc
+                        .as_ref()
+                        .map(|db| {
+                            db.nodes
                                 .iter()
-                                .filter(|entry| entry.channel == index as u8 && entry.node == *node)
-                                .count(),
+                                .map(|node| WebNode {
+                                    name: node.clone(),
+                                    simulated: ch.role_of(node) == crate::app::NodeRole::Simulated,
+                                    entries: snap
+                                        .tx
+                                        .iter()
+                                        .filter(|entry| {
+                                            entry.channel == index as u8 && entry.node == *node
+                                        })
+                                        .count(),
+                                })
+                                .collect()
                         })
-                        .collect()
-                })
-                .unwrap_or_default(),
-            attached: snap
-                .hw
-                .iter()
-                .find(|hw| hw.bus == index as u8)
-                .map(|hw| WebHwAttachment {
-                    driver: hw.driver.word().to_string(),
-                    adapter: hw.adapter,
-                    kbps: hw.kbps,
-                    fd: hw.fd,
-                    can_tx: hw.can_tx,
-                    tx_fail: hw.tx_fail.as_ref().map(|(reason, count)| WebTxFail {
-                        reason: reason.clone(),
-                        count: *count,
+                        .unwrap_or_default(),
+                    attached: snap.hw.iter().find(|hw| hw.bus == index as u8).map(|hw| {
+                        WebHwAttachment {
+                            driver: hw.driver.word().to_string(),
+                            adapter: hw.adapter,
+                            kbps: hw.kbps,
+                            fd: hw.fd,
+                            can_tx: hw.can_tx,
+                            tx_fail: hw.tx_fail.as_ref().map(|(reason, count)| WebTxFail {
+                                reason: reason.clone(),
+                                count: *count,
+                            }),
+                        }
                     }),
                 }),
+                flexray: None,
+                ethernet: None,
+            }
         })
         .collect();
+
+    for (bus, cfg) in &app.fr_buses {
+        let watch = app.snap.fr_watches.iter().find(|watch| watch.bus == *bus);
+        let model = app
+            .fr_models
+            .get(bus)
+            .and_then(|comm| comm.clusters.values().next());
+        let descriptions: Vec<WebDescription> = app
+            .fr_sources
+            .get(bus)
+            .into_iter()
+            .flatten()
+            .map(description_view)
+            .collect();
+        let frames = model
+            .map(|cluster| {
+                app.fr_models
+                    .get(bus)
+                    .map(|comm| comm.frames_in_cluster(cluster.id).count())
+                    .unwrap_or(0)
+            })
+            .filter(|count| *count > 0)
+            .unwrap_or(cfg.frames.len());
+        buses.push(WebBus {
+            index: *bus,
+            id: snap.cluster_ids.fr.get(bus).copied().unwrap_or(0),
+            kind: "flexray".to_string(),
+            name: app.fr_bus_name(*bus),
+            frames,
+            source: descriptions
+                .first()
+                .map(|description| description.path.clone())
+                .unwrap_or_default(),
+            descriptions,
+            can: None,
+            flexray: Some(WebFrBus {
+                cluster: app.fr_cluster_label(*bus),
+                attached: watch.is_some(),
+                channel: watch.map(|watch| watch.channel_index).unwrap_or(-1),
+            }),
+            ethernet: None,
+        });
+    }
+
+    for (bus, cfg) in &app.eth_buses {
+        let descriptions: Vec<WebDescription> = app
+            .eth_sources
+            .get(bus)
+            .into_iter()
+            .flatten()
+            .map(description_view)
+            .collect();
+        let clusters = app
+            .eth_models
+            .get(bus)
+            .map(|comm| comm.clusters.len())
+            .unwrap_or(cfg.clusters.len());
+        let frames = app
+            .eth_models
+            .get(bus)
+            .map(|comm| {
+                comm.frames
+                    .values()
+                    .filter(|frame| {
+                        matches!(frame.address, crate::model::FrameAddress::Ethernet { .. })
+                    })
+                    .count()
+            })
+            .filter(|count| *count > 0)
+            .unwrap_or(cfg.frames.len());
+        buses.push(WebBus {
+            index: *bus,
+            id: snap.cluster_ids.eth.get(bus).copied().unwrap_or(0),
+            kind: "ethernet".to_string(),
+            name: app.eth_bus_label(*bus),
+            frames,
+            source: descriptions
+                .first()
+                .map(|description| description.path.clone())
+                .unwrap_or_default(),
+            descriptions,
+            can: None,
+            flexray: None,
+            ethernet: Some(WebEthBus { clusters }),
+        });
+    }
+    buses.sort_by_key(|bus| bus.id);
 
     let mut tx: Vec<WebTx> = snap
         .tx
@@ -5567,150 +5673,6 @@ fn build_state(app: &App, series: &VecDeque<WebSeriesPoint>, fps: f64) -> WebSta
         })
         .collect();
 
-    let fr_buses: Vec<WebFrBus> = app
-        .fr_buses
-        .iter()
-        .map(|(bus, cfg)| {
-            let watch = app.snap.fr_watches.iter().find(|watch| watch.bus == *bus);
-            let model = app
-                .fr_models
-                .get(bus)
-                .and_then(|comm| comm.clusters.values().next());
-            WebFrBus {
-                bus: *bus,
-                name: app.fr_bus_name(*bus),
-                cluster: app.fr_cluster_label(*bus),
-                descriptions: app
-                    .fr_sources
-                    .get(bus)
-                    .into_iter()
-                    .flatten()
-                    .map(description_view)
-                    .collect(),
-                frames: model
-                    .map(|cluster| {
-                        app.fr_models
-                            .get(bus)
-                            .map(|comm| comm.frames_in_cluster(cluster.id).count())
-                            .unwrap_or(0)
-                    })
-                    .filter(|count| *count > 0)
-                    .unwrap_or(cfg.frames.len()),
-                attached: watch.is_some(),
-                channel: watch.map(|watch| watch.channel_index).unwrap_or(-1),
-            }
-        })
-        .collect();
-    let eth_buses: Vec<WebEthBus> = app
-        .eth_buses
-        .iter()
-        .map(|(bus, cfg)| WebEthBus {
-            bus: *bus,
-            name: app.eth_bus_label(*bus),
-            descriptions: app
-                .eth_sources
-                .get(bus)
-                .into_iter()
-                .flatten()
-                .map(description_view)
-                .collect(),
-            clusters: app
-                .eth_models
-                .get(bus)
-                .map(|comm| comm.clusters.len())
-                .unwrap_or(cfg.clusters.len()),
-            frames: app
-                .eth_models
-                .get(bus)
-                .map(|comm| {
-                    comm.frames
-                        .values()
-                        .filter(|frame| {
-                            matches!(frame.address, crate::model::FrameAddress::Ethernet { .. })
-                        })
-                        .count()
-                })
-                .filter(|count| *count > 0)
-                .unwrap_or(cfg.frames.len()),
-        })
-        .collect();
-    let mut clusters: Vec<WebCluster> = Vec::new();
-    for (index, bus) in buses.iter().enumerate() {
-        clusters.push(WebCluster {
-            id: snap.cluster_ids.can.get(index).copied().unwrap_or(0),
-            kind: "can".to_string(),
-            name: bus.name.clone(),
-            bus: bus.index,
-            source: bus
-                .descriptions
-                .first()
-                .map(|description| description.path.clone())
-                .unwrap_or_default(),
-            frames: {
-                let model = snap
-                    .model_frames
-                    .keys()
-                    .filter(|(ch, _, _)| usize::from(*ch) == index)
-                    .count();
-                if model > 0 {
-                    model
-                } else {
-                    snap.channels
-                        .get(index)
-                        .and_then(|channel| channel.dbc.as_ref())
-                        .map_or(0, |db| db.order.len())
-                }
-            },
-        });
-    }
-    for bus in &fr_buses {
-        clusters.push(WebCluster {
-            id: snap.cluster_ids.fr.get(&bus.bus).copied().unwrap_or(0),
-            kind: "flexray".to_string(),
-            name: bus.name.clone(),
-            bus: bus.bus,
-            source: bus
-                .descriptions
-                .first()
-                .map(|description| description.path.clone())
-                .unwrap_or_default(),
-            frames: {
-                let model = snap
-                    .fr_model_frames
-                    .keys()
-                    .filter(|(b, _)| *b == bus.bus)
-                    .count();
-                if model > 0 { model } else { bus.frames }
-            },
-        });
-    }
-    for bus in &eth_buses {
-        clusters.push(WebCluster {
-            id: snap.cluster_ids.eth.get(&bus.bus).copied().unwrap_or(0),
-            kind: "ethernet".to_string(),
-            name: bus.name.clone(),
-            bus: bus.bus,
-            source: bus
-                .descriptions
-                .first()
-                .map(|description| description.path.clone())
-                .unwrap_or_default(),
-            frames: app
-                .eth_models
-                .get(&bus.bus)
-                .map(|comm| {
-                    comm.frames
-                        .values()
-                        .filter(|frame| {
-                            matches!(frame.address, crate::model::FrameAddress::Ethernet { .. })
-                        })
-                        .count()
-                })
-                .filter(|count| *count > 0)
-                .unwrap_or(bus.frames),
-        });
-    }
-    clusters.sort_by_key(|cluster| cluster.id);
     let replay_map = {
         use crate::replay_map::LogBusKind;
         let map = &snap.replay_map;
@@ -6305,9 +6267,6 @@ fn build_state(app: &App, series: &VecDeque<WebSeriesPoint>, fps: f64) -> WebSta
             .collect(),
         replay_map,
         buses,
-        clusters,
-        fr_buses,
-        eth_buses,
         arxml_scan: app.arxml_scan.as_ref().map(|scan| WebArxmlScan {
             path: scan.path.clone(),
             clusters: scan
@@ -6813,6 +6772,9 @@ mod tests {
             .find(|bus| bus.index == 0)
             .expect("first bus");
         let row = bus
+            .can
+            .as_ref()
+            .expect("CAN detail")
             .nodes
             .iter()
             .find(|row| row.name == node)
@@ -6824,7 +6786,14 @@ mod tests {
         app.settle();
         let state = build_state(&app, &VecDeque::new(), 0.0);
         let bus = state.buses.iter().find(|bus| bus.index == 0).unwrap();
-        let row = bus.nodes.iter().find(|row| row.name == node).unwrap();
+        let row = bus
+            .can
+            .as_ref()
+            .expect("CAN detail")
+            .nodes
+            .iter()
+            .find(|row| row.name == node)
+            .unwrap();
         assert!(!row.simulated);
     }
 
@@ -7142,16 +7111,16 @@ mod tests {
             .expect("ARXML fixture loads");
         let state = build_state(&app, &VecDeque::new(), 0.0);
         let fr_bus = state
-            .fr_buses
+            .buses
             .iter()
-            .find(|bus| bus.bus == fr)
+            .find(|bus| bus.kind == "flexray" && bus.index == fr)
             .expect("FlexRay bus listed");
         assert!(!fr_bus.name.is_empty());
         assert!(fr_bus.frames > 0);
         let eth_bus = state
-            .eth_buses
+            .buses
             .iter()
-            .find(|bus| bus.bus == eth)
+            .find(|bus| bus.kind == "ethernet" && bus.index == eth)
             .expect("Ethernet bus listed");
         assert!(!eth_bus.name.is_empty());
         assert!(
@@ -7160,26 +7129,9 @@ mod tests {
                 .first()
                 .is_some_and(|description| description.path.contains("PowerTrain"))
         );
-        assert!(
-            state
-                .clusters
-                .iter()
-                .any(|cluster| cluster.kind == "flexray" && cluster.bus == fr && cluster.id > 0)
-        );
-        assert!(
-            state
-                .clusters
-                .iter()
-                .any(|cluster| cluster.kind == "ethernet" && cluster.bus == eth && cluster.id > 0)
-        );
-        assert!(
-            state
-                .clusters
-                .iter()
-                .filter(|cluster| cluster.kind == "can")
-                .count()
-                > 0
-        );
+        assert!(fr_bus.id > 0);
+        assert!(eth_bus.id > 0);
+        assert!(state.buses.iter().filter(|bus| bus.kind == "can").count() > 0);
     }
 
     /// Replay rows from the FlexRay ring join the web trace alongside CAN,
@@ -7382,9 +7334,14 @@ mod tests {
         app.hw.attach_fr_mock(0, 5);
         app.refresh_snapshot();
         let state = build_state(&app, &std::collections::VecDeque::new(), 60.0);
-        let bus = state.fr_buses.first().expect("FR bus row");
-        assert!(bus.attached);
-        assert_eq!(bus.channel, 5);
+        let bus = state
+            .buses
+            .iter()
+            .find(|bus| bus.kind == "flexray")
+            .expect("FR bus row");
+        let detail = bus.flexray.as_ref().expect("FlexRay detail");
+        assert!(detail.attached);
+        assert_eq!(detail.channel, 5);
     }
 
     #[test]
@@ -7641,7 +7598,12 @@ mod tests {
         assert!(state.buses[0].descriptions.iter().any(|description| {
             description.kind == "dbc" && description.path.contains("sample.dbc")
         }));
-        assert!(state.buses.iter().all(|bus| bus.attached.is_none()));
+        assert!(
+            state
+                .buses
+                .iter()
+                .all(|bus| bus.can.as_ref().is_none_or(|can| can.attached.is_none()))
+        );
         assert!(parse_driver("Vector").is_some());
         assert!(parse_driver("Kvaser").is_some());
         assert!(parse_driver("other").is_none());

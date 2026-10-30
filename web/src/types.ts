@@ -38,9 +38,6 @@ export interface State {
   derived: DerivedDef[];
   replayMap: ReplayMap;
   buses: Bus[];
-  clusters: Cluster[];
-  frBuses: FrBus[];
-  ethBuses: EthBus[];
   arxmlScan?: ArxmlScan;
   realBus: boolean;
   hwRefresh: number;
@@ -143,22 +140,21 @@ export interface ArxmlScan {
   clusters: { kind: "can" | "flexray" | "ethernet" | string; name: string }[];
 }
 
-export interface FrBus {
-  bus: number;
-  name: string;
+export interface CanBusDetail {
+  bitrateKbps: number;
+  fdDataKbps: number;
+  nodes: BusNode[];
+  attached: HwAttachment | null;
+}
+
+export interface FlexRayBusDetail {
   cluster: string;
-  descriptions: BusDescription[];
-  frames: number;
   attached: boolean;
   channel: number;
 }
 
-export interface EthBus {
-  bus: number;
-  name: string;
-  descriptions: BusDescription[];
+export interface EthernetBusDetail {
   clusters: number;
-  frames: number;
 }
 
 export interface HwAttachment {
@@ -178,21 +174,15 @@ export interface BusNode {
 
 export interface Bus {
   index: number;
-  name: string;
-  descriptions: BusDescription[];
-  bitrateKbps: number;
-  fdDataKbps: number;
-  nodes: BusNode[];
-  attached: HwAttachment | null;
-}
-
-export interface Cluster {
   id: number;
   kind: "can" | "flexray" | "ethernet";
   name: string;
-  bus: number;
-  source: string;
   frames: number;
+  source: string;
+  descriptions: BusDescription[];
+  can?: CanBusDetail;
+  flexray?: FlexRayBusDetail;
+  ethernet?: EthernetBusDetail;
 }
 
 export interface HwChannel {

@@ -3,7 +3,6 @@ import type {
   Bus,
   Catalog,
   CatalogSignal,
-  FrBus,
   FrTxEntry,
   ReplayBlock,
   TxEntry,
@@ -17,7 +16,7 @@ interface Props {
   frTx: FrTxEntry[];
   blocks: ReplayBlock[];
   buses: Bus[];
-  frBuses: FrBus[];
+  frBuses: { index: number; name: string; cluster: string }[];
   catalog: Catalog | null;
   catalogLoading: boolean;
   catalogError: string;
@@ -708,7 +707,7 @@ function FrBusGroup({
   onAdd,
   onRemove,
 }: {
-  bus: FrBus;
+  bus: { index: number; name: string; cluster: string };
   entries: FrTxEntry[];
   onToggle: (entry: FrTxEntry, on: boolean) => void;
   onCycle: (entry: FrTxEntry, cycleUs: number) => void;
@@ -737,7 +736,7 @@ function FrBusGroup({
           type="button"
           disabled={!Number.isInteger(parsed) || parsed <= 0}
           onClick={() => {
-            onAdd(bus.bus, parsed);
+            onAdd(bus.index, parsed);
             setSlot("");
           }}
         >
@@ -893,9 +892,9 @@ export function GeneratorModal({
           ))}
           {frBuses.map((bus) => (
             <FrBusGroup
-              key={`fr${bus.bus}`}
+              key={`fr${bus.index}`}
               bus={bus}
-              entries={frTx.filter((entry) => entry.bus === bus.bus)}
+              entries={frTx.filter((entry) => entry.bus === bus.index)}
               onToggle={onFrToggle}
               onCycle={onFrCycle}
               onHex={onFrHex}

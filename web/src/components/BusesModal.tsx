@@ -3,9 +3,6 @@ import type {
   ArxmlScan,
   Bus,
   BusDescription,
-  Cluster,
-  EthBus,
-  FrBus,
   Hardware,
   HwChannel,
   ReplayMap,
@@ -14,9 +11,6 @@ import { FilePick } from "./FilePick";
 
 interface Props {
   buses: Bus[];
-  clusters: Cluster[];
-  frBuses: FrBus[];
-  ethBuses: EthBus[];
   replayMap: ReplayMap;
   realBus: boolean;
   hardware: Hardware | null;
@@ -72,16 +66,16 @@ function fileName(path: string): string {
   return cut >= 0 ? path.slice(cut + 1) : path;
 }
 
-function slotLabel(cluster: Cluster): string {
-  return cluster.kind === "flexray"
-    ? `FR${cluster.bus}`
-    : cluster.kind === "ethernet"
-      ? `ETH${cluster.bus}`
-      : `CAN${cluster.bus + 1}`;
+function slotLabel(bus: Bus): string {
+  return bus.kind === "flexray"
+    ? `FR${bus.index}`
+    : bus.kind === "ethernet"
+      ? `ETH${bus.index}`
+      : `CAN${bus.index + 1}`;
 }
 
-function clusterKey(cluster: Cluster): string {
-  return `${cluster.kind}:${cluster.bus}`;
+function busKey(bus: Bus): string {
+  return `${bus.kind}:${bus.index}`;
 }
 
 function rateOptions(standard: number[], current: number): number[] {
@@ -247,11 +241,14 @@ function BusCard({
   onSetNodeRole: (bus: number, node: string, simulated: boolean) => void;
   onError: (message: string) => void;
 }) {
+  const can = bus.can;
+  const nodes = can?.nodes ?? [];
+  const attached = can?.attached ?? null;
   const [name, setName] = useState(bus.name);
   const nameRef = useRef(bus.name);
-  const [arb, setArb] = useState(bus.bitrateKbps);
-  const [fd, setFd] = useState(bus.fdDataKbps);
-  const ratesRef = useRef({ arb: bus.bitrateKbps, fd: bus.fdDataKbps });
+  const [arb, setArb] = useState(can?.bitrateKbps ?? 0);
+  const [fd, setFd] = useState(can?.fdDataKbps ?? 0);
+  const ratesRef = useRef({ arb: can?.bitrateKbps ?? 0, fd: can?.fdDataKbps ?? 0 });
   const [channelChoice, setChannelChoice] = useState("");
   const selected =
     channels.find((channel) => channelKey(channel) === channelChoice) ?? null;
@@ -261,10 +258,10 @@ function BusCard({
     nameRef.current = bus.name;
   }, [bus.name]);
   useEffect(() => {
-    setArb(bus.bitrateKbps);
-    setFd(bus.fdDataKbps);
-    ratesRef.current = { arb: bus.bitrateKbps, fd: bus.fdDataKbps };
-  }, [bus.bitrateKbps, bus.fdDataKbps]);
+    setArb(can?.bitrateKbps ?? 0);
+    setFd(can?.fdDataKbps ?? 0);
+    ratesRef.current = { arb: can?.bitrateKbps ?? 0, fd: can?.fdDataKbps ?? 0 };
+  }, [can?.bitrateKbps ?? 0, can?.fdDataKbps ?? 0]);
 
   const commitName = () => {
     const value = nameRef.current.trim();
@@ -284,13 +281,13 @@ function BusCard({
     setFd(next.fd);
     onSetRates(bus.index, next.arb, next.fd);
   };
-  const simulated = bus.nodes.filter((node) => node.simulated).length;
-  const role = bus.attached
+  const simulated = nodes.filter((node) => node.simulated).length;
+  const role = attached
     ? realBus
-      ? `Real · ${bus.attached.driver} ch${bus.attached.adapter}`
+      ? `Real · ${attached.driver} ch${attached.adapter}`
       : "Attached · sim mode"
-    : bus.nodes.length > 0
-      ? `${simulated}/${bus.nodes.length} simulated`
+    : nodes.length > 0
+      ? `${simulated}/${nodes.length} simulated`
       : "No hardware";
 
   return (
@@ -317,14 +314,14 @@ function BusCard({
         />
         <span
           class={`bus-role ${
-            bus.attached ? (realBus ? "real" : "attached") : "sim"
+            attached ? (realBus ? "real" : "attached") : "sim"
           }`}
           title={
-            bus.attached
+            attached
               ? realBus
                 ? "Attached adapter is used on the wire"
                 : "Adapter configured; Real bus is off"
-              : bus.nodes.length > 0
+              : nodes.length > 0
                 ? "These nodes generate traffic in simulation"
                 : "No adapter attached and no DBC nodes"
           }
@@ -400,11 +397,11 @@ function BusCard({
         allowCluster
       />
 
-      {bus.nodes.length > 0 && (
+      {nodes.length > 0 && (
         <div class="bus-nodes">
           <span class="bus-nodes-label">Nodes</span>
           <div class="bus-node-list">
-            {bus.nodes.map((node) => (
+            {nodes.map((node) => (
               <label
                 class={`node-chip ${node.simulated ? "on" : ""}`}
                 key={node.name}
@@ -433,21 +430,21 @@ function BusCard({
         </div>
       )}
 
-      {bus.attached ? (
+      {attached ? (
         <div class="bus-attached">
           <span class="attach-dot" />
           <strong>
-            {bus.attached.driver} ch {bus.attached.adapter}
+            {attached.driver} ch {attached.adapter}
           </strong>
           <span>
-            {bus.attached.kbps} kbit/s
-            {bus.attached.fd ? " · FD" : ""}
-            {bus.attached.canTx ? " · TX" : " · RX only"}
+            {attached.kbps} kbit/s
+            {attached.fd ? " · FD" : ""}
+            {attached.canTx ? " · TX" : " · RX only"}
           </span>
-          {bus.attached.txFail && (
+          {attached.txFail && (
             <span class="attach-warn">
-              TX refused {bus.attached.txFail.count}×:{" "}
-              {bus.attached.txFail.reason}
+              TX refused {attached.txFail.count}×:{" "}
+              {attached.txFail.reason}
             </span>
           )}
           <span class="spacer" />
@@ -464,7 +461,7 @@ function BusCard({
             title={
               channels.length === 0
                 ? "Plug in the adapter, then use Refresh hardware"
-                : "Pick the hardware channel for this cluster"
+                : "Pick the hardware channel for this bus"
             }
             onChange={(event) =>
               setChannelChoice((event.target as HTMLSelectElement).value)
@@ -516,9 +513,6 @@ function BusCard({
 
 export function BusesModal({
   buses,
-  clusters,
-  frBuses,
-  ethBuses,
   replayMap,
   realBus,
   hardware,
@@ -552,45 +546,34 @@ export function BusesModal({
   const [rowMenu, setRowMenu] = useState<string | null>(null);
   const [menuPos, setMenuPos] = useState({ top: 0, left: 0 });
   const rowMenuRef = useRef<HTMLDivElement>(null);
-  const selectedCluster = clusters.find((cluster) => clusterKey(cluster) === selected) ?? null;
-  const selectedCanBus =
-    selectedCluster?.kind === "can"
-      ? (buses.find((bus) => bus.index === selectedCluster.bus) ?? null)
-      : null;
-  const selectedFrBus =
-    selectedCluster?.kind === "flexray"
-      ? (frBuses.find((bus) => bus.bus === selectedCluster.bus) ?? null)
-      : null;
-  const selectedEthBus =
-    selectedCluster?.kind === "ethernet"
-      ? (ethBuses.find((bus) => bus.bus === selectedCluster.bus) ?? null)
-      : null;
+  const selectedBus = buses.find((bus) => busKey(bus) === selected) ?? null;
+  const selectedCanBus = selectedBus?.kind === "can" ? selectedBus : null;
+  const selectedFrBus = selectedBus?.kind === "flexray" ? selectedBus : null;
+  const selectedEthBus = selectedBus?.kind === "ethernet" ? selectedBus : null;
 
-  const wireFor = (cluster: Cluster) => {
-    if (cluster.kind === "can") {
-      const bus = buses.find((candidate) => candidate.index === cluster.bus);
-      if (!bus?.attached) {
+  const wireFor = (bus: Bus) => {
+    if (bus.kind === "can") {
+      const attachment = bus.can?.attached;
+      if (!attachment) {
         return { text: "—", cls: "none", title: "No adapter attached" };
       }
-      const attachment = bus.attached;
-      const live = realBus;
       return {
         text: `${attachment.driver} ch${attachment.adapter} · ${
           attachment.canTx ? "TX" : "RX"
-        }${live ? "" : " · off"}`,
-        cls: live ? "live" : "off",
-        title: live
+        }${realBus ? "" : " · off"}`,
+        cls: realBus ? "live" : "off",
+        title: realBus
           ? "Attached adapter is on the wire"
           : "Adapter configured; Real bus is off",
       };
     }
-    if (cluster.kind === "flexray") {
-      const bus = frBuses.find((candidate) => candidate.bus === cluster.bus);
-      if (!bus?.attached) {
+    if (bus.kind === "flexray") {
+      const detail = bus.flexray;
+      if (!detail?.attached) {
         return { text: "—", cls: "none", title: "No FlexRay port attached" };
       }
       return {
-        text: `V ch${bus.channel} · RX${realBus ? "" : " · off"}`,
+        text: `V ch${detail.channel} · RX${realBus ? "" : " · off"}`,
         cls: realBus ? "live" : "off",
         title: realBus
           ? "Receive-only FlexRay watch"
@@ -605,24 +588,21 @@ export function BusesModal({
   };
 
   useEffect(() => {
-    if (clusters.length === 0) {
+    if (buses.length === 0) {
       setSelected(null);
       return;
     }
-    if (!clusters.some((cluster) => clusterKey(cluster) === selected)) {
-      setSelected(clusterKey(clusters[0]));
+    if (!buses.some((bus) => busKey(bus) === selected)) {
+      setSelected(busKey(buses[0]));
     }
-  }, [clusters, selected]);
+  }, [buses, selected]);
 
-  const selectCluster = (cluster: Cluster) => {
-    const key = clusterKey(cluster);
+  const selectBus = (bus: Bus) => {
+    const key = busKey(bus);
     setSelected(key);
     setRowMenu(null);
     setTimeout(() => {
-      const id =
-        cluster.kind === "can"
-          ? `bus-card-${cluster.bus}`
-          : `proto-${key}`;
+      const id = bus.kind === "can" ? `bus-card-${bus.index}` : `proto-${key}`;
       document.getElementById(id)?.scrollIntoView({ block: "nearest" });
     }, 0);
   };
@@ -678,9 +658,9 @@ export function BusesModal({
 
   const channels = hardware?.channels ?? [];
   const frChannels = hardware?.frChannels ?? [];
-  const attachedFr = frBuses.filter((bus) => bus.attached).length;
-  const attachedCount =
-    buses.filter((bus) => bus.attached).length + attachedFr;
+  const attachedCount = buses.filter(
+    (bus) => bus.can?.attached || bus.flexray?.attached,
+  ).length;
 
   return (
     <div class="modal-backdrop" onMouseDown={onClose}>
@@ -695,7 +675,7 @@ export function BusesModal({
           <h2>Buses</h2>
           <div class="picker-head-right">
             <span>
-              {clusters.length} cluster{clusters.length === 1 ? "" : "s"} ·{" "}
+              {buses.length} bus{buses.length === 1 ? "" : "s"} ·{" "}
               {attachedCount} attached
             </span>
             <div class="add-cluster" ref={addRef}>
@@ -705,7 +685,7 @@ export function BusesModal({
                 aria-expanded={addOpen}
                 onClick={() => setAddOpen((open) => !open)}
               >
-                Add cluster
+                Add bus
               </button>
               {addOpen && (
                 <div class="add-cluster-menu" role="menu" aria-label="Add bus">
@@ -738,13 +718,13 @@ export function BusesModal({
           </div>
         </header>
 
-        {clusters.length > 0 && (
-          <section class="buses-clusters" aria-label="Clusters">
+        {buses.length > 0 && (
+          <section class="buses-clusters" aria-label="Buses">
             <table>
               <thead>
                 <tr>
                   <th>Kind</th>
-                  <th>Cluster</th>
+                  <th>Bus</th>
                   <th>Frames</th>
                   <th>Wire</th>
                   <th>Source</th>
@@ -752,8 +732,8 @@ export function BusesModal({
                 </tr>
               </thead>
               <tbody>
-                {clusters.map((cluster) => {
-                  const key = clusterKey(cluster);
+                {buses.map((bus) => {
+                  const key = busKey(bus);
                   const isSelected = key === selected;
                   return (
                     <tr
@@ -761,43 +741,43 @@ export function BusesModal({
                       class={isSelected ? "selected" : ""}
                       tabIndex={0}
                       aria-selected={isSelected}
-                      title={`cluster #${cluster.id}`}
-                      onClick={() => selectCluster(cluster)}
+                      title={`cluster #${bus.id}`}
+                      onClick={() => selectBus(bus)}
                       onKeyDown={(event) => {
                         if (event.key === "Enter" || event.key === " ") {
                           event.preventDefault();
-                          selectCluster(cluster);
+                          selectBus(bus);
                         }
                       }}
                     >
                       <td>
-                        {cluster.kind === "flexray"
+                        {bus.kind === "flexray"
                           ? "FlexRay"
-                          : cluster.kind === "ethernet"
+                          : bus.kind === "ethernet"
                             ? "Ethernet"
                             : "CAN"}
                       </td>
                       <td>
-                        {cluster.name}
-                        {slotLabel(cluster) !== cluster.name && (
-                          <span class="cluster-slot">{slotLabel(cluster)}</span>
+                        {bus.name}
+                        {slotLabel(bus) !== bus.name && (
+                          <span class="cluster-slot">{slotLabel(bus)}</span>
                         )}
                       </td>
-                      <td>{cluster.frames}</td>
+                      <td>{bus.frames}</td>
                       <td
-                        class={`wire ${wireFor(cluster).cls}`}
-                        title={wireFor(cluster).title}
+                        class={`wire ${wireFor(bus).cls}`}
+                        title={wireFor(bus).title}
                       >
-                        {wireFor(cluster).text}
+                        {wireFor(bus).text}
                       </td>
-                      <td title={cluster.source}>{fileName(cluster.source)}</td>
+                      <td title={bus.source}>{fileName(bus.source)}</td>
                       <td class="row-actions">
                         <button
                           type="button"
                           class="row-menu-button"
                           aria-haspopup="menu"
                           aria-expanded={rowMenu === key}
-                          aria-label={`Actions for ${cluster.name}`}
+                          aria-label={`Actions for ${bus.name}`}
                           onClick={(event) => {
                             event.stopPropagation();
                             setSelected(key);
@@ -858,28 +838,28 @@ export function BusesModal({
                               }
                             }}
                           >
-                            {cluster.kind === "can" && (
+                            {bus.kind === "can" && (
                               <button
                                 type="button"
                                 role="menuitem"
                                 onClick={() => {
                                   setRowMenu(null);
                                   document
-                                    .getElementById(`bus-name-${cluster.bus}`)
+                                    .getElementById(`bus-name-${bus.index}`)
                                     ?.focus();
                                 }}
                               >
                                 Rename
                               </button>
                             )}
-                            {cluster.kind === "can" && (
+                            {bus.kind === "can" && (
                               <button
                                 type="button"
                                 role="menuitem"
                                 onClick={() => {
                                   setRowMenu(null);
                                   document
-                                    .getElementById(`bus-attach-${cluster.bus}`)
+                                    .getElementById(`bus-attach-${bus.index}`)
                                     ?.focus();
                                 }}
                               >
@@ -893,13 +873,13 @@ export function BusesModal({
                               onClick={() => {
                                 setRowMenu(null);
                                 const message =
-                                  cluster.kind === "can"
-                                    ? `Remove ${cluster.name}? Its attachments, signals and trace rows for this bus are removed.`
-                                    : `Remove ${cluster.name}?`;
+                                  bus.kind === "can"
+                                    ? `Remove ${bus.name}? Its attachments, signals and trace rows for this bus are removed.`
+                                    : `Remove ${bus.name}?`;
                                 if (window.confirm(message)) {
-                                  if (cluster.kind === "can") onRemoveBus(cluster.bus);
-                                  else if (cluster.kind === "flexray") onRemoveFr(cluster.bus);
-                                  else onRemoveEth(cluster.bus);
+                                  if (bus.kind === "can") onRemoveBus(bus.index);
+                                  else if (bus.kind === "flexray") onRemoveFr(bus.index);
+                                  else onRemoveEth(bus.index);
                                 }
                               }}
                             >
@@ -914,7 +894,7 @@ export function BusesModal({
               </tbody>
             </table>
             <p class="clusters-hint">
-              Select a cluster to edit its rates, description and hardware attachment.
+              Select a bus to edit its rates, description and hardware attachment.
             </p>
           </section>
         )}
@@ -922,7 +902,7 @@ export function BusesModal({
         <div class="buses-tools">
           <label
             class="real-toggle"
-            title="Applies to every cluster with an attached adapter"
+            title="Applies to every bus with an attached adapter"
           >
             <input
               type="checkbox"
@@ -959,8 +939,8 @@ export function BusesModal({
         <div class="buses-body">
           {buses.length === 0 && (
             <div class="empty">
-              <strong>No clusters in this session</strong>
-              <span>Add a cluster or load a project.</span>
+              <strong>No buses in this session</strong>
+              <span>Add a bus or load a project.</span>
             </div>
           )}
           {selectedCanBus && (
@@ -987,119 +967,114 @@ export function BusesModal({
           {selectedFrBus && (
           <section class="bus-proto">
             <h3>FlexRay</h3>
-            {frBuses.filter((bus) => bus.bus === selectedFrBus.bus).map((bus) => (
-              <div
-                class={`proto-row${selected === `flexray:${bus.bus}` ? " selected" : ""}`}
-                id={`proto-flexray:${bus.bus}`}
-                key={bus.bus}
-                onClick={() => setSelected(`flexray:${bus.bus}`)}
-              >
-                <strong>{bus.name}</strong>
-                <span>{bus.cluster || "unnamed cluster"}</span>
-                <em>{bus.frames} frames</em>
-                {bus.attached ? (
-                  <>
-                    <em class="fr-watch" title="Receive-only Vector FlexRay watch">
-                      ch{bus.channel} · RX
-                    </em>
-                    <button
-                      type="button"
-                      class="mini"
-                      onClick={() => onDetachFr(bus.bus)}
-                    >
-                      Detach
-                    </button>
-                  </>
-                ) : (
-                  <select
-                    class="fr-attach"
-                    value=""
-                    disabled={frChannels.length === 0}
-                    title={
-                      frChannels.length
-                        ? "Attach this port in receive-only mode"
-                        : hardware?.frError || "No Vector FlexRay channel found"
-                    }
-                    onChange={(event) => {
-                      const index = Number(
-                        (event.target as HTMLSelectElement).value,
-                      );
-                      if (Number.isFinite(index)) onAttachFr(bus.bus, index);
-                    }}
+            <div
+              class={`proto-row${selected === busKey(selectedFrBus) ? " selected" : ""}`}
+              id={`proto-${busKey(selectedFrBus)}`}
+              onClick={() => setSelected(busKey(selectedFrBus))}
+            >
+              <strong>{selectedFrBus.name}</strong>
+              <span>{selectedFrBus.flexray?.cluster || "unnamed cluster"}</span>
+              <em>{selectedFrBus.frames} frames</em>
+              {selectedFrBus.flexray?.attached ? (
+                <>
+                  <em class="fr-watch" title="Receive-only Vector FlexRay watch">
+                    ch{selectedFrBus.flexray.channel} · RX
+                  </em>
+                  <button
+                    type="button"
+                    class="mini"
+                    onClick={() => onDetachFr(selectedFrBus.index)}
                   >
-                    <option value="">
-                      {frChannels.length ? "Attach port…" : "No FR port"}
-                    </option>
-                    {frChannels.map((channel) => (
-                      <option
-                        key={`${channel.driver}:${channel.index}`}
-                        value={channel.index}
-                      >
-                        [V] ch{channel.index}: {channel.name}
-                        {channel.detail ? ` · ${channel.detail}` : ""}
-                      </option>
-                    ))}
-                  </select>
-                )}
-                <DescriptionList
-                  bus={bus.bus}
-                  kind="flexray"
-                  descriptions={bus.descriptions}
-                  scan={arxmlScan}
-                  onScan={onScanArxml}
-                  onAdd={onAddDescription}
-                  onRemove={onRemoveDescription}
-                  onError={onError}
-                  accept=".xml,.arxml,.fibex"
-                  allowCluster
-                />
-                <button
-                  type="button"
-                  class="bus-remove"
-                  onClick={() => onRemoveFr(bus.bus)}
+                    Detach
+                  </button>
+                </>
+              ) : (
+                <select
+                  class="fr-attach"
+                  value=""
+                  disabled={frChannels.length === 0}
+                  title={
+                    frChannels.length
+                      ? "Attach this port in receive-only mode"
+                      : hardware?.frError || "No Vector FlexRay channel found"
+                  }
+                  onChange={(event) => {
+                    const index = Number(
+                      (event.target as HTMLSelectElement).value,
+                    );
+                    if (Number.isFinite(index)) onAttachFr(selectedFrBus.index, index);
+                  }}
                 >
-                  Remove bus
-                </button>
-              </div>
-            ))}
+                  <option value="">
+                    {frChannels.length ? "Attach port…" : "No FR port"}
+                  </option>
+                  {frChannels.map((channel) => (
+                    <option
+                      key={`${channel.driver}:${channel.index}`}
+                      value={channel.index}
+                    >
+                      [V] ch{channel.index}: {channel.name}
+                      {channel.detail ? ` · ${channel.detail}` : ""}
+                    </option>
+                  ))}
+                </select>
+              )}
+              <DescriptionList
+                bus={selectedFrBus.index}
+                kind="flexray"
+                descriptions={selectedFrBus.descriptions}
+                scan={arxmlScan}
+                onScan={onScanArxml}
+                onAdd={onAddDescription}
+                onRemove={onRemoveDescription}
+                onError={onError}
+                accept=".xml,.arxml,.fibex"
+                allowCluster
+              />
+              <button
+                type="button"
+                class="bus-remove"
+                onClick={() => onRemoveFr(selectedFrBus.index)}
+              >
+                Remove bus
+              </button>
+            </div>
           </section>
           )}
 
           {selectedEthBus && (
           <section class="bus-proto">
             <h3>Ethernet</h3>
-            {ethBuses.filter((bus) => bus.bus === selectedEthBus.bus).map((bus) => (
-              <div
-                class={`proto-row${selected === `ethernet:${bus.bus}` ? " selected" : ""}`}
-                id={`proto-ethernet:${bus.bus}`}
-                key={bus.bus}
-                onClick={() => setSelected(`ethernet:${bus.bus}`)}
+            <div
+              class={`proto-row${selected === busKey(selectedEthBus) ? " selected" : ""}`}
+              id={`proto-${busKey(selectedEthBus)}`}
+              onClick={() => setSelected(busKey(selectedEthBus))}
+            >
+              <strong>{selectedEthBus.name}</strong>
+              <span>
+                {selectedEthBus.ethernet?.clusters ?? 0} clusters ·{" "}
+                {selectedEthBus.frames} frames
+              </span>
+              <DescriptionList
+                bus={selectedEthBus.index}
+                kind="ethernet"
+                descriptions={selectedEthBus.descriptions}
+                scan={arxmlScan}
+                onScan={onScanArxml}
+                onAdd={onAddDescription}
+                onRemove={onRemoveDescription}
+                onError={onError}
+                accept=".arxml"
+                allowCluster
+              />
+              <button
+                type="button"
+                class="bus-remove"
+                onClick={() => onRemoveEth(selectedEthBus.index)}
               >
-                <strong>{bus.name}</strong>
-                <span>
-                  {bus.clusters} clusters · {bus.frames} frames
-                </span>
-                <DescriptionList
-                  bus={bus.bus}
-                  kind="ethernet"
-                  descriptions={bus.descriptions}
-                  scan={arxmlScan}
-                  onScan={onScanArxml}
-                  onAdd={onAddDescription}
-                  onRemove={onRemoveDescription}
-                  onError={onError}
-                  accept=".arxml"
-                  allowCluster
-                />
-                <button
-                  type="button"
-                  class="bus-remove"
-                  onClick={() => onRemoveEth(bus.bus)}
-                >
-                  Remove bus
-                </button>
-              </div>
-            ))}
+                Remove bus
+              </button>
+            </div>
           </section>
           )}
 
@@ -1117,30 +1092,27 @@ export function BusesModal({
                   kind: "can",
                   title: "CAN channels in the log",
                   rows: replayMap.can,
-                  targets: buses.map((bus) => ({
-                    id: bus.index,
-                    label: bus.name,
-                  })),
+                  targets: buses
+                    .filter((bus) => bus.kind === "can")
+                    .map((bus) => ({ id: bus.index, label: bus.name })),
                   channel: (raw: number) => `Channel ${raw + 1}`,
                 },
                 {
                   kind: "fr",
                   title: "FlexRay channels in the log",
                   rows: replayMap.fr,
-                  targets: frBuses.map((bus) => ({
-                    id: bus.bus,
-                    label: bus.name,
-                  })),
+                  targets: buses
+                    .filter((bus) => bus.kind === "flexray")
+                    .map((bus) => ({ id: bus.index, label: bus.name })),
                   channel: (raw: number) => `#${raw}`,
                 },
                 {
                   kind: "eth",
                   title: "Ethernet channels in the log",
                   rows: replayMap.eth,
-                  targets: ethBuses.map((bus) => ({
-                    id: bus.bus,
-                    label: bus.name,
-                  })),
+                  targets: buses
+                    .filter((bus) => bus.kind === "ethernet")
+                    .map((bus) => ({ id: bus.index, label: bus.name })),
                   channel: (raw: number) => `#${raw}`,
                 },
               ].map((group) =>

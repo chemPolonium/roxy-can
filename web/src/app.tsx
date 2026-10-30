@@ -2666,14 +2666,12 @@ export function App() {
       frameBuses: (catalog?.channels ?? [])
         .filter((channel) => channel.kind === "can")
         .map((channel) => ({ index: channel.index, name: channel.name })),
-      frBuses: (state?.frBuses ?? []).map((bus) => ({
-        index: bus.bus,
-        name: bus.name,
-      })),
-      ethBuses: (state?.ethBuses ?? []).map((bus) => ({
-        index: bus.bus,
-        name: bus.name,
-      })),
+      frBuses: (state?.buses ?? [])
+        .filter((bus) => bus.kind === "flexray")
+        .map((bus) => ({ index: bus.index, name: bus.name })),
+      ethBuses: (state?.buses ?? [])
+        .filter((bus) => bus.kind === "ethernet")
+        .map((bus) => ({ index: bus.index, name: bus.name })),
       ethFrames: (catalog?.channels ?? [])
         .filter((channel) => channel.kind === "eth")
         .flatMap((channel) =>
@@ -2721,7 +2719,7 @@ export function App() {
         }));
       }),
     }),
-    [signals, state?.sysvars, state?.frBuses, state?.ethBuses, pageWriteTargets, catalog],
+    [signals, state?.sysvars, state?.buses, pageWriteTargets, catalog],
   );
 
   // Setpoint readback: subscribe each written signal as a Read signal so its
@@ -3331,19 +3329,12 @@ export function App() {
                   }}
                 >
                   <option value="all">All buses</option>
-                  {state?.channels.map((channel) => (
-                    <option key={channel.name} value={channel.name}>
-                      {channel.name}
-                    </option>
-                  ))}
-                  {state?.frBuses.map((fr) => (
-                    <option key={fr.name} value={fr.name}>
-                      {fr.name}
-                    </option>
-                  ))}
-                  {state?.ethBuses.map((eth) => (
-                    <option key={eth.name} value={eth.name}>
-                      {eth.name}
+                  {state?.buses.map((bus) => (
+                    <option
+                      key={`${bus.kind}:${bus.index}`}
+                      value={bus.name}
+                    >
+                      {bus.name}
                     </option>
                   ))}
                 </select>
@@ -4001,8 +3992,14 @@ export function App() {
           entries={state?.tx ?? []}
           frTx={state?.frTx ?? []}
           blocks={state?.blocks ?? []}
-          buses={state?.buses ?? []}
-          frBuses={state?.frBuses ?? []}
+          buses={(state?.buses ?? []).filter((bus) => bus.kind === "can")}
+          frBuses={(state?.buses ?? [])
+            .filter((bus) => bus.kind === "flexray")
+            .map((bus) => ({
+              index: bus.index,
+              name: bus.name,
+              cluster: bus.flexray?.cluster ?? "",
+            }))}
           catalog={catalog}
           catalogLoading={catalogLoading}
           catalogError={catalogError}
@@ -4091,9 +4088,6 @@ export function App() {
       {busesOpen && (
         <BusesModal
           buses={state?.buses ?? []}
-          clusters={state?.clusters ?? []}
-          frBuses={state?.frBuses ?? []}
-          ethBuses={state?.ethBuses ?? []}
           replayMap={
             state?.replayMap ?? { can: [], fr: [], eth: [] }
           }
@@ -4134,7 +4128,7 @@ export function App() {
 
       {scriptsOpen && (
         <ScriptsModal
-          buses={state?.buses ?? []}
+          buses={(state?.buses ?? []).filter((bus) => bus.kind === "can")}
           catalog={catalog}
           derived={derivedDefs}
           sysvars={state?.sysvars ?? []}
@@ -4459,10 +4453,13 @@ export function App() {
                     </button>
                   </div>
                   <span class="task-state">
-                    {(state?.buses.filter((bus) => bus.attached).length ?? 0) ===
-                    0
+                    {(state?.buses.filter(
+                      (bus) => bus.can?.attached || bus.flexray?.attached,
+                    ).length ?? 0) === 0
                       ? "No adapter attached"
-                      : `${state?.buses.filter((bus) => bus.attached).length} adapter(s) attached · ${
+                      : `${state?.buses.filter(
+                          (bus) => bus.can?.attached || bus.flexray?.attached,
+                        ).length} adapter(s) attached · ${
                           state?.realBus ? "real bus on" : "simulation only"
                         }`}
                   </span>
