@@ -6798,3 +6798,24 @@ button.danger:hover:not(:disabled) {
 .proto-row.selected {
   background: var(--accent-soft);
 }
+
+.buses-tools .hw-refresh {
+  white-space: nowrap;
+}
+
+.buses-clusters td.wire {
+  max-width: 170px;
+  font-size: 10.5px;
+}
+
+.buses-clusters td.wire.live {
+  color: var(--ok);
+}
+
+.buses-clusters td.wire.off {
+  color: var(--warn);
+}
+
+.buses-clusters td.wire.none {
+  color: var(--muted);
+}

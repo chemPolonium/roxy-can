@@ -339,7 +339,7 @@ function BusCard({
             title={
               channels.length === 0
                 ? "Plug in the adapter, then use Refresh hardware"
-                : "Pick the adapter channel for this bus"
+                : "Pick the hardware channel for this cluster"
             }
             onChange={(event) =>
               setChannelChoice((event.target as HTMLSelectElement).value)
@@ -348,7 +348,7 @@ function BusCard({
             <option value="">
               {channels.length === 0
                 ? "No CAN hardware found"
-                : "Select a channel…"}
+                : "Select a hardware channel…"}
             </option>
             {channels.map((channel) => (
               <option key={channelKey(channel)} value={channelKey(channel)}>
@@ -365,7 +365,7 @@ function BusCard({
                 ? "Attach this channel using the configured rates"
                 : channels.length === 0
                   ? "No adapter found; plug it in and use Refresh hardware"
-                  : "Select a channel first"
+                  : "Select a hardware channel first"
             }
             onClick={() => {
               if (selected) {
@@ -380,8 +380,8 @@ function BusCard({
             {selected
               ? "Uses this bus's configured arbitration/FD rates."
               : channels.length === 0
-                ? "Plug in the adapter, then use Refresh hardware above."
-                : "Pick a channel above, then Attach."}
+                ? "Plug in the adapter, then use Refresh hardware."
+                : "Pick a hardware channel above, then Attach."}
           </span>
         </div>
       )}
@@ -432,6 +432,44 @@ export function BusesModal({
     selectedCluster?.kind === "can"
       ? (buses.find((bus) => bus.index === selectedCluster.bus) ?? null)
       : null;
+
+  const wireFor = (cluster: Cluster) => {
+    if (cluster.kind === "can") {
+      const bus = buses.find((candidate) => candidate.index === cluster.bus);
+      if (!bus?.attached) {
+        return { text: "—", cls: "none", title: "No adapter attached" };
+      }
+      const attachment = bus.attached;
+      const live = realBus;
+      return {
+        text: `${attachment.driver} ch${attachment.adapter} · ${
+          attachment.canTx ? "TX" : "RX"
+        }${live ? "" : " · off"}`,
+        cls: live ? "live" : "off",
+        title: live
+          ? "Attached adapter is on the wire"
+          : "Adapter configured; Real bus is off",
+      };
+    }
+    if (cluster.kind === "flexray") {
+      const bus = frBuses.find((candidate) => candidate.bus === cluster.bus);
+      if (!bus?.attached) {
+        return { text: "—", cls: "none", title: "No FlexRay port attached" };
+      }
+      return {
+        text: `V ch${bus.channel} · RX${realBus ? "" : " · off"}`,
+        cls: realBus ? "live" : "off",
+        title: realBus
+          ? "Receive-only FlexRay watch"
+          : "Port configured; Real bus is off",
+      };
+    }
+    return {
+      text: "session",
+      cls: "none",
+      title: "Ethernet frames stay in this session; there is no send port",
+    };
+  };
 
   useEffect(() => {
     if (clusters.length === 0) {
@@ -535,7 +573,7 @@ export function BusesModal({
                       onAddBus();
                     }}
                   >
-                    CAN bus
+                    CAN cluster
                   </button>
                   <FilePick
                     menuItem
@@ -576,9 +614,6 @@ export function BusesModal({
             <button type="button" onClick={onOpenScripts}>
               Scripts…
             </button>
-            <button type="button" disabled={loading} onClick={onRefresh}>
-              Refresh hardware
-            </button>
             <button type="button" onClick={onClose}>
               Close
             </button>
@@ -593,6 +628,7 @@ export function BusesModal({
                   <th>Kind</th>
                   <th>Cluster</th>
                   <th>Frames</th>
+                  <th>Wire</th>
                   <th>Source</th>
                   <th aria-label="Actions" />
                 </tr>
@@ -630,6 +666,12 @@ export function BusesModal({
                         )}
                       </td>
                       <td>{cluster.frames}</td>
+                      <td
+                        class={`wire ${wireFor(cluster).cls}`}
+                        title={wireFor(cluster).title}
+                      >
+                        {wireFor(cluster).text}
+                      </td>
                       <td title={cluster.source}>{fileName(cluster.source)}</td>
                       <td class="row-actions">
                         <button
@@ -757,7 +799,10 @@ export function BusesModal({
         )}
 
         <div class="buses-tools">
-          <label class="real-toggle">
+          <label
+            class="real-toggle"
+            title="Applies to every cluster with an attached adapter"
+          >
             <input
               type="checkbox"
               checked={realBus}
@@ -769,23 +814,32 @@ export function BusesModal({
           </label>
           <span class="hint">
             {realBus
-              ? "Attached hardware receives and transmits on the wire."
-              : "Simulated: attachments stay configured but neither receive nor transmit."}
+              ? "Every attached adapter receives and transmits on the wire."
+              : "Simulated: configured adapters stay attached but neither receive nor transmit."}
           </span>
+          <button
+            type="button"
+            class="hw-refresh"
+            disabled={loading}
+            onClick={onRefresh}
+            title="Re-enumerate hardware channels"
+          >
+            Refresh hardware
+          </button>
           <span class={`hw-state ${error ? "bad" : ""}`}>
             {loading
               ? "Probing hardware…"
               : error
                 ? error
-                : `${channels.length} CAN channels`}
+                : `${channels.length} CAN hardware channels`}
           </span>
         </div>
 
         <div class="buses-body">
           {buses.length === 0 && (
             <div class="empty">
-              <strong>No buses in this session</strong>
-              <span>Add a bus or load a project.</span>
+              <strong>No clusters in this session</strong>
+              <span>Add a cluster or load a project.</span>
             </div>
           )}
           {selectedCanBus && (
@@ -1004,7 +1058,7 @@ export function BusesModal({
 
         <p class="hint picker-hint">
           Add/remove, names, rates and database paths are host-side edits. Removing a
-          bus stops measurement and remaps the remaining channels.
+          cluster stops measurement and may remap the remaining CAN channels.
         </p>
       </div>
     </div>
