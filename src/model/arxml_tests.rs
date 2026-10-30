@@ -638,3 +638,37 @@ fn update_indication_bit_reaches_the_plan() {
     );
     assert_eq!(plan.writes[0].update_bit, Some(0));
 }
+
+/// The declared update bit is not just copied into the plan: a clear bit
+/// hides the signal at bit level, and encoding a value raises it.
+#[test]
+fn update_indication_bit_gates_decode_and_is_set_by_encode() {
+    let text = CAN_TEXT.replace(
+        "<PACKING-BYTE-ORDER>MOST-SIGNIFICANT-BYTE-LAST</PACKING-BYTE-ORDER>",
+        "<PACKING-BYTE-ORDER>MOST-SIGNIFICANT-BYTE-LAST</PACKING-BYTE-ORDER>\
+         <UPDATE-INDICATION-BIT-POSITION>0</UPDATE-INDICATION-BIT-POSITION>",
+    );
+    let comm = import(&text, "CanCluster", 1);
+    let (plans, _) = PlanCache::build(&comm, 1);
+    let frame = comm.frames.values().next().unwrap();
+    let plan = plans.get(frame.id).expect("plan");
+
+    // Little-endian 16-bit Speed at bit 8: raw 0x1234 is bytes 1..3.
+    let clear = [0x00, 0x34, 0x12, 0, 0, 0, 0, 0];
+    assert!(
+        crate::model::decode_payload(&comm, plan, &clear).is_empty(),
+        "a clear update bit means the frame carries no new value"
+    );
+    let set = [0x01, 0x34, 0x12, 0, 0, 0, 0, 0];
+    let decoded = crate::model::decode_payload(&comm, plan, &set);
+    assert_eq!(decoded.len(), 1);
+    assert_eq!(decoded[0].raw, 0x1234);
+    assert!((decoded[0].physical.expect("physical") - 466.0).abs() < 1e-9);
+
+    let signal = plan.writes[0].signal;
+    let mut payload = [0u8; 8];
+    let written = crate::model::encode_payload(&comm, plan, &[(signal, 466.0)], &mut payload);
+    assert_eq!(written, 1);
+    assert_eq!(payload[0] & 1, 1, "encoding raises the update bit");
+    assert_eq!(&payload[1..3], &[0x34, 0x12], "little-endian raw 0x1234");
+}
