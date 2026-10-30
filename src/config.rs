@@ -140,12 +140,6 @@ pub struct TraceCfg {
     pub manual: CanPicks,
     #[serde(default)]
     pub fr_manual: FrPicks,
-    /// The same picks with the bus named by cluster id. v2 saves fill these
-    /// so a pick follows its cluster; open converts them back to indexes.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub manual_clusters: Vec<(u32, u32)>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub fr_manual_clusters: Vec<(u32, u16)>,
     /// Ethernet flow picks; empty when none are selected.
     #[serde(default)]
     pub eth_manual: EthPicks,
@@ -757,8 +751,6 @@ impl ProjectSettings {
                         manual,
                         fr_manual,
                         eth_manual,
-                        manual_clusters: Vec::new(),
-                        fr_manual_clusters: Vec::new(),
                         filter: w.filter.clone(),
                         dir: w.dir,
                         dbc_only: w.dbc_only,
@@ -1596,16 +1588,8 @@ mod tests {
             Some("d1"),
             "the row stores the definition id, not a fake CAN address"
         );
-        assert_eq!(
-            config.triggers.as_ref().unwrap()[0].kind,
-            7,
-            "derived rule kind"
-        );
-        assert_eq!(
-            config.triggers.as_ref().unwrap()[0].signal,
-            "d1",
-            "the id rides signal"
-        );
+        assert_eq!(config.triggers[0].kind, 7, "derived rule kind");
+        assert_eq!(config.triggers[0].signal, "d1", "the id rides signal");
         let json = serde_json::to_string(&config).unwrap();
         let mut restored = App::headless();
         serde_json::from_str::<ProjectV2>(&json)

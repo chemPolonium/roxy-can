@@ -108,14 +108,13 @@ import {
 } from "./traceLayout";
 import {
   defaultPanelBook,
-  panelNumericTarget,
+  panelSetpointTarget,
   parsePanelBook,
   parsePanelHex,
   type PanelBook,
   type PanelButton,
   type PanelFrameSend,
-  type PanelNumeric,
-  type PanelPage,
+  type PanelSetpoint,
   type PanelToggle,
 } from "./panelPage";
 import {
@@ -157,7 +156,6 @@ interface SavedView {
   yModes?: Record<string, ChartYMode>;
   derivedReads?: { id: string; name: string }[];
   cursors: ChartCursor[];
-  panelPage?: PanelPage;
   panelBook?: PanelBook;
 }
 
@@ -239,8 +237,7 @@ function normalizeView(saved: Partial<SavedView>): Partial<SavedView> {
     derivedReads,
     signalView: { windowS, endS },
     cursors,
-    panelBook:
-      parsePanelBook(saved.panelBook, saved.panelPage) ?? defaultPanelBook(),
+    panelBook: parsePanelBook(saved.panelBook) ?? defaultPanelBook(),
   };
 }
 
@@ -2743,8 +2740,8 @@ export function App() {
     for (const page of panelBook.pages) {
       for (const widget of page.widgets) {
         if (
-          widget.kind === "numeric" &&
-          panelNumericTarget(widget) === "signal" &&
+          widget.kind === "setpoint" &&
+          panelSetpointTarget(widget) === "signal" &&
           widget.source.trim()
         ) {
           keys.add(widget.source);
@@ -2829,7 +2826,7 @@ export function App() {
     });
   };
 
-  const setPageNumber = (widget: PanelNumeric, value: number) => {
+  const setPageNumber = (widget: PanelSetpoint, value: number) => {
     const known = findPanelSysVar(widget.sysvar, pageView);
     if (!known) {
       showToast(`Undefined sysvar ${widget.sysvar}`);
@@ -2850,7 +2847,7 @@ export function App() {
     }
   };
 
-  const writePageSignal = (widget: PanelNumeric, value: number) => {
+  const writePageSignal = (widget: PanelSetpoint, value: number) => {
     if (!widget.source) {
       showToast("This setpoint has no signal");
       return;

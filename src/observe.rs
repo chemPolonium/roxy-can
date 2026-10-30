@@ -500,8 +500,6 @@ impl SigKey {
 
     /// The wire form the web API, CSV headers and derived sources use: the
     /// canonical `sig:` spelling carrying the cluster, never a bus index.
-    /// Legacy `ch:id:name` / `fr:` / `eth:` text is still read by
-    /// [`crate::bus::BusCore::resolve_key_text`], which owns the bus map.
     pub fn text(&self) -> String {
         match self {
             Self::Can {

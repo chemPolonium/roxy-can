@@ -21,7 +21,7 @@ import {
   movePanelWidget,
   panelFileName,
   panelFrameProblem,
-  panelNumericTarget,
+  panelSetpointTarget,
   parsePanelHex,
   formatPanelHex,
   panelWidgetSpec,
@@ -44,7 +44,7 @@ import {
   type PanelWidgetPatch,
   type PanelToggle,
   type PanelButton,
-  type PanelNumeric,
+  type PanelSetpoint,
   type PanelWrite,
   type PanelFrameSend,
 } from "../panelPage";
@@ -96,7 +96,7 @@ function panelSignalKey(widget: PanelWidget): string {
   ) {
     return widget.source.trim();
   }
-  if (widget.kind === "numeric" && panelNumericTarget(widget) === "signal") {
+  if (widget.kind === "setpoint" && panelSetpointTarget(widget) === "signal") {
     return widget.source.trim();
   }
   return "";
@@ -104,7 +104,7 @@ function panelSignalKey(widget: PanelWidget): string {
 
 const EMPTY_HISTORY: History = { past: [], future: [] };
 
-function NumericControl({
+function SysVarSetpointControl({
   widget,
   value,
   min,
@@ -115,7 +115,7 @@ function NumericControl({
   title,
   onCommit,
 }: {
-  widget: PanelNumeric;
+  widget: PanelSetpoint;
   value: number | null;
   min: number | null;
   max: number | null;
@@ -143,9 +143,9 @@ function NumericControl({
     onCommit(next);
   };
   return (
-    <div class="page-numeric" title={disabled ? reason : title ?? widget.sysvar}>
-      {widget.label && <span class="page-numeric-label">{widget.label}</span>}
-      <span class="page-numeric-row">
+    <div class="page-setpoint" title={disabled ? reason : title ?? widget.sysvar}>
+      {widget.label && <span class="page-setpoint-label">{widget.label}</span>}
+      <span class="page-setpoint-row">
         <input
           type="number"
           value={draft}
@@ -760,7 +760,7 @@ function SetpointControl({
   reason,
   onWrite,
 }: {
-  widget: PanelNumeric;
+  widget: PanelSetpoint;
   /// Live value read back from the bus; falls back to the last write.
   value: number | null;
   min: number | null;
@@ -774,9 +774,9 @@ function SetpointControl({
   useEffect(() => {
     setSent(null);
   }, [widget.source]);
-  const shape: PanelNumeric = {
+  const shape: PanelSetpoint = {
     id: widget.id,
-    kind: "numeric",
+    kind: "setpoint",
     label: widget.label,
     target: "signal",
     sysvar: "",
@@ -802,7 +802,7 @@ function SetpointControl({
     .filter(Boolean)
     .join(" · ");
   return (
-    <NumericControl
+    <SysVarSetpointControl
       widget={shape}
       value={value ?? sent}
       min={min}
@@ -1214,8 +1214,8 @@ export function PagePanel({
   onBook: (book: PanelBook) => void;
   onRun: (widget: PanelButton) => void;
   onToggle: (widget: PanelToggle, on: boolean) => void;
-  onSetNumber: (widget: PanelNumeric, value: number) => void;
-  onWrite: (widget: PanelNumeric, value: number) => void;
+  onSetNumber: (widget: PanelSetpoint, value: number) => void;
+  onWrite: (widget: PanelSetpoint, value: number) => void;
   onNotice: (message: string) => void;
 }) {
   const page = activePanelPage(book);
@@ -1698,8 +1698,8 @@ export function PagePanel({
         </div>
       );
     }
-    if (widget.kind === "numeric") {
-      if (panelNumericTarget(widget) === "signal") {
+    if (widget.kind === "setpoint") {
+      if (panelSetpointTarget(widget) === "signal") {
         const target = (view.writeTargets ?? []).find(
           (entry) => entry.key === widget.source,
         );
@@ -1722,7 +1722,7 @@ export function PagePanel({
       const variable = findPanelSysVar(widget.sysvar, view);
       const disabled = editing || !capability.enabled;
       return (
-        <NumericControl
+        <SysVarSetpointControl
           widget={widget}
           value={variable?.value ?? null}
           min={variable?.min ?? null}
@@ -1859,14 +1859,14 @@ export function PagePanel({
     if (key === "writes" && field(widget, "action") !== "none") return null;
     if (key === "frame" && field(widget, "action") !== "send") return null;
     if (
-      widget.kind === "numeric" &&
+      widget.kind === "setpoint" &&
       key === "sysvar" &&
       field(widget, "target") === "signal"
     ) {
       return null;
     }
     if (
-      widget.kind === "numeric" &&
+      widget.kind === "setpoint" &&
       key === "source" &&
       field(widget, "target") !== "signal"
     ) {

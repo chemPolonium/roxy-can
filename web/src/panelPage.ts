@@ -118,15 +118,10 @@ export type PanelWidgetKind =
   | "button"
   | "value"
   | "toggle"
-  | "numeric"
+  | "setpoint"
   | "lamp"
   | "bar"
   | "gauge";
-
-/// Pages saved before Numeric and Setpoint were merged still carry this kind;
-/// it loads as a Numeric with `target: "signal"`.
-const LEGACY_SETPOINT_KIND = "setpoint";
-type RawPanelKind = PanelWidgetKind | typeof LEGACY_SETPOINT_KIND;
 
 interface Geometry {
   x: number;
@@ -182,17 +177,17 @@ export interface PanelToggle extends Geometry {
   sysvar: string;
 }
 
-export type PanelNumericTarget = "sysvar" | "signal";
+export type PanelSetpointTarget = "sysvar" | "signal";
 
 /// Editable setpoint: writes a system variable or a DBC signal, clamped by
 /// whichever backend owns the range.
-export interface PanelNumeric extends Geometry {
+export interface PanelSetpoint extends Geometry {
   id: string;
-  kind: "numeric";
+  kind: "setpoint";
   label: string;
   /// Where the committed value goes; absent means a system variable (pages
   /// saved before the merge have no target).
-  target?: PanelNumericTarget;
+  target?: PanelSetpointTarget;
   sysvar: string;
   /// Catalog signal key (`channel:id:signal`) used when target is `signal`.
   source: string;
@@ -202,7 +197,7 @@ export interface PanelNumeric extends Geometry {
   panelAction?: string;
 }
 
-export function panelNumericTarget(widget: PanelNumeric): PanelNumericTarget {
+export function panelSetpointTarget(widget: PanelSetpoint): PanelSetpointTarget {
   return widget.target === "signal" ? "signal" : "sysvar";
 }
 
@@ -240,7 +235,7 @@ export type PanelWidget =
   | PanelButton
   | PanelValue
   | PanelToggle
-  | PanelNumeric
+  | PanelSetpoint
   | PanelLamp
   | PanelBar
   | PanelGauge;
@@ -277,7 +272,7 @@ export interface PanelWidgetPatch {
   color?: PanelBandColor;
   min?: number;
   max?: number;
-  target?: PanelNumericTarget;
+  target?: PanelSetpointTarget;
 }
 
 export type PanelFieldKey = keyof PanelWidgetPatch;
@@ -341,20 +336,11 @@ function isPanelKind(value: unknown): value is PanelWidgetKind {
     value === "button" ||
     value === "value" ||
     value === "toggle" ||
-    value === "numeric" ||
+    value === "setpoint" ||
     value === "lamp" ||
     value === "bar" ||
     value === "gauge"
   );
-}
-
-function readPanelKind(value: unknown): RawPanelKind | null {
-  if (value === LEGACY_SETPOINT_KIND) return LEGACY_SETPOINT_KIND;
-  return isPanelKind(value) ? value : null;
-}
-
-function widgetKindFor(kind: RawPanelKind): PanelWidgetKind {
-  return kind === LEGACY_SETPOINT_KIND ? "numeric" : kind;
 }
 
 export const PANEL_MAX_WRITES = 16;
@@ -555,7 +541,7 @@ const TOGGLE_FIELDS: PanelFieldSpec[] = [
   },
 ];
 
-const NUMERIC_FIELDS: PanelFieldSpec[] = [
+const SETPOINT_FIELDS: PanelFieldSpec[] = [
   { key: "label", label: "Label", kind: "text", maxLength: 80 },
   {
     key: "target",
@@ -773,17 +759,17 @@ const TOGGLE_SPEC: PanelWidgetSpec = {
   },
 };
 
-const NUMERIC_SPEC: PanelWidgetSpec = {
-  kind: "numeric",
+const SETPOINT_SPEC: PanelWidgetSpec = {
+  kind: "setpoint",
   label: "Setpoint",
   minW: 14,
   minH: 5,
   defaultW: 18,
   defaultH: 6,
-  fields: NUMERIC_FIELDS,
+  fields: SETPOINT_FIELDS,
   create: (id, x, y, w, h) => ({
     id,
-    kind: "numeric",
+    kind: "setpoint",
     label: "Setpoint",
     target: "sysvar",
     sysvar: "",
@@ -797,8 +783,8 @@ const NUMERIC_SPEC: PanelWidgetSpec = {
     h,
   }),
   fieldValue: (widget, key) => {
-    if (widget.kind !== "numeric") return "";
-    if (key === "target") return panelNumericTarget(widget);
+    if (widget.kind !== "setpoint") return "";
+    if (key === "target") return panelSetpointTarget(widget);
     if (key === "sysvar") return widget.sysvar;
     if (key === "source") return widget.source;
     if (key === "digits") return widget.digits;
@@ -808,7 +794,7 @@ const NUMERIC_SPEC: PanelWidgetSpec = {
     return "";
   },
   applyPatch: (widget, patch) => {
-    if (widget.kind !== "numeric") return widget;
+    if (widget.kind !== "setpoint") return widget;
     const step = Number(patch.step);
     return {
       ...widget,
@@ -983,7 +969,7 @@ export const PANEL_WIDGET_SPECS: Record<PanelWidgetKind, PanelWidgetSpec> = {
   button: BUTTON_SPEC,
   value: VALUE_SPEC,
   toggle: TOGGLE_SPEC,
-  numeric: NUMERIC_SPEC,
+  setpoint: SETPOINT_SPEC,
   lamp: LAMP_SPEC,
   bar: BAR_SPEC,
   gauge: GAUGE_SPEC,
@@ -996,7 +982,7 @@ export const PANEL_WIDGET_KINDS: { kind: PanelWidgetKind; label: string }[] = [
   { kind: "gauge", label: GAUGE_SPEC.label },
   { kind: "lamp", label: LAMP_SPEC.label },
   { kind: "toggle", label: TOGGLE_SPEC.label },
-  { kind: "numeric", label: NUMERIC_SPEC.label },
+  { kind: "setpoint", label: SETPOINT_SPEC.label },
 ];
 
 export function panelWidgetSpec(kind: PanelWidgetKind): PanelWidgetSpec {
@@ -1121,9 +1107,8 @@ export function removePanelPage(book: PanelBook, id: string): PanelBook {
 
 function widgetPatch(
   value: Record<string, unknown>,
-  rawKind: RawPanelKind,
+  kind: PanelWidgetKind,
 ): PanelWidgetPatch {
-  const kind = widgetKindFor(rawKind);
   // A button has exactly one payload: signal writes, one message, or a
   // script. A saved combination keeps the writes and narrows to that mode.
   const writes = kind === "button" ? normalisePanelWrites(value.writes) : undefined;
@@ -1152,22 +1137,15 @@ function widgetPatch(
         }
       : {}),
     ...(kind === "toggle" ? { sysvar: text(value.sysvar, 120) } : {}),
-    ...(kind === "numeric"
-      ? rawKind === LEGACY_SETPOINT_KIND
-        ? {
-            target: "signal" as const,
-            source: text(value.source, 120),
-            digits: clamp(Math.round(Number(value.digits) || 0), 0, 3),
-            step: Number(value.step),
-          }
-        : {
-            target: value.target === "signal" ? ("signal" as const) : ("sysvar" as const),
-            sysvar: text(value.sysvar, 120),
-            source: text(value.source, 120),
-            digits: clamp(Math.round(Number(value.digits) || 0), 0, 3),
-            step: Number(value.step),
-            panelAction: text(value.panelAction, 80),
-          }
+    ...(kind === "setpoint"
+      ? {
+          target: value.target === "signal" ? ("signal" as const) : ("sysvar" as const),
+          sysvar: text(value.sysvar, 120),
+          source: text(value.source, 120),
+          digits: clamp(Math.round(Number(value.digits) || 0), 0, 3),
+          step: Number(value.step),
+          panelAction: text(value.panelAction, 80),
+        }
       : {}),
     ...(kind === "lamp"
       ? {
@@ -1189,12 +1167,12 @@ function widgetPatch(
 }
 
 function buildWidget(
-  kind: RawPanelKind,
+  kind: PanelWidgetKind,
   id: string,
   geometry: Geometry,
   value: Record<string, unknown>,
 ): PanelWidget {
-  const spec = panelWidgetSpec(widgetKindFor(kind));
+  const spec = panelWidgetSpec(kind);
   const widget = spec.create(
     id,
     geometry.x,
@@ -1213,8 +1191,8 @@ function sanitise(
 ): PanelWidget | null {
   if (!raw || typeof raw !== "object") return null;
   const value = raw as Record<string, unknown>;
-  const rawKind = readPanelKind(value.kind);
-  if (!rawKind) return null;
+  const kind = value.kind;
+  if (!isPanelKind(kind)) return null;
   if (typeof value.id !== "string" || value.id.length === 0) return null;
   if (used.has(value.id)) return null;
   const x = Math.round(Number(value.x));
@@ -1222,7 +1200,7 @@ function sanitise(
   const w = Math.round(Number(value.w));
   const h = Math.round(Number(value.h));
   if (![x, y, w, h].every(Number.isFinite)) return null;
-  const spec = panelWidgetSpec(widgetKindFor(rawKind));
+  const spec = panelWidgetSpec(kind);
   if (w < spec.minW || h < spec.minH) return null;
   if (w > width || h > height) return null;
   const geometry = {
@@ -1231,17 +1209,17 @@ function sanitise(
     w,
     h,
   };
-  if (widgetKindFor(rawKind) === "button" && !isActionKind(value.action)) {
+  if (kind === "button" && !isActionKind(value.action)) {
     return null;
   }
   if (
-    widgetKindFor(rawKind) === "button" &&
+    kind === "button" &&
     value.action === "send" &&
     !normalisePanelFrame(value.frame)
   ) {
     return null;
   }
-  return buildWidget(rawKind, value.id, geometry, value);
+  return buildWidget(kind, value.id, geometry, value);
 }
 
 export function parsePanelPage(raw: unknown): PanelPage | null {
@@ -1277,14 +1255,8 @@ export function parsePanelPage(raw: unknown): PanelPage | null {
   };
 }
 
-export function parsePanelBook(
-  raw: unknown,
-  legacyPage?: unknown,
-): PanelBook | null {
-  const fallback = parsePanelPage(legacyPage);
-  if (!raw || typeof raw !== "object") {
-    return fallback ? { version: 1, activeId: fallback.id, pages: [fallback] } : null;
-  }
+export function parsePanelBook(raw: unknown): PanelBook | null {
+  if (!raw || typeof raw !== "object") return null;
   const value = raw as Record<string, unknown>;
   const source = Array.isArray(value.pages) ? value.pages : [];
   const pages: PanelPage[] = [];
@@ -1303,11 +1275,7 @@ export function parsePanelBook(
     names.add(name);
     pages.push({ ...page, id, name });
   }
-  if (pages.length === 0) {
-    return fallback
-      ? { version: 1, activeId: fallback.id, pages: [fallback] }
-      : null;
-  }
+  if (pages.length === 0) return null;
   const wanted = typeof value.activeId === "string" ? value.activeId : "";
   const activeId = pages.some((page) => page.id === wanted)
     ? wanted
@@ -1362,11 +1330,10 @@ function strictWidget(
     return { error: `${where}: not an object` };
   }
   const value = raw as Record<string, unknown>;
-  const rawKind = readPanelKind(value.kind);
-  if (!rawKind) {
+  const kind = value.kind;
+  if (!isPanelKind(kind)) {
     return { error: `${where}: unknown type "${String(value.kind ?? "")}"` };
   }
-  const kind = widgetKindFor(rawKind);
   const x = Math.round(Number(value.x));
   const y = Math.round(Number(value.y));
   const w = Math.round(Number(value.w));
@@ -1421,7 +1388,7 @@ function strictWidget(
   if (kind === "button" && value.action !== "send" && value.frame !== undefined) {
     return { error: `${where}: a message belongs to Send message` };
   }
-  return buildWidget(rawKind, id, { x, y, w, h }, value);
+  return buildWidget(kind, id, { x, y, w, h }, value);
 }
 
 /// Reads an exported page strictly: unknown types, bad geometry and overlaps
@@ -1465,12 +1432,9 @@ export function importPanelFile(
   const counts: Partial<Record<PanelWidgetKind, number>> = {};
   for (let index = 0; index < source.length; index += 1) {
     if (index >= 100) return { error: "Too many controls (100 max)" };
-    const rawKind = readPanelKind(
-      (source[index] as Record<string, unknown> | null)?.kind,
-    );
+    const kind = (source[index] as Record<string, unknown> | null)?.kind;
     let id = `widget${index + 1}`;
-    if (rawKind) {
-      const kind = widgetKindFor(rawKind);
+    if (isPanelKind(kind)) {
       const n = (counts[kind] ?? 0) + 1;
       counts[kind] = n;
       id = `${kind}${n}`;
@@ -1642,9 +1606,9 @@ export function pastePanelWidget(
       ? { source: widget.source, digits: widget.digits, bands: widget.bands }
       : {}),
     ...(widget.kind === "toggle" ? { sysvar: widget.sysvar } : {}),
-    ...(widget.kind === "numeric"
+    ...(widget.kind === "setpoint"
       ? {
-          target: panelNumericTarget(widget),
+          target: panelSetpointTarget(widget),
           sysvar: widget.sysvar,
           source: widget.source,
           digits: widget.digits,

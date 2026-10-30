@@ -9,7 +9,6 @@ mod arxml;
 mod dbc_import;
 mod id;
 mod import;
-mod key;
 mod plan;
 mod runtime;
 mod schema;
@@ -39,8 +38,6 @@ pub use dbc_import::{
 pub use id::{ClusterIds, ElementIds, ElementKind};
 #[allow(unused_imports)]
 pub use import::{import_eth_db, import_eth_db_obj, import_fibex, import_fr_db};
-#[allow(unused_imports)]
-pub use key::BusMap;
 #[allow(unused_imports)]
 pub use plan::{PlanCache, build_decode_plan};
 #[allow(unused_imports)]

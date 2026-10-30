@@ -572,6 +572,7 @@ derived:{definition_id}                     例：derived:brk_pressure
       "id": 2,
       "kind": "flexray",
       "name": "FR1",
+      "bus": 1,
       "aliases": ["Chassis"],
       "sources": [
         { "kind": "arxml", "path": "Matrix.arxml", "cluster": "FrCluster" }
@@ -583,6 +584,7 @@ derived:{definition_id}                     例：derived:brk_pressure
       "id": 3,
       "kind": "ethernet",
       "name": "ETH1",
+      "bus": 1,
       "aliases": [],
       "sources": [
         { "kind": "arxml", "path": "Matrix.arxml", "cluster": "EthCluster" }
@@ -605,11 +607,6 @@ derived:{definition_id}                     例：derived:brk_pressure
     { "kind": "can", "fileChannel": 0, "cluster": 1 },
     { "kind": "flexray", "fileChannel": 1, "cluster": 2 }
   ],
-  "busMap": {
-    "can": [1, 2],
-    "flexray": [3],
-    "ethernet": [4]
-  },
   "generators": [
     { "kind": "can", "cluster": 1, "signalRefs": ["sig:1:17:42"], "cycleUs": 100000 }
   ],
@@ -622,7 +619,8 @@ derived:{definition_id}                     例：derived:brk_pressure
 字段约束：
 
 - `clusters` 是唯一总线列表；不再出现 `channels`、`fr_buses`、`eth_buses`、
-  `can_arxml`、`fr_names`、`eth_frame_length_includes_header`。
+  `can_arxml`、`fr_names`、`eth_frame_length_includes_header` 或 `busMap`。
+  FR/ETH 的物理路号直接存在 cluster 的 `bus` 字段上，CAN 用列表位置。
 - `sources` 顺序即优先级；同一 cluster 可同时挂 DBC 与 ARXML，但同一元素
   以先出现者为准并报诊断。
 - 导入的模型本身**不写进工程**：路径、cluster 名、覆盖与 id 别名足够
@@ -648,8 +646,8 @@ derived:{definition_id}                     例：derived:brk_pressure
 
 软件开发期没有对外发布的工程文件，因此**没有 v1 读取或迁移**：版本不是
 `2` 的文件直接报 unsupported。`clusters` 是唯一的总线列表，CAN/FR/ETH 的
-名称、sources、位率和节点角色都由它恢复；gen/trigger 行用 cluster id 记录，
-`busMap` 只负责在打开时换回路号。
+名称、sources、位率、物理路号和节点角色都由它恢复；gen/trigger 行用
+cluster id 记录，打开时直接从 cluster 列表换回路号。
 ---
 
 ## 5. 当前代码地图
@@ -815,7 +813,7 @@ SecOC 没有逐帧的额外校验：头、secured area 与认证长度在建计�
 | `src/model/plan.rs` | `DecodePlan` / `PlanCache`：Frame→PDU→Signal 展开，含 Container/Mux/Secured 偏移 |
 | `src/model/runtime.rs` | 按计划解码/编码：物理值、符号、float、mux 选择器门控 |
 | `src/model/registry.rs` | 工程级 cluster 注册表：全局 id、按源去重、三协议共存、导出 schema v2、从 schema v2 重新导入 |
-| `src/project.rs` | `ProjectV2::from_app` / `resolve_paths` / `apply`：唯一工程 schema 的保存与打开，`clusters[].sources` + `busMap` 直接映射 App |
+| `src/project.rs` | `ProjectV2::from_app` / `resolve_paths` / `apply`：唯一工程 schema 的保存与打开，`clusters[].sources` 与 `clusters[].bus` 直接映射 App |
 | `src/config.rs` | 仅保留窗口/标量设置 DTO（`ProjectSettings`），以 `#[serde(flatten)]` 进入 `ProjectV2`；不再有 `Config` 或总线文件列表 |
 | `src/bus.rs` | CAN/FR/ETH 分配全局 `ClusterId`；订阅、三协议 Messages 展开、CAN/FR 触发器、脚本节点输入、三协议 Panel 物理编码、CAN/FR Generator 与三协议脚本发送都走统一模型 |
 | `src/web.rs` + `web/src/components/BusesModal.tsx` | Web 状态输出统一 `clusters`；Buses 顶部渲染 Cluster 表，**Add bus** 建 CAN/FR/ETH 总线，描述在选中总线详情里逐个 Add/Remove，ARXML 多 cluster 有选择器 |
@@ -844,7 +842,7 @@ SecOC 没有逐帧的额外校验：头、secured area 与认证长度在建计�
 | 7 Buses UI 与工程文件 | bus-first 绑定完成 | `.rxproj` 保存 schema v2 并恢复 ClusterId，generator 与 trigger 行分别以 `GeneratorCfg` / `TriggerCfgV2` 的 cluster id 写入，打开时换回 路号（条件与反应发送都走映射，映射缺失的规则丢弃而不是改指别的路）；Buses 顶部统一 Cluster 表（ID/Kind/Name/Bus/Frames/Source，Name/Source/Frames 优先取模型 cluster 与帧数），**Add bus** 只建 CAN/FlexRay/Ethernet 总线，描述文件在选中总线的详情里逐个 Add/Remove；ARXML 上传后扫描 cluster，按总线类型列出候选，一条总线可绑定多份 DBC/ARXML/FIBEX；窗口/nodes/blocks/sysvars/derived/web 全部是 typed v2 段，总线描述从 `clusters[].sources` 恢复；Trace 窗口的 CAN/FR 手选以 cluster id 保存，打开时换回路号 |
 | 8 清理与发布 | 清理完成（v0.31.0 已发布） | 生产解码已全部走模型（含 Reference、CLI CSV 与脚本 `set_sig/get_sig`）；描述表的旧编码/解码方法只在测试里保留（生产路径没有回退）；`FrBusCfg`/`EthBusCfg` 已删除，`fr_buses`/`eth_buses` 直接存 `Arc<FrDb>`/`Arc<EthDb>`，描述源路径进核心并写进模型 `Cluster.sources`；CAN 的 `Channel` 也已删除：通道就是模型里的 cluster，名称/位率/描述路径落在 cluster 与 network 参数上，节点角色与 DBC 内容校验和按 `ClusterId` 存在核心映射，`BusCore` 没有并行的总线配置向量，Buses 快照由模型/映射现算；SecOC 与 4.2 组级 E2E 已用真实语料验证并有 Secured 帧位级 golden，带 counter 偏移的 E2E 真实 golden 仍待补；VN1610 在 2026-10-30 首轮 8/8 通过，同日复跑 FD 配置被驱动拒绝（`XL_ERR_WRONG_PARAMETER`，经典仍通过），台架复位后需复验；物理拔插人工项除外 |
 
-验证状态（2026-10-30）：`cargo fmt --check`、`cargo clippy --all-targets`、`cargo test --all-targets`（864 通过，12 项台架/性能探针显式 ignored）、前端 71 测试与 `npm run build` 全绿；release 包 0.31.0 在空目录启动 `--web` 返回 200，第二次占用同一端口按预期报错退出（exit 1）且首个进程仍存活后被显式停止；2026-10-30 用 headless Edge 在 1280×800/1024×768、明暗两套主题复核 Trace 主视图，文档宽度与视口一致、无横向溢出。Buses 在 headless Edge + CDP 下按 1024×768 与 1280×800、明暗两套主题复核 bus-first 的 Add bus、描述列表、ARXML 多 cluster 选择器与 FR/ETH 详情，无横向溢出；2026-10-30 在 VN1610（sn=320097）双口对连上运行 `vector_bench_loops_classic_and_fd_both_ways`：首轮经典 500 kbit/s 与 FD 500/2000、500/5000、500/8000 kbit/s（64 字节、BRS）双向 8/8 通过；同日复跑时 FD 配置被驱动拒绝（`XL_ERR_WRONG_PARAMETER`，经典仍通过），台架/驱动复位后需复验；物理拔插恢复仍需人工复核。
+验证状态（2026-10-30）：`cargo fmt --check`、`cargo clippy --all-targets`、`cargo test --all-targets`（864 通过，12 项台架/性能探针显式 ignored）、前端 70 测试与 `npm run build` 全绿；release 包 0.31.0 在空目录启动 `--web` 返回 200，第二次占用同一端口按预期报错退出（exit 1）且首个进程仍存活后被显式停止；2026-10-30 用 headless Edge 在 1280×800/1024×768、明暗两套主题复核 Trace 主视图，文档宽度与视口一致、无横向溢出。Buses 在 headless Edge + CDP 下按 1024×768 与 1280×800、明暗两套主题复核 bus-first 的 Add bus、描述列表、ARXML 多 cluster 选择器与 FR/ETH 详情，无横向溢出；2026-10-30 在 VN1610（sn=320097）双口对连上运行 `vector_bench_loops_classic_and_fd_both_ways`：首轮经典 500 kbit/s 与 FD 500/2000、500/5000、500/8000 kbit/s（64 字节、BRS）双向 8/8 通过；同日复跑时 FD 配置被驱动拒绝（`XL_ERR_WRONG_PARAMETER`，经典仍通过），台架/驱动复位后需复验；物理拔插恢复仍需人工复核。
 
 剩余工作按计划顺序：重跑 VN1610 复验（硬件端口按物理路号寻址、附件跟随通道/簇已有测试锁定）；补真实多协议/SecOC/E2E/Transformation 语料与位级 golden，E2E 帧级校验与 CRC/CMAC 仍按设计保持 `Unverified`。旧运行时路径与兼容层（`Channel`/`FrBusCfg`/`EthBusCfg`）已删除；当前 ARXML 文档模型直接进核心，`SigKey` 与 Messages/Statistics 聚合都以 cluster 为身份、bus 只按映射解析；回放映射以 cluster 为目标、硬件端口仍按路号。
 

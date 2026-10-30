@@ -338,24 +338,19 @@ fn a_project_saves_schema_v2_and_reopens_the_same_cluster_ids() {
         Some(app.trace_windows.len()),
         "windows are a typed v2 section"
     );
+    assert!(value.get("config").is_none(), "there is no compat blob");
     assert!(
-        value["config"].get("trace_windows").is_none(),
-        "windows left the compat blob"
-    );
-    assert!(
-        value["traceWindows"][0]["manual_clusters"]
+        value["traceWindows"][0]["manual"]
             .as_array()
-            .is_some_and(|rows| rows
-                .iter()
-                .any(|row| row[0] == ids.can[1] && row[1] == 0x321)),
-        "window picks are saved by cluster id: {}",
+            .is_some_and(|rows| rows.iter().any(|row| row[0] == 1 && row[1] == 0x321)),
+        "window picks keep the bus index: {}",
         value["traceWindows"][0]
     );
     assert!(value["clusters"].as_array().unwrap().len() >= ids.can.len());
-    assert!(value["busMap"]["can"].is_array());
+    assert_eq!(value["clusters"][0]["id"], ids.can[0]);
     assert!(
-        value["config"].get("channels").is_none(),
-        "cluster lists are typed"
+        value.get("config").is_none(),
+        "the project has no compatibility blob"
     );
     assert!(
         value["replay"]

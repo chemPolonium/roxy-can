@@ -1543,7 +1543,7 @@ body.col-resizing {
   color: var(--muted);
 }
 
-.page-numeric {
+.page-setpoint {
   display: flex;
   width: 100%;
   height: 100%;
@@ -1559,7 +1559,7 @@ body.col-resizing {
   background: #121923;
 }
 
-.page-numeric-label {
+.page-setpoint-label {
   flex: 0 0 auto;
   overflow: hidden;
   color: var(--muted);
@@ -1569,14 +1569,14 @@ body.col-resizing {
   white-space: nowrap;
 }
 
-.page-numeric-row {
+.page-setpoint-row {
   display: flex;
   align-items: center;
   gap: 6px;
   min-width: 0;
 }
 
-.page-numeric input {
+.page-setpoint input {
   flex: 1 1 auto;
   width: 100%;
   min-width: 0;
@@ -1586,13 +1586,13 @@ body.col-resizing {
   font-variant-numeric: tabular-nums;
 }
 
-.page-numeric em {
+.page-setpoint em {
   color: var(--muted);
   font-size: 10px;
   font-style: normal;
 }
 
-.page-widget.editing .page-numeric input {
+.page-widget.editing .page-setpoint input {
   pointer-events: none;
 }
 

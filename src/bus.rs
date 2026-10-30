@@ -4518,10 +4518,8 @@ impl BusCore {
         )
     }
 
-    /// Confirms a key names a live cluster. Canonical keys arrive complete
-    /// from [`SigKey::from_text`]; legacy text is translated first by
-    /// [`Self::resolve_key_text`]. A key naming a cluster that is gone is
-    /// dropped rather than written to whichever bus happens to be zero.
+    /// Confirms a key names a live cluster. A key naming a cluster that is
+    /// gone is dropped rather than written to whichever bus happens to be zero.
     pub(crate) fn bind_key(&self, key: SigKey) -> Option<SigKey> {
         // A computed channel has no bus to resolve; it rides the core itself.
         if matches!(key, SigKey::Derived { .. }) {

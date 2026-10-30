@@ -830,7 +830,7 @@
   box-shadow: 0 10px 26px rgb(15 23 42 / 16%);
 }
 
-[data-theme="light"] .page-numeric {
+[data-theme="light"] .page-setpoint {
   border-color: #d4dbe4;
   background: #ffffff;
 }

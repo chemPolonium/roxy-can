@@ -448,7 +448,7 @@ describe("panel page", () => {
       widgets: [
         {
           id: "numeric1",
-          kind: "numeric",
+          kind: "setpoint",
           label: "Target",
           sysvar: "Bench::Setpoint",
           digits: 2,
@@ -461,7 +461,7 @@ describe("panel page", () => {
       ],
     });
     expect(page?.widgets[0]).toMatchObject({
-      kind: "numeric",
+      kind: "setpoint",
       sysvar: "Bench::Setpoint",
       digits: 2,
       step: 0.5,
@@ -473,15 +473,10 @@ describe("panel page", () => {
     const copy = duplicatePanelWidget(page!, "numeric1");
     expect(
       copy?.page.widgets.find((widget) => widget.id === copy.id),
-    ).toMatchObject({ kind: "numeric", step: 0.5 });
+    ).toMatchObject({ kind: "setpoint", step: 0.5 });
   });
 
-  it("migrates a single page into a book and manages pages", () => {
-    const legacy = defaultPanelPage();
-    const migrated = parsePanelBook(undefined, legacy);
-    expect(migrated?.pages).toHaveLength(1);
-    expect(migrated?.pages[0].name).toBe("Overview");
-
+  it("parses a book and manages pages", () => {
     const parsed = parsePanelBook({
       activeId: "p2",
       pages: [
@@ -917,7 +912,7 @@ describe("panel page", () => {
     ).toBe(true);
   });
 
-  it("carries action arguments and migrates legacy setpoints", () => {
+  it("carries action arguments and setpoint targets", () => {
     const page = parsePanelPage({
       width: 160,
       height: 90,
@@ -936,7 +931,7 @@ describe("panel page", () => {
         },
         {
           id: "n",
-          kind: "numeric",
+          kind: "setpoint",
           label: "N",
           sysvar: "Bench::X",
           digits: 1,
@@ -951,6 +946,7 @@ describe("panel page", () => {
           id: "s",
           kind: "setpoint",
           label: "Speed",
+          target: "signal",
           source: "0:256:EngineSpeed",
           digits: 0,
           step: 5,
@@ -972,7 +968,7 @@ describe("panel page", () => {
       step: 2,
     });
     expect(page?.widgets[2]).toMatchObject({
-      kind: "numeric",
+      kind: "setpoint",
       target: "signal",
       source: "0:256:EngineSpeed",
       step: 5,
@@ -981,7 +977,7 @@ describe("panel page", () => {
     expect(
       copy?.page.widgets.find((widget) => widget.id === copy.id),
     ).toMatchObject({
-      kind: "numeric",
+      kind: "setpoint",
       target: "signal",
       source: "0:256:EngineSpeed",
     });
@@ -999,39 +995,8 @@ describe("panel page", () => {
     ).toMatchObject({ target: "signal", source: "0:256:EngineTemp" });
     expect(
       PANEL_WIDGET_KINDS.map((entry) => String(entry.kind)),
-    ).not.toContain("setpoint");
-    expect(panelWidgetSpec("numeric").label).toBe("Setpoint");
-  });
-
-  it("imports legacy setpoint files as merged setpoints", () => {
-    const result = importPanelFile({
-      format: PANEL_FILE_FORMAT,
-      version: 1,
-      page: {
-        name: "Legacy",
-        width: 160,
-        height: 90,
-        widgets: [
-          {
-            kind: "setpoint",
-            label: "Speed",
-            source: "0:256:EngineSpeed",
-            digits: 1,
-            step: 1,
-            x: 0,
-            y: 0,
-            w: 18,
-            h: 6,
-          },
-        ],
-      },
-    });
-    const page = "page" in result ? result.page : null;
-    expect(page?.widgets[0]).toMatchObject({
-      kind: "numeric",
-      target: "signal",
-      source: "0:256:EngineSpeed",
-    });
+    ).toContain("setpoint");
+    expect(panelWidgetSpec("setpoint").label).toBe("Setpoint");
   });
 
   it("exports and imports page files strictly", () => {

@@ -22,7 +22,7 @@ import type {
   PanelBand,
   PanelBar,
   PanelLamp,
-  PanelNumeric,
+  PanelSetpoint,
   PanelToggle,
   PanelValue,
 } from "./panelPage";
@@ -278,9 +278,9 @@ describe("panel bindings", () => {
       "Unknown sysvar",
     );
     expect(panelToggleCapability(toggle("Bench::Ready"), view).enabled).toBe(true);
-    const numeric = (ref: string): PanelNumeric => ({
+    const numeric = (ref: string): PanelSetpoint => ({
       id: "n",
-      kind: "numeric",
+      kind: "setpoint",
       label: "N",
       target: "sysvar",
       sysvar: ref,
@@ -407,9 +407,9 @@ describe("panel bindings", () => {
   });
 
   it("gates setpoints on a writable signal and a running measurement", () => {
-    const setpoint: PanelNumeric = {
+    const setpoint: PanelSetpoint = {
       id: "s",
-      kind: "numeric",
+      kind: "setpoint",
       label: "Speed",
       target: "signal",
       sysvar: "",

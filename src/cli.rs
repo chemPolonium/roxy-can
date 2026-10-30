@@ -366,7 +366,7 @@ pub fn run(opts: &CliOpts) -> Result<String, String> {
         let file_project: crate::model::ProjectV2 =
             serde_json::from_str(&file).map_err(|e| format!("project parse failed: {e}"))?;
         app.start_virtual();
-        for generator in file_project.generators.clone().unwrap_or_default() {
+        for generator in file_project.generators.clone() {
             let crate::model::GeneratorCfg::Can {
                 cluster,
                 id,

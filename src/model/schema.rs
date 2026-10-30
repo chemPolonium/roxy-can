@@ -2,16 +2,14 @@
 //!
 //! The imported communication model is not persisted: sources, overrides and
 //! id aliases are enough to rebuild it. Workspace sections (windows, nodes,
-//! generators, triggers, sysvars, derived, the opaque `workspace`) have typed
-//! fields here; `rest` still carries older v1 keys read-only.
+//! generators, triggers, sysvars, derived, the opaque `workspace`) all have
+//! typed fields here; there is no compatibility bucket.
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::BTreeMap;
 
-use super::{
-    BusMap, ClusterId, ClusterKind, ClusterSource, ElementIds, ElementKind, FrameOverride,
-};
+use super::{ClusterId, ClusterKind, ClusterSource, ElementIds, ElementKind, FrameOverride};
 
 pub const PROJECT_FORMAT: &str = "roxy-can-project";
 pub const PROJECT_VERSION: u32 = 2;
@@ -239,9 +237,9 @@ fn default_cycle() -> u64 {
     100_000
 }
 
-/// One trigger rule with its buses named by cluster id. `kind` keeps the v1
-/// numbering (0 signal crossing … 7 derived) so the condition decoder in
-/// `Config::apply` stays the single interpreter of these rules.
+/// One trigger rule with its buses named by cluster id. `kind` is the
+/// condition code (0 signal crossing … 7 derived) interpreted by
+/// `ProjectV2::apply`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TriggerCfgV2 {
@@ -286,22 +284,14 @@ pub struct ProjectV2 {
     pub frame_overrides: Vec<FrameOverrideCfg>,
     #[serde(default)]
     pub replay: Vec<ReplayCfg>,
-    /// `None` means an older v2 file that predates this section; `Some(empty)`
-    /// is a project that deliberately has no generator entries.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub generators: Option<Vec<GeneratorCfg>>,
-    /// Same rule for trigger rows: `None` predates the section, `Some(empty)`
-    /// is a project with no rules.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub triggers: Option<Vec<TriggerCfgV2>>,
+    #[serde(default)]
+    pub generators: Vec<GeneratorCfg>,
+    #[serde(default)]
+    pub triggers: Vec<TriggerCfgV2>,
     /// Frontend workspace and observer windows, flattened so their JSON keys
     /// stay where project files already put them.
     #[serde(flatten)]
     pub settings: crate::config::ProjectSettings,
-    /// Old bus index → cluster id, kept so the frontend can rewrite its
-    /// opaque `web` workspace during the v1→v2 migration.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub bus_map: Option<BusMap>,
 }
 
 impl Default for ProjectV2 {
@@ -315,10 +305,9 @@ impl Default for ProjectV2 {
             id_aliases: Vec::new(),
             frame_overrides: Vec::new(),
             replay: Vec::new(),
-            generators: None,
-            triggers: None,
+            generators: Vec::new(),
+            triggers: Vec::new(),
             settings: Default::default(),
-            bus_map: None,
         }
     }
 }

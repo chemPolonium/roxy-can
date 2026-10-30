@@ -1,14 +1,14 @@
 import type { ScriptInfo, SignalSeries, SysVar } from "./types";
 import {
   panelFrameProblem,
-  panelNumericTarget,
+  panelSetpointTarget,
   parsePanelHex,
   parseSysVarRef,
   type PanelBand,
   type PanelBandColor,
   type PanelButton,
   type PanelLamp,
-  type PanelNumeric,
+  type PanelSetpoint,
   type PanelToggle,
   type PanelWidget,
 } from "./panelPage";
@@ -327,7 +327,7 @@ export function panelToggleCapability(
 }
 
 export function panelNumberCapability(
-  widget: PanelNumeric,
+  widget: PanelSetpoint,
   view: PanelView,
 ): PanelCapability {
   return panelToggleCapability(
@@ -350,8 +350,8 @@ export function panelWidgetCapability(
   ) {
     return panelValueCapability(widget, resolvePanelSource(widget.source, view));
   }
-  if (widget.kind === "numeric") {
-    return panelNumericTarget(widget) === "signal"
+  if (widget.kind === "setpoint") {
+    return panelSetpointTarget(widget) === "signal"
       ? panelSetpointCapability(widget.source, view, ctx)
       : panelNumberCapability(widget, view);
   }

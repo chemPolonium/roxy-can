@@ -187,7 +187,7 @@ on panel_action("Start sequence") {
 ```
 
 动作可以带一个数值参数：第二个标识符是处理器里的局部变量，接收控件发来的值。
-按钮用属性栏的 **Argument** 发送固定值（缺省按 0 发送），Numeric 控件提交时发送输入值；
+按钮用属性栏的 **Argument** 发送固定值（缺省按 0 发送），Setpoint 控件提交时发送输入值；
 只有直接调用 `run_panel_action` 且不带 `value` 时参数才是 `nil`（用 `defined(value)` 判断）。
 
 ```c
@@ -201,7 +201,7 @@ on panel_action("Set speed", value) {
 ```
 
 面板按钮编辑时把 Action 选为 **Script action**，再从下拉里选动作名（也可以手写）；
-Numeric 控件的 **Script action** 字段会在写入 SysVar 之后再触发同名动作。
+Setpoint 控件的 **Script action** 字段会在写入后再触发同名动作。
 
 ### on message \<id\>
 

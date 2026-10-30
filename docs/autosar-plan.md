@@ -11,8 +11,8 @@ CAN/FlexRay/Ethernet 的首选描述来源，DBC/FIBEX 只作为导入适配器�
 > 实施状态：第 0、1 阶段已完成；第 2、3 阶段已落地垂直切片，第 4 阶段的
 > CAN/FR/ETH 订阅、CAN/FR 触发器与脚本节点输入已切到统一模型，第 5 阶段的
 > 三协议 Panel/Generator/脚本发送已切，第 6 阶段 mux/container/secured payload
-> 已进计划，第 7 阶段已实现 v1 总线迁移、`.rxproj` schema v2 保存与 ClusterId
-> 恢复，generator 与 trigger 行也以 cluster id 存入 v2；ARXML 导入把三协议的统一
+> 已进计划，第 7 阶段已实现 `.rxproj` schema v2 保存与 ClusterId 恢复，
+> generator 与 trigger 行也以 cluster id 存入 v2；ARXML 绑定把三协议的统一
 > 模型直接送进核心（工程重开时按恢复后的 id 重新绑定）。Messages/Statistics 的帧
 > 名与信号数、SignalPicker catalog、Buses 帧数都优先取模型；Container 按头 ID/
 > 长度门控，identity/linear Transformation 执行，SecOC 与 E2E 做结构校验并明确
@@ -41,7 +41,7 @@ CAN/FlexRay/Ethernet 的首选描述来源，DBC/FIBEX 只作为导入适配器�
 - ECU/Port 方向、VLAN/MAC、帧触发（CAN ID / FR slot-cycle / ETH flow）。
 - 现有能力：Trace、Messages、Statistics、Signals、Data、Monitor、State、
   Triggers、脚本、Panel、Generator、录制/回放、导出、硬件通道。
-- 工程保存/恢复、旧工程一次性迁移。
+- 工程保存/恢复（只读写当前 schema，无迁移层）。
 
 ### 高级特性（按切片确认深度）
 
