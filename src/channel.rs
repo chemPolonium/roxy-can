@@ -289,6 +289,7 @@ impl App {
     /// schedule -- plausible wrong names, the worst possible failure here.
     /// Loads one Ethernet AUTOSAR matrix. A `None` bus picks the first free
     /// Ethernet index; cancelling the picker adds nothing.
+    #[cfg(test)]
     pub fn load_eth_description(&mut self, path: &str, bus: Option<u8>) -> Option<u8> {
         self.load_eth_description_inner(path, bus, None)
     }

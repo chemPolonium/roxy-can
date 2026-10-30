@@ -4092,9 +4092,6 @@ export function App() {
             void run({ type: "load_fr_description", path, bus: null })
           }
           onRemoveFr={(bus) => void run({ type: "remove_fr_bus", bus })}
-          onLoadEth={(path) =>
-            void run({ type: "load_eth_description", path, bus: null })
-          }
           onRemoveEth={(bus) => void run({ type: "remove_eth_bus", bus })}
           onAttach={attachHardware}
           onDetach={detachHardware}

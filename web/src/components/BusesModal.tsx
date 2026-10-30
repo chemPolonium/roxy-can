@@ -31,7 +31,6 @@ interface Props {
   onSetNodeRole: (bus: number, node: string, simulated: boolean) => void;
   onLoadFr: (path: string) => void;
   onRemoveFr: (bus: number) => void;
-  onLoadEth: (path: string) => void;
   onRemoveEth: (bus: number) => void;
   onAttach: (bus: number, driver: string, index: number) => void;
   onDetach: (bus: number) => void;
@@ -410,7 +409,6 @@ export function BusesModal({
   onSetNodeRole,
   onLoadFr,
   onRemoveFr,
-  onLoadEth,
   onRemoveEth,
   onAttach,
   onDetach,
@@ -584,6 +582,17 @@ export function BusesModal({
               </button>
               {addOpen && (
                 <div class="add-cluster-menu" role="menu" aria-label="Add cluster">
+                  <FilePick
+                    menuItem
+                    class="add-cluster-item"
+                    label="ARXML (all clusters)…"
+                    accept=".arxml"
+                    onError={onError}
+                    onPick={(path) => {
+                      setAddOpen(false);
+                      onImportArxml(path);
+                    }}
+                  />
                   <button
                     type="button"
                     role="menuitem"
@@ -597,34 +606,12 @@ export function BusesModal({
                   <FilePick
                     menuItem
                     class="add-cluster-item"
-                    label="ARXML matrix…"
-                    accept=".arxml"
-                    onError={onError}
-                    onPick={(path) => {
-                      setAddOpen(false);
-                      onImportArxml(path);
-                    }}
-                  />
-                  <FilePick
-                    menuItem
-                    class="add-cluster-item"
                     label="FlexRay FIBEX…"
                     accept=".xml,.arxml,.fibex"
                     onError={onError}
                     onPick={(path) => {
                       setAddOpen(false);
                       onLoadFr(path);
-                    }}
-                  />
-                  <FilePick
-                    menuItem
-                    class="add-cluster-item"
-                    label="Ethernet ARXML…"
-                    accept=".arxml"
-                    onError={onError}
-                    onPick={(path) => {
-                      setAddOpen(false);
-                      onLoadEth(path);
                     }}
                   />
                 </div>

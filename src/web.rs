@@ -1822,10 +1822,6 @@ enum WebCommand {
     RemoveFrBus {
         bus: u8,
     },
-    LoadEthDescription {
-        path: String,
-        bus: Option<u8>,
-    },
     RemoveEthBus {
         bus: u8,
     },
@@ -3042,12 +3038,6 @@ fn app_loop(
                         app.stop();
                     }
                     app.remove_fr_bus(bus);
-                }
-                WebCommand::LoadEthDescription { path, bus } => {
-                    if app.snap.measuring {
-                        app.stop();
-                    }
-                    app.load_eth_description(&path, bus);
                 }
                 WebCommand::RemoveEthBus { bus } => {
                     if app.snap.measuring {
