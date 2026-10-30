@@ -2682,7 +2682,7 @@ fn app_loop(
                             }
                         }
                         "ethernet" | "eth" => {
-                            let source = crate::channel::ethernet_source(&path, cluster);
+                            let source = crate::channel::description_source(&path, cluster);
                             if let Err(e) = app.add_eth_description(bus, source) {
                                 app.status = format!("ETH{bus}: {e}");
                             }
@@ -4658,7 +4658,6 @@ struct WebSeriesPoint {
 struct WebFrBus {
     bus: u8,
     name: String,
-    path: String,
     cluster: String,
     descriptions: Vec<WebDescription>,
     frames: usize,
@@ -4671,7 +4670,6 @@ struct WebFrBus {
 struct WebEthBus {
     bus: u8,
     name: String,
-    path: String,
     descriptions: Vec<WebDescription>,
     clusters: usize,
     frames: usize,
@@ -4801,9 +4799,8 @@ fn replay_rows(
 struct WebBus {
     index: u8,
     name: String,
-    dbc_paths: Vec<String>,
     /// Every description bound to the bus, DBC and ARXML alike, in binding
-    /// order. `dbc_paths` stays for the existing cell.
+    /// order.
     descriptions: Vec<WebDescription>,
     bitrate_kbps: u32,
     fd_data_kbps: u32,
@@ -5140,7 +5137,6 @@ struct WebChannel {
     name: String,
     bitrate_kbps: u32,
     fd_data_kbps: u32,
-    database: bool,
 }
 
 #[derive(Clone, Default, Serialize)]
@@ -5270,7 +5266,6 @@ fn build_state(app: &App, series: &VecDeque<WebSeriesPoint>, fps: f64) -> WebSta
         .map(|(index, ch)| WebBus {
             index: index as u8,
             name: ch.name.clone(),
-            dbc_paths: ch.dbc_paths.clone(),
             descriptions: ch
                 .dbc_paths
                 .iter()
@@ -5610,13 +5605,7 @@ fn build_state(app: &App, series: &VecDeque<WebSeriesPoint>, fps: f64) -> WebSta
             WebFrBus {
                 bus: *bus,
                 name: app.fr_bus_name(*bus),
-                path: app.fr_description_path(*bus).unwrap_or_default(),
-                cluster: app
-                    .fr_clusters
-                    .get(bus)
-                    .cloned()
-                    .or_else(|| model.map(|cluster| cluster.name.clone()))
-                    .unwrap_or_else(|| cfg.params.name.clone()),
+                cluster: app.fr_cluster_label(*bus),
                 descriptions: app
                     .fr_sources
                     .get(bus)
@@ -5644,7 +5633,6 @@ fn build_state(app: &App, series: &VecDeque<WebSeriesPoint>, fps: f64) -> WebSta
         .map(|(bus, cfg)| WebEthBus {
             bus: *bus,
             name: app.eth_bus_label(*bus),
-            path: app.eth_description_path(*bus).unwrap_or_default(),
             descriptions: app
                 .eth_sources
                 .get(bus)
@@ -5679,15 +5667,11 @@ fn build_state(app: &App, series: &VecDeque<WebSeriesPoint>, fps: f64) -> WebSta
             kind: "can".to_string(),
             name: bus.name.clone(),
             bus: bus.index,
-            source: app
-                .model_comms
-                .get(index)
-                .and_then(|slot| slot.as_ref())
-                .and_then(|comm| comm.clusters.values().next())
-                .and_then(|cluster| cluster.sources.first())
-                .and_then(|source| source.path())
-                .map(str::to_string)
-                .unwrap_or_else(|| bus.dbc_paths.first().cloned().unwrap_or_default()),
+            source: bus
+                .descriptions
+                .first()
+                .map(|description| description.path.clone())
+                .unwrap_or_default(),
             frames: {
                 let model = snap
                     .model_frames
@@ -5711,7 +5695,11 @@ fn build_state(app: &App, series: &VecDeque<WebSeriesPoint>, fps: f64) -> WebSta
             kind: "flexray".to_string(),
             name: bus.name.clone(),
             bus: bus.bus,
-            source: bus.path.clone(),
+            source: bus
+                .descriptions
+                .first()
+                .map(|description| description.path.clone())
+                .unwrap_or_default(),
             frames: {
                 let model = snap
                     .fr_model_frames
@@ -5728,7 +5716,11 @@ fn build_state(app: &App, series: &VecDeque<WebSeriesPoint>, fps: f64) -> WebSta
             kind: "ethernet".to_string(),
             name: bus.name.clone(),
             bus: bus.bus,
-            source: bus.path.clone(),
+            source: bus
+                .descriptions
+                .first()
+                .map(|description| description.path.clone())
+                .unwrap_or_default(),
             frames: app
                 .eth_models
                 .get(&bus.bus)
@@ -6011,7 +6003,6 @@ fn build_state(app: &App, series: &VecDeque<WebSeriesPoint>, fps: f64) -> WebSta
             name: ch.name.clone(),
             bitrate_kbps: ch.bitrate_kbps,
             fd_data_kbps: ch.fd_data_kbps,
-            database: ch.dbc.is_some(),
         })
         .collect();
     let bus_name = |bus: u8| {
@@ -7188,7 +7179,12 @@ mod tests {
             .find(|bus| bus.bus == eth)
             .expect("Ethernet bus listed");
         assert!(!eth_bus.name.is_empty());
-        assert!(eth_bus.path.contains("PowerTrain"));
+        assert!(
+            eth_bus
+                .descriptions
+                .first()
+                .is_some_and(|description| description.path.contains("PowerTrain"))
+        );
         assert!(
             state
                 .clusters
@@ -7667,12 +7663,9 @@ mod tests {
         let state = build_state(&app, &VecDeque::new(), 0.0);
         assert_eq!(state.buses.len(), 2);
         assert_eq!(state.buses[0].name, "CAN1");
-        assert!(
-            state.buses[0]
-                .dbc_paths
-                .iter()
-                .any(|path| path.contains("sample.dbc"))
-        );
+        assert!(state.buses[0].descriptions.iter().any(|description| {
+            description.kind == "dbc" && description.path.contains("sample.dbc")
+        }));
         assert!(state.buses.iter().all(|bus| bus.attached.is_none()));
         assert!(parse_driver("Vector").is_some());
         assert!(parse_driver("Kvaser").is_some());

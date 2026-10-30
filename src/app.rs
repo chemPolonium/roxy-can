@@ -264,10 +264,6 @@ pub struct App {
     pub fr_sources: std::collections::BTreeMap<u8, Vec<crate::model::ClusterSource>>,
     /// Ethernet AUTOSAR matrices bound to a bus, in binding order.
     pub eth_sources: std::collections::BTreeMap<u8, Vec<crate::model::ClusterSource>>,
-    /// The first cluster name of a FlexRay bus, kept for labels and attach.
-    pub fr_clusters: std::collections::BTreeMap<u8, String>,
-    /// The same for Ethernet buses.
-    pub eth_clusters: std::collections::BTreeMap<u8, String>,
     /// The last uploaded ARXML's cluster list, waiting for the user to pick
     /// which one belongs to the bus they were binding.
     pub arxml_scan: Option<crate::channel::ArxmlScan>,
@@ -455,8 +451,6 @@ impl App {
             can_arxml: Default::default(),
             fr_sources: Default::default(),
             eth_sources: Default::default(),
-            fr_clusters: Default::default(),
-            eth_clusters: Default::default(),
             arxml_scan: None,
             eth_length_includes_header: false,
             record_filter_text: String::new(),

@@ -79,13 +79,6 @@ pub(crate) fn description_source(path: &str, cluster: Option<&str>) -> crate::mo
     }
 }
 
-pub(crate) fn ethernet_source(path: &str, cluster: Option<&str>) -> crate::model::ClusterSource {
-    crate::model::ClusterSource::Arxml {
-        path: path.to_string(),
-        cluster: cluster.unwrap_or_default().to_string(),
-    }
-}
-
 fn file_label(path: &str) -> String {
     std::path::Path::new(path)
         .file_name()
@@ -100,11 +93,6 @@ fn source_label(source: &crate::model::ClusterSource) -> String {
         }
         _ => source.path().unwrap_or("manual").to_string(),
     }
-}
-
-fn list_len_label(list: Option<&Vec<crate::model::ClusterSource>>) -> String {
-    let count = list.map_or(0, Vec::len);
-    format!("{count} description{}", if count == 1 { "" } else { "s" })
 }
 
 /// The first named cluster among a bus's descriptions, used as its label.
@@ -360,7 +348,7 @@ impl App {
         bus: Option<u8>,
         cluster: Option<&str>,
     ) -> Option<u8> {
-        let source = ethernet_source(path, cluster);
+        let source = description_source(path, cluster);
         let bus = match bus {
             Some(bus) => bus,
             None => match self.next_eth_bus() {
@@ -419,18 +407,18 @@ impl App {
         self.report_merge_warnings(&format!("ETH{bus}"), warnings);
         self.eth_sources.entry(bus).or_default().push(source);
         self.eth_buses.insert(bus, std::sync::Arc::new(db));
-        self.eth_clusters.insert(bus, label.clone());
         self.push_eth_db_to_core();
+        let count = self.eth_sources.get(&bus).map_or(0, Vec::len);
         self.status = format!(
-            "ETH{bus}: bound `{label}` ({vlans} VLANs, {frames} frames) from {}",
-            list_len_label(self.eth_sources.get(&bus))
+            "ETH{bus}: bound `{label}` ({vlans} VLANs, {frames} frames) from {count} description{}",
+            if count == 1 { "" } else { "s" }
         );
         Ok(bus)
     }
 
     /// Drops one Ethernet description and rebuilds the bus from the rest.
     pub fn remove_eth_description(&mut self, bus: u8, path: &str, cluster: &str) {
-        let source = ethernet_source(path, (!cluster.is_empty()).then_some(cluster));
+        let source = description_source(path, (!cluster.is_empty()).then_some(cluster));
         let Some(list) = self.eth_sources.get_mut(&bus) else {
             return;
         };
@@ -442,7 +430,6 @@ impl App {
         if list.is_empty() {
             self.eth_buses
                 .insert(bus, std::sync::Arc::new(crate::eth::db::EthDb::default()));
-            self.eth_clusters.remove(&bus);
             self.push_eth_db_to_core();
             self.status = format!("ETH{bus}: removed {}", source_label(&source));
             return;
@@ -470,12 +457,6 @@ impl App {
         self.report_merge_warnings(&format!("ETH{bus}"), warnings);
         match merged {
             Some(db) => {
-                let label = db
-                    .clusters
-                    .first()
-                    .map(|c| c.name.clone())
-                    .unwrap_or_else(|| format!("ETH{bus}"));
-                self.eth_clusters.insert(bus, label);
                 self.eth_buses.insert(bus, std::sync::Arc::new(db));
                 self.push_eth_db_to_core();
             }
@@ -770,7 +751,6 @@ impl App {
     pub fn remove_eth_bus(&mut self, bus: u8) {
         self.eth_sources.remove(&bus);
         if self.eth_buses.remove(&bus).is_some() {
-            self.eth_clusters.remove(&bus);
             self.push_eth_db_to_core();
             self.status = format!("Removed Ethernet bus ETH{bus}");
         }
@@ -802,7 +782,7 @@ impl App {
                             .eth_description_path(*bus)
                             .or_else(|| extra.get(bus).cloned())
                             .unwrap_or_default();
-                        let cluster = self.eth_clusters.get(bus).cloned().unwrap_or_default();
+                        let cluster = self.eth_cluster_label(*bus);
                         if path.trim().is_empty() {
                             vec![crate::model::ClusterSource::Manual]
                         } else {
@@ -826,6 +806,37 @@ impl App {
 
     pub fn eth_bus_label(&self, bus: u8) -> String {
         format!("ETH{bus}")
+    }
+
+    /// The cluster name a FlexRay bus's descriptions give it: the first named
+    /// ARXML cluster, else the merged schedule's own name.
+    pub fn fr_cluster_label(&self, bus: u8) -> String {
+        self.fr_sources
+            .get(&bus)
+            .and_then(|sources| description_cluster(sources))
+            .filter(|name| !name.is_empty())
+            .or_else(|| {
+                self.fr_buses
+                    .get(&bus)
+                    .map(|db| db.params.name.clone())
+                    .filter(|name| !name.is_empty())
+            })
+            .unwrap_or_default()
+    }
+
+    /// The same label rule for an Ethernet bus.
+    pub fn eth_cluster_label(&self, bus: u8) -> String {
+        self.eth_sources
+            .get(&bus)
+            .and_then(|sources| description_cluster(sources))
+            .filter(|name| !name.is_empty())
+            .or_else(|| {
+                self.eth_buses
+                    .get(&bus)
+                    .and_then(|db| db.clusters.first())
+                    .map(|cluster| cluster.name.clone())
+            })
+            .unwrap_or_default()
     }
 
     pub fn eth_db(&self, bus: u8) -> Option<&crate::eth::db::EthDb> {
@@ -933,23 +944,9 @@ impl App {
             }
             None => parsed,
         };
-        let cluster_name = match &source {
-            crate::model::ClusterSource::Arxml { cluster, .. } if !cluster.is_empty() => {
-                Some(cluster.clone())
-            }
-            _ => (!db.params.name.is_empty()).then(|| db.params.name.clone()),
-        };
         self.report_merge_warnings(&format!("FR{bus}"), warnings);
         self.fr_sources.entry(bus).or_default().push(source);
         self.fr_buses.insert(bus, std::sync::Arc::new(db));
-        match cluster_name {
-            Some(name) => {
-                self.fr_clusters.insert(bus, name);
-            }
-            None => {
-                self.fr_clusters.remove(&bus);
-            }
-        }
         self.push_fr_db_to_core();
         let count = self.fr_sources.get(&bus).map_or(0, Vec::len);
         self.status = format!(
@@ -981,7 +978,6 @@ impl App {
         if list.is_empty() {
             self.fr_buses
                 .insert(bus, std::sync::Arc::new(crate::fr_db::FrDb::default()));
-            self.fr_clusters.remove(&bus);
             self.push_fr_db_to_core();
             self.status = format!(
                 "{}: removed {}",
@@ -1027,17 +1023,6 @@ impl App {
         self.report_merge_warnings(&format!("FR{bus}"), warnings);
         match merged {
             Some(db) if !failed => {
-                let label = description_cluster(&sources)
-                    .filter(|name| !name.is_empty())
-                    .or_else(|| (!db.params.name.is_empty()).then(|| db.params.name.clone()));
-                match label {
-                    Some(name) => {
-                        self.fr_clusters.insert(bus, name);
-                    }
-                    None => {
-                        self.fr_clusters.remove(&bus);
-                    }
-                }
                 self.fr_buses.insert(bus, std::sync::Arc::new(db));
                 self.push_fr_db_to_core();
             }
@@ -1084,10 +1069,8 @@ impl App {
                         if path.trim().is_empty() {
                             vec![crate::model::ClusterSource::Manual]
                         } else {
-                            vec![description_source(
-                                &path,
-                                self.fr_clusters.get(bus).map(String::as_str),
-                            )]
+                            let cluster = self.fr_cluster_label(*bus);
+                            vec![description_source(&path, Some(&cluster))]
                         }
                     });
                 (*bus, list)
@@ -1131,7 +1114,6 @@ impl App {
             .map(crate::model::ClusterId);
         self.fr_buses.remove(&bus);
         self.fr_sources.remove(&bus);
-        self.fr_clusters.remove(&bus);
         self.fr_names.remove(&bus);
         // The picker's remembered port goes with the row: it echoes a choice
         // about a 路 that no longer exists, and a later 路 on the freed index

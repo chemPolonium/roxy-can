@@ -923,7 +923,7 @@ impl Config {
                         .fr_description_path(*bus)
                         .map(|path| rel(&path))
                         .unwrap_or_default(),
-                    cluster: app.fr_clusters.get(bus).cloned().unwrap_or_default(),
+                    cluster: app.fr_cluster_label(*bus),
                 });
             }
         }
@@ -949,7 +949,7 @@ impl Config {
                         .eth_description_path(*bus)
                         .map(|path| rel(&path))
                         .unwrap_or_default(),
-                    cluster: app.eth_clusters.get(bus).cloned().unwrap_or_default(),
+                    cluster: app.eth_cluster_label(*bus),
                 });
             }
         }
@@ -1354,8 +1354,6 @@ impl Config {
         app.can_arxml.clear();
         app.fr_sources.clear();
         app.eth_sources.clear();
-        app.fr_clusters.clear();
-        app.eth_clusters.clear();
 
         if !self.channels.is_empty() {
             // Grow or shrink the fresh app's two default buses to the

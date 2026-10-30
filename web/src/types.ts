@@ -146,7 +146,6 @@ export interface ArxmlScan {
 export interface FrBus {
   bus: number;
   name: string;
-  path: string;
   cluster: string;
   descriptions: BusDescription[];
   frames: number;
@@ -157,7 +156,6 @@ export interface FrBus {
 export interface EthBus {
   bus: number;
   name: string;
-  path: string;
   descriptions: BusDescription[];
   clusters: number;
   frames: number;
@@ -181,7 +179,6 @@ export interface BusNode {
 export interface Bus {
   index: number;
   name: string;
-  dbcPaths: string[];
   descriptions: BusDescription[];
   bitrateKbps: number;
   fdDataKbps: number;
@@ -505,7 +502,6 @@ export interface Channel {
   name: string;
   bitrateKbps: number;
   fdDataKbps: number;
-  database: boolean;
 }
 
 export interface Frame {

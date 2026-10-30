@@ -517,7 +517,11 @@ function BusGroup({
         <button
           type="button"
           class="mini"
-          disabled={bus.dbcPaths.length === 0}
+          disabled={
+            !bus.descriptions.some(
+              (description) => description.kind === "dbc" && description.path,
+            )
+          }
           title="Set every DBC node on this bus to Simulated; entries still need On to transmit"
           onClick={() => onSimulate(bus.index)}
         >

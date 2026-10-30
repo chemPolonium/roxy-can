@@ -699,12 +699,12 @@ fn a_second_ethernet_matrix_joins_the_same_bus() {
     let bus = app.add_eth_bus().expect("an Ethernet bus index");
     app.add_eth_description(
         bus,
-        crate::channel::ethernet_source(&first.to_string_lossy(), Some("EthCluster")),
+        crate::channel::description_source(&first.to_string_lossy(), Some("EthCluster")),
     )
     .unwrap();
     app.add_eth_description(
         bus,
-        crate::channel::ethernet_source(&second.to_string_lossy(), Some("EthCluster2")),
+        crate::channel::description_source(&second.to_string_lossy(), Some("EthCluster2")),
     )
     .unwrap();
     app.settle();
