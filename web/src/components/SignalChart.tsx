@@ -13,7 +13,7 @@ const AXIS_H = 18;
 /// A thin status strip above the lanes keeps LIVE/HOLD off the curves.
 const TOP = 14;
 /// Right margin holding the per-lane value ticks; overlay has no value axis.
-const Y_AXIS_W = 48;
+const Y_AXIS_W = 52;
 
 /// A split pane keeps its width: only reserve the axis margin when the lanes
 /// are tall enough to carry readable labels.
@@ -266,6 +266,56 @@ function axisText(value: number): string {
   return valueText(value);
 }
 
+/// Round ticks to 1/2/2.5/5 steps so a live auto range produces stable,
+/// readable labels instead of the raw padded extremes.
+export function niceTicks(
+  low: number,
+  high: number,
+  maxTicks: number,
+): number[] {
+  const span = high - low;
+  if (!(span > 0) || !Number.isFinite(span)) return [];
+  const rough = span / Math.max(1, maxTicks - 1);
+  const base = 10 ** Math.floor(Math.log10(rough));
+  let best: number[] = [];
+  let bestScore = Number.POSITIVE_INFINITY;
+  for (const mult of [1, 2, 2.5, 5]) {
+    const step = base * mult;
+    const first = Math.ceil(low / step - 1e-9) * step;
+    const ticks: number[] = [];
+    for (let v = first; v <= high + step * 1e-9; v += step) {
+      ticks.push(Number(v.toFixed(10)));
+      if (ticks.length > maxTicks + 2) break;
+    }
+    if (ticks.length === 0) continue;
+    // Overshooting the label budget overlaps the lane; undershooting merely
+    // shows fewer ticks, so treat the former as the worse outcome.
+    const score =
+      ticks.length > maxTicks
+        ? 100 + ticks.length - maxTicks
+        : maxTicks - ticks.length;
+    if (score < bestScore) {
+      best = ticks;
+      bestScore = score;
+    }
+  }
+  return best.length >= 2 ? best : [low, high];
+}
+
+/// Shorten a label to fit the gutter; the full name still shows on hover.
+export function fitText(
+  ctx: CanvasRenderingContext2D,
+  text: string,
+  maxWidth: number,
+): string {
+  if (ctx.measureText(text).width <= maxWidth) return text;
+  let cut = text.length;
+  while (cut > 0 && ctx.measureText(`${text.slice(0, cut)}…`).width > maxWidth) {
+    cut -= 1;
+  }
+  return cut > 0 ? `${text.slice(0, cut)}…` : "…";
+}
+
 /// Stacked signal lanes on one canvas. Curves are min/max decimated to the
 /// pixel columns, so a 12k-point series costs one vertical span per column
 /// instead of one line segment per sample.
@@ -336,6 +386,11 @@ export function SignalChart({
     null,
   );
   const [hoverCursorId, setHoverCursorId] = useState<number | null>(null);
+  const [nameTip, setNameTip] = useState<{
+    x: number;
+    y: number;
+    text: string;
+  } | null>(null);
   const [overlayHidden, setOverlayHidden] = useState<Set<string>>(new Set());
   const [laneMenu, setLaneMenu] = useState<{
     x: number;
@@ -345,6 +400,7 @@ export function SignalChart({
   const cursorDragRef = useRef<number | null>(null);
   const binCacheRef = useRef(new Map<string, BinCache>());
   const yMemoryRef = useRef(new Map<string, YMemory>());
+  const truncatedRef = useRef(new Set<string>());
   const timeBounds =
     series.length > 0 ? bounds(series) : (readRange ?? bounds(series));
   const liveEnd = view.endS ?? timeBounds.last;
@@ -475,6 +531,7 @@ export function SignalChart({
       if (!ctx) return;
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       ctx.clearRect(0, 0, width, height);
+      truncatedRef.current = new Set<string>();
 
       if (series.length === 0 && !hasReadout) {
         binCacheRef.current.clear();
@@ -664,8 +721,10 @@ export function SignalChart({
         ctx.fillRect(4, top + 4, 3, Math.max(8, laneH - 8));
         ctx.fillStyle = colors.signalName;
         ctx.font = `${compactLane ? 9 : 10}px 'Segoe UI', sans-serif`;
+        const nameText = fitText(ctx, signal.name, GUTTER - 17);
+        if (nameText !== signal.name) truncatedRef.current.add(signal.key);
         ctx.fillText(
-          signal.name,
+          nameText,
           13,
           compactLane ? top + laneH / 2 + 3 : top + 13,
         );
@@ -771,43 +830,49 @@ export function SignalChart({
         const y = (value: number) =>
           plotTop + plotH - ((value - low) / (high - low)) * plotH;
 
-        ctx.strokeStyle = colors.signalMidLine;
-        ctx.beginPath();
-        ctx.moveTo(GUTTER, plotTop + plotH / 2 + 0.5);
-        ctx.lineTo(GUTTER + plotW, plotTop + plotH / 2 + 0.5);
-        ctx.stroke();
-
-        // Value ticks live in the right margin so they never cross the curve.
-        // High and low always show; the middle tick needs a tall lane to keep
-        // the labels apart, and a heavily split pane drops the axis entirely
-        // rather than stacking unreadable numbers. Taller lanes pull the edge
-        // labels inward so neighbouring lanes stay distinguishable.
+        // Nice ticks plus faint horizontal rules give a stable scale; the
+        // zero line stands out for bipolar signals. A heavily split pane drops
+        // the axis entirely rather than stacking unreadable numbers.
         const axisRight = GUTTER + plotW;
-        const inset = clamp((plotH - 16) * 0.25, 0, 6);
-        const ticks: { y: number; label: number; value: number }[] = [];
-        if (plotH >= 16) {
-          ticks.push({ y: plotTop, label: plotTop + 3 + inset, value: high });
-          ticks.push({
-            y: plotTop + plotH,
-            label: plotTop + plotH + 3 - inset,
-            value: low,
-          });
-          if (plotH >= 30) {
-            const y = plotTop + plotH / 2;
-            ticks.push({ y, label: y + 3, value: (low + high) / 2 });
+        const maxTicks =
+          plotH >= 120 ? 6 : plotH >= 72 ? 5 : plotH >= 28 ? 3 : 2;
+        const ticks = plotH >= 16 ? niceTicks(low, high, maxTicks) : [];
+
+        if (ticks.length > 0) {
+          ctx.strokeStyle = colors.signalTimeGrid;
+          ctx.beginPath();
+          for (const value of ticks) {
+            const gy = y(value) + 0.5;
+            ctx.moveTo(GUTTER, gy);
+            ctx.lineTo(axisRight, gy);
           }
-        }
-        ctx.strokeStyle = colors.signalMidLine;
-        ctx.beginPath();
-        for (const tick of ticks) {
-          ctx.moveTo(axisRight, tick.y + 0.5);
-          ctx.lineTo(axisRight + 4, tick.y + 0.5);
-        }
-        ctx.stroke();
-        ctx.fillStyle = colors.signalAxisLabel;
-        ctx.font = "9px 'Cascadia Mono', Consolas, monospace";
-        for (const tick of ticks) {
-          ctx.fillText(axisText(tick.value), axisRight + 7, tick.label);
+          ctx.stroke();
+
+          if (low < 0 && high > 0) {
+            const gy = y(0) + 0.5;
+            ctx.strokeStyle = colors.signalMidLine;
+            ctx.beginPath();
+            ctx.moveTo(GUTTER, gy);
+            ctx.lineTo(axisRight, gy);
+            ctx.stroke();
+          }
+
+          ctx.strokeStyle = colors.signalMidLine;
+          ctx.beginPath();
+          for (const value of ticks) {
+            const gy = y(value) + 0.5;
+            ctx.moveTo(axisRight, gy);
+            ctx.lineTo(axisRight + 4, gy);
+          }
+          ctx.stroke();
+
+          ctx.fillStyle = colors.signalMeta;
+          ctx.font = "10px 'Cascadia Mono', Consolas, monospace";
+          ctx.textAlign = "right";
+          for (const value of ticks) {
+            ctx.fillText(axisText(value), width - 8, y(value) + 3.5);
+          }
+          ctx.textAlign = "left";
         }
 
         if (raw) {
@@ -936,9 +1001,9 @@ export function SignalChart({
         }
       }
 
-      // Shared time axis.
+      // Shared time axis. The edge labels tuck inward so a narrow pane or a
+      // shorter right margin never clips them.
       ctx.font = "9px 'Cascadia Mono', Consolas, monospace";
-      ctx.textAlign = "center";
       for (let i = 0; i <= 4; i += 1) {
         const frac = i / 4;
         const x = GUTTER + plotW * frac;
@@ -953,6 +1018,7 @@ export function SignalChart({
           Math.abs(seconds) >= 10
             ? `${seconds.toFixed(0)}s`
             : `${seconds.toFixed(1)}s`;
+        ctx.textAlign = i === 0 ? "left" : i === 4 ? "right" : "center";
         ctx.fillText(label, x, height - 5);
       }
 
@@ -1149,6 +1215,7 @@ export function SignalChart({
         }}
         onPointerDown={(event) => {
           if (event.button !== 0) return;
+          setNameTip(null);
           const cursor = cursorAt(event.clientX, event.clientY);
           if (cursor !== null) {
             setHoverCursorId(cursor);
@@ -1213,6 +1280,33 @@ export function SignalChart({
           if (!drag) {
             const over = cursorAt(event.clientX, event.clientY);
             if (over !== hoverCursorId) setHoverCursorId(over);
+            const rect = event.currentTarget.getBoundingClientRect();
+            const lane =
+              over === null && !overlay && event.clientX - rect.left < GUTTER
+                ? laneAt(event.clientY)
+                : null;
+            const signal = lane === null ? undefined : series[lane];
+            const tip =
+              signal && truncatedRef.current.has(signal.key)
+                ? {
+                    x: event.clientX - rect.left + 12,
+                    y: event.clientY - rect.top - 8,
+                    text: signal.name,
+                  }
+                : null;
+            setNameTip((old) => {
+              if (!old && !tip) return old;
+              if (
+                old &&
+                tip &&
+                old.text === tip.text &&
+                Math.abs(old.x - tip.x) < 1 &&
+                Math.abs(old.y - tip.y) < 1
+              ) {
+                return old;
+              }
+              return tip;
+            });
             return;
           }
           setHoverCursorId(null);
@@ -1249,6 +1343,7 @@ export function SignalChart({
           setReorder(null);
           dragRef.current = null;
           setHoverCursorId(null);
+          setNameTip(null);
         }}
         onPointerLeave={() => {
           if (
@@ -1257,6 +1352,7 @@ export function SignalChart({
             dragRef.current === null
           ) {
             setHoverCursorId(null);
+            setNameTip(null);
           }
         }}
         onDblClick={(event) => {
@@ -1278,6 +1374,15 @@ export function SignalChart({
           });
         }}
       />
+      {nameTip && (
+        <div
+          class="signal-name-tip"
+          role="tooltip"
+          style={{ left: `${nameTip.x}px`, top: `${nameTip.y}px` }}
+        >
+          {nameTip.text}
+        </div>
+      )}
       <div class="chart-cursor-tools">
         <button
           type="button"

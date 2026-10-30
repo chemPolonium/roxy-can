@@ -1,0 +1,36 @@
+import { describe, expect, it } from "vitest";
+import { fitText, niceTicks } from "./components/SignalChart";
+
+describe("value axis ticks", () => {
+  it("rounds to readable steps inside the range", () => {
+    expect(niceTicks(180, 7620, 3)).toEqual([2000, 4000, 6000]);
+    expect(niceTicks(-90, 110, 3)).toEqual([0, 100]);
+    expect(niceTicks(-10, 110, 5)).toEqual([0, 25, 50, 75, 100]);
+  });
+
+  it("keeps the zero line when the range is bipolar", () => {
+    expect(niceTicks(-762, 8382, 3)).toContain(0);
+  });
+
+  it("falls back to the padded bounds when no step yields two ticks", () => {
+    expect(niceTicks(180, 7620, 2)).toEqual([180, 7620]);
+  });
+
+  it("returns nothing for a flat range", () => {
+    expect(niceTicks(5, 5, 3)).toEqual([]);
+  });
+});
+
+describe("gutter labels", () => {
+  const ctx = {
+    measureText: (text: string) => ({ width: text.length * 10 }),
+  } as unknown as CanvasRenderingContext2D;
+
+  it("keeps short names unchanged", () => {
+    expect(fitText(ctx, "EngSpeed", 91)).toBe("EngSpeed");
+  });
+
+  it("ellipsizes a name that would reach into the plot", () => {
+    expect(fitText(ctx, "WheelSpeedFL", 60)).toBe("Wheel…");
+  });
+});
