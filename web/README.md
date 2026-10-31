@@ -31,12 +31,12 @@ The headless CLI modes (`--replay`/`--project` without `--web`, `--convert`,
 `--check-script`) keep their old meaning.
 
 The toolbar's **Online / Offline** button chooses the run source: Online runs
-generators and follows the toolbar's Real bus / Simulated bus mode; Offline
-plays a recording. The **Run…** dialog shows both sources and manages the
-recording list: a path can be loaded **Open**
-(parked at the beginning) or **Open & play**, recent recordings carry an
-active marker and per-row **Open** / **Play** actions, and recording is armed
-at the bottom. Replay logs can be typed or chosen with the browser's picker; uploaded
+generators and follows the wire mode set in **Buses**; Offline plays the active
+recording. The **Record** dialog manages capture and the recording list: a path
+can be loaded **Open** (parked at the beginning) or **Open & play**, recent
+recordings carry an active marker and per-row **Open** / **Play** actions, and
+the capture controls arm a file for the next Start. Replay logs can be typed
+or chosen with the browser's picker; uploaded
 logs land in the host's per-user application data folder
 (`%LOCALAPPDATA%\roxy-can\web-uploads` on Windows, 256 MiB cap). Projects use
 host dialogs instead: **Open project…**, **Save project** and **Save project
@@ -84,18 +84,17 @@ npm run dev                 # http://127.0.0.1:5173, proxies /api to :2010
   header to sort ascending, again for descending, and a third time to restore
   the live newest-first order.
 - A project opens from the R menu (host picker or recent) and a replay log
-  from the Run dialog. The header, mode chip and status bar carry the session
+  from the Record dialog. The header, mode chip and status bar carry the session
   name and replay playhead; switching sessions resets the trace and curve
   buffers. A loaded project starts clean, plain **Save project** rewrites it
   in place, and **Save project as…** targets a new path — both use the current
   project format.
-- The toolbar's **Online / Offline** button is the run-mode control; **Run…**
-  lists the recordings Offline can play. The **Real bus / Simulated bus** menu
-  is the single wire-mode control and switches at any time, including while
-  measuring; it shows the attached-adapter count. **Buses** lists each bus
+- The toolbar's **Online / Offline** button is the run-mode control; **Record**
+  manages capture and the recordings Offline can play. **Buses** lists each bus
   with its DBCs and bit rates, probes Kvaser/Vector
   adapters on demand, attaches/detaches a selected channel at the bus's
-  configured rates, and reports the toolbar's Simulated/Real bus mode. Buses can be
+  configured rates, and owns the **Real bus** / **Simulated** wire switch
+  (disabled while Offline, which is wire-free). Buses can be
   added, removed, renamed, re-rated and given a new DBC by host path; removing
   one remaps the web signal keys with the core's channel indices. Each DBC
   node appears as a chip with its generator-entry count; ticking it declares

@@ -13,6 +13,7 @@ interface Props {
   buses: Bus[];
   replayMap: ReplayMap;
   realBus: boolean;
+  wireLocked: boolean;
   hardware: Hardware | null;
   loading: boolean;
   error: string;
@@ -44,6 +45,7 @@ interface Props {
   onAttachFr: (bus: number, index: number) => void;
   onDetachFr: (bus: number) => void;
   onSetReplay: (kind: string, raw: number, target: number | null) => void;
+  onSetReal: (real: boolean) => void;
   onClose: () => void;
 }
 
@@ -516,6 +518,7 @@ export function BusesModal({
   buses,
   replayMap,
   realBus,
+  wireLocked,
   hardware,
   loading,
   error,
@@ -537,6 +540,7 @@ export function BusesModal({
   onAttachFr,
   onDetachFr,
   onSetReplay,
+  onSetReal,
   onClose,
 }: Props) {
   const [addOpen, setAddOpen] = useState(false);
@@ -896,9 +900,43 @@ export function BusesModal({
         )}
 
         <div class="buses-tools">
+          <div class="wire-mode" role="group" aria-label="Bus mode">
+            <span>Wire</span>
+            <button
+              type="button"
+              class={`mini ${realBus ? "on" : ""}`}
+              disabled={wireLocked || attachedCount === 0}
+              title={
+                wireLocked
+                  ? "Offline is wire-free; switch Online first"
+                  : attachedCount === 0
+                    ? "Attach an adapter first"
+                    : "Use attached adapters on the wire"
+              }
+              onClick={() => onSetReal(true)}
+            >
+              Real bus
+            </button>
+            <button
+              type="button"
+              class={`mini ${!realBus ? "on" : ""}`}
+              disabled={wireLocked}
+              title={
+                wireLocked
+                  ? "Offline is wire-free; switch Online first"
+                  : "Keep adapters attached but parked"
+              }
+              onClick={() => onSetReal(false)}
+            >
+              Simulated
+            </button>
+          </div>
           <span class="hint">
-            Wire mode: <strong>{realBus ? "Real bus" : "Simulated bus"}</strong>
-            {" "}· change it from the toolbar's bus mode menu.
+            {wireLocked
+              ? "Offline is wire-free; switch to Online to change the wire mode."
+              : realBus
+                ? "Attached adapters receive and transmit on the wire."
+                : "Adapters stay parked; generators run only in this session."}
           </span>
           <button
             type="button"

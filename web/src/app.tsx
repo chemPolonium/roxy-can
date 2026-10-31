@@ -496,15 +496,12 @@ export function App() {
   const [theme, setTheme] = useState<Theme>(loadTheme);
   const [menuOpen, setMenuOpen] = useState(false);
   const [setupOpen, setSetupOpen] = useState(false);
-  const [busModeOpen, setBusModeOpen] = useState(false);
   const [runModeOpen, setRunModeOpen] = useState(false);
   const brandMenuRef = useRef<HTMLDivElement>(null);
   const setupMenuRef = useRef<HTMLDivElement>(null);
-  const busModeMenuRef = useRef<HTMLDivElement>(null);
   const runModeMenuRef = useRef<HTMLDivElement>(null);
   const brandTriggerRef = useRef<HTMLButtonElement | null>(null);
   const setupTriggerRef = useRef<HTMLButtonElement | null>(null);
-  const busModeTriggerRef = useRef<HTMLButtonElement | null>(null);
   const runModeTriggerRef = useRef<HTMLButtonElement | null>(null);
   const [signalView, setSignalView] = useState<SignalView>(
     savedView.signalView ?? { windowS: 30, endS: null },
@@ -880,27 +877,6 @@ export function App() {
   }, [setupOpen]);
 
   useEffect(() => {
-    if (!busModeOpen) return;
-    const close = (event: PointerEvent) => {
-      if (
-        !(event.target instanceof Element) ||
-        !event.target.closest(".bus-mode-menu")
-      ) {
-        setBusModeOpen(false);
-      }
-    };
-    const escape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setBusModeOpen(false);
-    };
-    window.addEventListener("pointerdown", close);
-    window.addEventListener("keydown", escape);
-    return () => {
-      window.removeEventListener("pointerdown", close);
-      window.removeEventListener("keydown", escape);
-    };
-  }, [busModeOpen]);
-
-  useEffect(() => {
     if (!runModeOpen) return;
     const close = (event: PointerEvent) => {
       if (
@@ -934,13 +910,6 @@ export function App() {
       ?.querySelector<HTMLButtonElement>("button:not(:disabled)")
       ?.focus();
   }, [setupOpen]);
-
-  useEffect(() => {
-    if (!busModeOpen) return;
-    busModeMenuRef.current
-      ?.querySelector<HTMLButtonElement>("button:not(:disabled)")
-      ?.focus();
-  }, [busModeOpen]);
 
   useEffect(() => {
     if (!runModeOpen) return;
@@ -1801,7 +1770,7 @@ export function App() {
     setScriptsOpen(true);
   };
 
-  const openSession = () => {
+  const openRecord = () => {
     closeDialogs();
     setSessionOpen(true);
   };
@@ -2155,30 +2124,12 @@ export function App() {
   const replaying = state?.runMode === "Replay";
   const runModeLabel = replaying ? "Offline" : "Online";
   const busLive = !replaying && Boolean(state?.realBus) && attachedBuses > 0;
-  const busModeText = replaying
-    ? "Bus mode"
-    : busLive
-      ? "Real bus"
-      : "Simulated bus";
-  const busModeDetail = replaying
-    ? "Offline plays a recording; bus mode applies to Online"
-    : attachedBuses === 0
-      ? "No adapter attached — open Buses to attach one"
-      : busLive
-        ? `${attachedBuses} adapter(s) live on the wire`
-        : `${attachedBuses} adapter(s) attached and parked`;
-  const chooseBusMode = (real: boolean) => {
-    setBusModeOpen(false);
-    if (!state || state.realBus === real) return;
-    void run({ type: "set_bus_mode", real });
-  };
   const chooseRunMode = (offline: boolean) => {
     setRunModeOpen(false);
     const target = offline ? "replay" : "simulation";
     if (state?.runMode !== target) {
       void run({ type: "set_run_mode", mode: target });
     }
-    if (offline && !state?.log) openSession();
   };
   const latest = state?.series.length
     ? state.series[state.series.length - 1]
@@ -2415,10 +2366,10 @@ export function App() {
   const paletteCommands: PaletteCommand[] = [
     {
       id: "open-session",
-      label: "Open Run…",
+      label: "Open Record…",
       group: "Open",
-      hint: "Online/Offline modes, recording and logs",
-      run: openSession,
+      hint: "Recording controls and recording files",
+      run: openRecord,
     },
     {
       id: "open-buses",
@@ -3359,7 +3310,7 @@ export function App() {
               aria-expanded={runModeOpen}
               title={
                 replaying
-                  ? "Offline plays the recording selected in Run"
+                  ? "Offline plays the active recording from Record"
                   : "Online runs generators and follows the bus mode"
               }
               onClick={(event) => {
@@ -3412,86 +3363,22 @@ export function App() {
                   </span>
                   <span class="menu-copy">
                     <strong>Offline</strong>
-                    <small>Play a recording; choose files in Run…</small>
+                    <small>Play the active recording from Record.</small>
                   </span>
                 </button>
               </div>
             )}
           </div>
-          <div class="top-menu bus-mode-menu">
-            <button
-              type="button"
-              disabled={!online || replaying}
-              aria-haspopup="menu"
-              aria-expanded={busModeOpen}
-              title={busModeDetail}
-              onClick={(event) => {
-                busModeTriggerRef.current = event.currentTarget;
-                setBusModeOpen((open) => !open);
-              }}
-            >
-              <span class={`hw-dot ${busLive ? "on" : ""}`} aria-hidden="true" />
-              {busModeText}
-              {attachedBuses > 0 && !replaying && (
-                <span class="hw-count">{attachedBuses}</span>
-              )}
-              <span class="top-menu-caret" aria-hidden="true">
-                ▾
-              </span>
-            </button>
-            {busModeOpen && (
-              <div
-                class="top-menu-panel bus-mode-panel"
-                role="menu"
-                aria-label="Bus mode"
-                ref={busModeMenuRef}
-                onKeyDown={(event) =>
-                  handleMenuKey(
-                    event,
-                    busModeMenuRef.current,
-                    () => setBusModeOpen(false),
-                    busModeTriggerRef.current,
-                  )
-                }
-              >
-                <button
-                  type="button"
-                  role="menuitemradio"
-                  aria-checked={busLive}
-                  disabled={attachedBuses === 0}
-                  onClick={() => chooseBusMode(true)}
-                >
-                  <span class="menu-check" aria-hidden="true">
-                    {busLive ? "✓" : ""}
-                  </span>
-                  <span class="menu-copy">
-                    <strong>Real bus</strong>
-                    <small>
-                      {attachedBuses === 0
-                        ? "Attach an adapter with Buses first."
-                        : "Attached adapters receive and transmit on the wire."}
-                    </small>
-                  </span>
-                </button>
-                <button
-                  type="button"
-                  role="menuitemradio"
-                  aria-checked={!busLive}
-                  onClick={() => chooseBusMode(false)}
-                >
-                  <span class="menu-check" aria-hidden="true">
-                    {!busLive ? "✓" : ""}
-                  </span>
-                  <span class="menu-copy">
-                    <strong>Simulated bus</strong>
-                    <small>
-                      Keep adapters parked; generators run in real time.
-                    </small>
-                  </span>
-                </button>
-              </div>
-            )}
-          </div>
+          <button
+            type="button"
+            class={`record-button ${state?.recording ? "on" : ""}`}
+            disabled={!online}
+            title="Manage recording and recording files"
+            onClick={openRecord}
+          >
+            <span class="record-dot" aria-hidden="true" />
+            Record
+          </button>
           <div class="top-menu">
             <button
               type="button"
@@ -3555,20 +3442,19 @@ export function App() {
               </div>
             )}
           </div>
-          <button type="button" disabled={!online} onClick={openSession}>
-            Run…
-          </button>
           <button
             type="button"
             class="primary"
-            disabled={!canControl || measuring || needsLog || noBuses}
+            disabled={
+              !canControl || measuring || needsLog || (!replaying && noBuses)
+            }
             title={
               !online
                 ? "Waiting for the bus core"
-                : noBuses
-                  ? "Add a bus or create a sample project first"
-                  : needsLog
-                    ? "Load a recording for Offline mode first"
+                : needsLog
+                  ? "Load a recording from Record first"
+                  : !replaying && noBuses
+                    ? "Add a bus or create a sample project first"
                     : measuring
                       ? "Measurement is already running"
                       : "Start measurement"
@@ -4696,6 +4582,7 @@ export function App() {
             state?.replayMap ?? { can: [], fr: [], eth: [] }
           }
           realBus={busLive}
+          wireLocked={replaying}
           hardware={hardware}
           loading={hardwareLoading}
           error={hardwareError}
@@ -4721,6 +4608,7 @@ export function App() {
           onSetReplay={(kind, raw, target) =>
             void run({ type: "set_replay_channel", kind, raw, target })
           }
+          onSetReal={(real) => void run({ type: "set_bus_mode", real })}
           onClose={() => setBusesOpen(false)}
         />
       )}
@@ -5022,42 +4910,122 @@ export function App() {
             class="session-modal"
             role="dialog"
             aria-modal="true"
-            aria-label="Run"
+            aria-label="Record"
             onMouseDown={(event) => event.stopPropagation()}
           >
             <header class="modal-head">
-              <h2>{state ? `Run · ${runModeLabel}` : "Run"}</h2>
+              <h2>Record</h2>
               <button type="button" onClick={() => setSessionOpen(false)}>
                 Close
               </button>
             </header>
             <div class="session-body">
               <section class="session-task">
-                <h3>
-                  Online
-                  {!replaying && <span class="source-badge">Active</span>}
-                </h3>
-                <p>
-                  Run generators and analyse traffic. Hardware follows the
-                  toolbar's Real bus / Simulated bus mode.
+                <h3>Capture</h3>
+                <p class="session-current">
+                  {state?.recording
+                    ? state.recordFile
+                      ? `Recording: ${fileNameOf(state.recordFile)}`
+                      : "Armed — starts with the measurement"
+                    : state?.recordFile
+                      ? `Last: ${fileNameOf(state.recordFile)}`
+                      : "Not recording"}
                 </p>
-                <span class="task-state">
-                  {measuring && !replaying
-                    ? `Online · ${state?.fps.toFixed(0)} f/s`
-                    : replaying
-                      ? "Switch to Online in the toolbar to run the generator"
-                      : "Ready · use Start in the toolbar"}
-                </span>
+                <div class="record-row">
+                  <input
+                    value={recordName}
+                    placeholder="record"
+                    disabled={state?.recording}
+                    title="File name; a date suffix is added under the project's Record/ folder"
+                    onInput={(event) =>
+                      setRecordName(
+                        (event.target as HTMLInputElement).value,
+                      )
+                    }
+                  />
+                  <select
+                    value={recordFormat}
+                    disabled={state?.recording}
+                    title="Recording format"
+                    onChange={(event) =>
+                      setRecordFormat(
+                        Number((event.target as HTMLSelectElement).value),
+                      )
+                    }
+                  >
+                    <option value={0}>ASC</option>
+                    <option value={1}>BLF</option>
+                  </select>
+                  <button
+                    type="button"
+                    class={state?.recording ? "danger" : ""}
+                    onClick={() =>
+                      void run({
+                        type: "record_toggle",
+                        name: state?.recording
+                          ? null
+                          : recordName.trim() || "record",
+                        format: state?.recording ? null : recordFormat,
+                      })
+                    }
+                  >
+                    {state?.recording ? "Stop recording" : "Record"}
+                  </button>
+                  <button
+                    type="button"
+                    disabled={state?.recording || !state?.recordFile}
+                    title={
+                      state?.recording
+                        ? "Stop recording before downloading"
+                        : "Save the last recording through the browser"
+                    }
+                    onClick={() => {
+                      if (!state?.recordFile) return;
+                      triggerDownload(
+                        "/api/recording",
+                        fileNameOf(state.recordFile),
+                      );
+                    }}
+                  >
+                    Download
+                  </button>
+                </div>
+                <p class="hint">
+                  Relative names land in Record/ beside the project; an
+                  absolute path is used as typed. Recording while stopped arms
+                  the file for the next Start.
+                </p>
+                <label class="record-filter">
+                  Only ids / FR slots
+                  <input
+                    value={recordFilter}
+                    placeholder="100, 3F4x, FR0:13"
+                    spellcheck={false}
+                    onInput={(event) =>
+                      setRecordFilter(
+                        (event.target as HTMLInputElement).value,
+                      )
+                    }
+                    onBlur={() =>
+                      void run({
+                        type: "set_record_filter",
+                        text: recordFilter,
+                      })
+                    }
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") {
+                        (event.target as HTMLInputElement).blur();
+                      }
+                    }}
+                  />
+                </label>
               </section>
 
               <section class="session-task">
-                <h3>
-                  Offline
-                  {replaying && <span class="source-badge">Active</span>}
-                </h3>
+                <h3>Recordings</h3>
                 <p>
-                  Choose a recording below; Start plays it forward with the same
-                  analysis tools.
+                  Offline plays the active recording. Open parks a file; Play
+                  starts playback with the same analysis tools.
                 </p>
                 <form
                   class="task-form"
@@ -5153,109 +5121,6 @@ export function App() {
                     : "No recording selected"}
                 </span>
               </section>
-
-              <details class="session-more">
-                <summary>Recording</summary>
-                <div class="session-more-body">
-                  <p class="session-current">
-                    {state?.recording
-                      ? state.recordFile
-                        ? `Recording: ${fileNameOf(state.recordFile)}`
-                        : "Armed — starts with the measurement"
-                      : state?.recordFile
-                        ? `Last: ${fileNameOf(state.recordFile)}`
-                        : "Not recording"}
-                  </p>
-                  <div class="record-row">
-                    <input
-                      value={recordName}
-                      placeholder="record"
-                      disabled={state?.recording}
-                      title="File name; a date suffix is added under the project's Record/ folder"
-                      onInput={(event) =>
-                        setRecordName(
-                          (event.target as HTMLInputElement).value,
-                        )
-                      }
-                    />
-                    <select
-                      value={recordFormat}
-                      disabled={state?.recording}
-                      title="Recording format"
-                      onChange={(event) =>
-                        setRecordFormat(
-                          Number((event.target as HTMLSelectElement).value),
-                        )
-                      }
-                    >
-                      <option value={0}>ASC</option>
-                      <option value={1}>BLF</option>
-                    </select>
-                    <button
-                      type="button"
-                      class={state?.recording ? "danger" : ""}
-                      onClick={() =>
-                        void run({
-                          type: "record_toggle",
-                          name: state?.recording
-                            ? null
-                            : recordName.trim() || "record",
-                          format: state?.recording ? null : recordFormat,
-                        })
-                      }
-                    >
-                      {state?.recording ? "Stop recording" : "Record"}
-                    </button>
-                    <button
-                      type="button"
-                      disabled={state?.recording || !state?.recordFile}
-                      title={
-                        state?.recording
-                          ? "Stop recording before downloading"
-                          : "Save the last recording through the browser"
-                      }
-                      onClick={() => {
-                        if (!state?.recordFile) return;
-                        triggerDownload(
-                          "/api/recording",
-                          fileNameOf(state.recordFile),
-                        );
-                      }}
-                    >
-                      Download
-                    </button>
-                  </div>
-                  <p class="hint">
-                    Relative names land in Record/ beside the project; an
-                    absolute path is used as typed. Recording while stopped arms
-                    the file for the next Start.
-                  </p>
-                  <label class="record-filter">
-                    Only ids / FR slots
-                    <input
-                      value={recordFilter}
-                      placeholder="100, 3F4x, FR0:13"
-                      spellcheck={false}
-                      onInput={(event) =>
-                        setRecordFilter(
-                          (event.target as HTMLInputElement).value,
-                        )
-                      }
-                      onBlur={() =>
-                        void run({
-                          type: "set_record_filter",
-                          text: recordFilter,
-                        })
-                      }
-                      onKeyDown={(event) => {
-                        if (event.key === "Enter") {
-                          (event.target as HTMLInputElement).blur();
-                        }
-                      }}
-                    />
-                  </label>
-                </div>
-              </details>
 
               <p class="hint">
                 Paths are resolved on the host. Opening a log stops the

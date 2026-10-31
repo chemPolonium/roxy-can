@@ -384,7 +384,13 @@ select:disabled {
   gap: 5px;
 }
 
-.hw-dot {
+.record-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.record-dot {
   width: 6px;
   height: 6px;
   border-radius: 50%;
@@ -392,21 +398,10 @@ select:disabled {
   opacity: 0.55;
 }
 
-.hw-dot.on {
-  background: var(--ok);
+.record-button.on .record-dot {
+  background: #e5484d;
   opacity: 1;
-  box-shadow: 0 0 5px rgb(84 192 138 / 50%);
-}
-
-.hw-count {
-  min-width: 14px;
-  padding: 0 4px;
-  border-radius: 8px;
-  background: var(--accent-soft);
-  color: var(--accent);
-  font-size: 9px;
-  line-height: 14px;
-  text-align: center;
+  box-shadow: 0 0 5px rgb(229 72 77 / 50%);
 }
 
 .top-menu {
@@ -455,12 +450,10 @@ select:disabled {
   background: var(--accent-soft);
 }
 
-.bus-mode-panel,
 .mode-panel {
   min-width: 252px;
 }
 
-.bus-mode-panel button,
 .mode-panel button {
   display: flex;
   align-items: flex-start;
@@ -3703,6 +3696,25 @@ button.mini.on {
   border-bottom: 1px solid var(--line);
 }
 
+.wire-mode {
+  display: flex;
+  align-items: center;
+  flex: 0 0 auto;
+  gap: 4px;
+}
+
+.wire-mode > span {
+  color: var(--muted);
+  font-size: 9px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.wire-mode button {
+  font-size: 10px;
+  padding: 2px 7px;
+}
+
 .buses-tools .hint {
   font-size: 10px;
   overflow: hidden;
@@ -4758,17 +4770,6 @@ button.mini.on {
   text-transform: none;
 }
 
-.source-badge {
-  padding: 1px 5px;
-  border: 1px solid var(--accent);
-  border-radius: 8px;
-  background: var(--accent-soft);
-  color: var(--accent);
-  font-size: 8.5px;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-}
-
 .session-task p {
   margin: 0;
   color: var(--muted);
@@ -4872,26 +4873,6 @@ button.mini.on {
   display: flex;
   flex: 0 0 auto;
   gap: 4px;
-}
-
-.session-more {
-  padding-top: 10px;
-  border-top: 1px solid var(--line-soft);
-}
-
-.session-more summary {
-  color: var(--muted);
-  font-size: 10px;
-  font-weight: 500;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  cursor: pointer;
-}
-
-.session-more-body {
-  display: flex;
-  flex-direction: column;
-  margin-top: 10px;
 }
 
 .session-current {
