@@ -455,11 +455,13 @@ select:disabled {
   background: var(--accent-soft);
 }
 
-.bus-mode-panel {
+.bus-mode-panel,
+.mode-panel {
   min-width: 252px;
 }
 
-.bus-mode-panel button {
+.bus-mode-panel button,
+.mode-panel button {
   display: flex;
   align-items: flex-start;
   gap: 7px;
@@ -467,7 +469,7 @@ select:disabled {
   padding: 6px 8px;
 }
 
-.bus-mode-check {
+.menu-check {
   flex: 0 0 10px;
   color: var(--accent);
   font-size: 11px;
@@ -475,19 +477,19 @@ select:disabled {
   text-align: center;
 }
 
-.bus-mode-copy {
+.menu-copy {
   display: flex;
   flex-direction: column;
   gap: 2px;
   min-width: 0;
 }
 
-.bus-mode-copy strong {
+.menu-copy strong {
   font-size: 11.5px;
   font-weight: 600;
 }
 
-.bus-mode-copy small {
+.menu-copy small {
   color: var(--muted);
   font-size: 10px;
   line-height: 1.35;
@@ -4733,42 +4735,6 @@ button.mini.on {
   letter-spacing: 0.06em;
 }
 
-.run-mode {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  margin-bottom: 10px;
-}
-
-.run-mode > span {
-  margin-right: 3px;
-  color: var(--muted);
-  font-size: 9px;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-}
-
-.run-mode button {
-  padding: 3px 10px;
-  border: 1px solid var(--line);
-  border-radius: 4px;
-  background: var(--panel-2);
-  color: var(--muted);
-  font-size: 10.5px;
-}
-
-.run-mode button.on {
-  border-color: var(--accent);
-  background: var(--accent-soft);
-  color: var(--accent);
-}
-
-.session-tasks {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 8px;
-}
-
 .session-task {
   display: flex;
   flex-direction: column;
@@ -4781,6 +4747,9 @@ button.mini.on {
 }
 
 .session-task h3 {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   margin: 0;
   color: inherit;
   font-size: 11.5px;
@@ -4789,8 +4758,18 @@ button.mini.on {
   text-transform: none;
 }
 
+.source-badge {
+  padding: 1px 5px;
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 8.5px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
 .session-task p {
-  min-height: 46px;
   margin: 0;
   color: var(--muted);
   font-size: 10.5px;
@@ -4815,10 +4794,84 @@ button.mini.on {
 }
 
 .session-task .task-state {
-  margin-top: auto;
   color: var(--muted);
   font-size: 9.5px;
   line-height: 1.4;
+}
+
+.replay-source-list {
+  display: flex;
+  flex-direction: column;
+  max-height: 190px;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--panel);
+}
+
+.replay-source-empty {
+  margin: 0;
+  padding: 10px;
+  color: var(--muted);
+  font-size: 10.5px;
+}
+
+.replay-source-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  padding: 5px 7px;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.replay-source-row:last-child {
+  border-bottom: 0;
+}
+
+.replay-source-row.on {
+  background: var(--accent-soft);
+}
+
+.replay-source-dot {
+  flex: 0 0 6px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--line);
+}
+
+.replay-source-row.on .replay-source-dot {
+  background: var(--ok);
+}
+
+.replay-source-meta {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.replay-source-meta strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.replay-source-meta small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted);
+  font-size: 9.5px;
+}
+
+.replay-source-actions {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 4px;
 }
 
 .session-more {
@@ -5281,25 +5334,6 @@ button.danger:hover:not(:disabled) {
   padding: 3px 6px;
   border-bottom: 1px solid #1c242e;
   color: #cdd8e4;
-}
-
-.recent {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 4px;
-  margin-top: 7px;
-  color: var(--muted);
-  font-size: 10px;
-}
-
-.recent-item {
-  max-width: 230px;
-  padding: 2px 7px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 10.5px;
 }
 
 .hint {

@@ -497,12 +497,15 @@ export function App() {
   const [menuOpen, setMenuOpen] = useState(false);
   const [setupOpen, setSetupOpen] = useState(false);
   const [busModeOpen, setBusModeOpen] = useState(false);
+  const [runModeOpen, setRunModeOpen] = useState(false);
   const brandMenuRef = useRef<HTMLDivElement>(null);
   const setupMenuRef = useRef<HTMLDivElement>(null);
   const busModeMenuRef = useRef<HTMLDivElement>(null);
+  const runModeMenuRef = useRef<HTMLDivElement>(null);
   const brandTriggerRef = useRef<HTMLButtonElement | null>(null);
   const setupTriggerRef = useRef<HTMLButtonElement | null>(null);
   const busModeTriggerRef = useRef<HTMLButtonElement | null>(null);
+  const runModeTriggerRef = useRef<HTMLButtonElement | null>(null);
   const [signalView, setSignalView] = useState<SignalView>(
     savedView.signalView ?? { windowS: 30, endS: null },
   );
@@ -898,6 +901,27 @@ export function App() {
   }, [busModeOpen]);
 
   useEffect(() => {
+    if (!runModeOpen) return;
+    const close = (event: PointerEvent) => {
+      if (
+        !(event.target instanceof Element) ||
+        !event.target.closest(".run-mode-menu")
+      ) {
+        setRunModeOpen(false);
+      }
+    };
+    const escape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setRunModeOpen(false);
+    };
+    window.addEventListener("pointerdown", close);
+    window.addEventListener("keydown", escape);
+    return () => {
+      window.removeEventListener("pointerdown", close);
+      window.removeEventListener("keydown", escape);
+    };
+  }, [runModeOpen]);
+
+  useEffect(() => {
     if (!menuOpen) return;
     brandMenuRef.current
       ?.querySelector<HTMLButtonElement>("button:not(:disabled)")
@@ -917,6 +941,13 @@ export function App() {
       ?.querySelector<HTMLButtonElement>("button:not(:disabled)")
       ?.focus();
   }, [busModeOpen]);
+
+  useEffect(() => {
+    if (!runModeOpen) return;
+    runModeMenuRef.current
+      ?.querySelector<HTMLButtonElement>("button:not(:disabled)")
+      ?.focus();
+  }, [runModeOpen]);
 
   useEffect(() => {
     if (!chartFullscreen) return;
@@ -1519,8 +1550,6 @@ export function App() {
     if (!value) return;
     void run({ type: "open_log", path: value, play });
     resetChartTools();
-    setSessionOpen(false);
-    setScriptsOpen(false);
   };
 
   const pushWorkspace = () =>
@@ -2058,24 +2087,6 @@ export function App() {
       marker_cap: limits.markerCap,
     });
 
-  const recent = (paths: string[], open: (path: string) => void) =>
-    paths.length > 0 && (
-      <div class="recent">
-        <span>Recent</span>
-        {paths.slice(0, 5).map((path) => (
-          <button
-            type="button"
-            class="recent-item"
-            title={path}
-            key={path}
-            onClick={() => open(path)}
-          >
-            {baseName(path)}
-          </button>
-        ))}
-      </div>
-    );
-
   const mainMessages = useMemo(() => {
     const rows = state?.messages ?? [];
     const needle = messageQuery.trim().toLowerCase();
@@ -2161,6 +2172,14 @@ export function App() {
     if (!state || state.realBus === real) return;
     void run({ type: "set_bus_mode", real });
   };
+  const chooseRunMode = (offline: boolean) => {
+    setRunModeOpen(false);
+    const target = offline ? "replay" : "simulation";
+    if (state?.runMode !== target) {
+      void run({ type: "set_run_mode", mode: target });
+    }
+    if (offline && !state?.log) openSession();
+  };
   const latest = state?.series.length
     ? state.series[state.series.length - 1]
     : undefined;
@@ -2173,6 +2192,20 @@ export function App() {
       .filter((path, index) => all.indexOf(path) === index)
       .slice(0, 6);
   }, [state?.recentProjects, localRecentProjects]);
+  const replayLogs = useMemo(() => {
+    const all = [...(state?.recentLogs ?? []), state?.log ?? ""].filter(
+      Boolean,
+    );
+    const seen = new Set<string>();
+    return all
+      .filter((path) => {
+        const key = baseName(path).toLowerCase();
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      })
+      .slice(0, 10);
+  }, [state?.log, state?.recentLogs]);
 
   const emptyWorkspace = (
     <div class="empty empty-workspace">
@@ -3318,6 +3351,73 @@ export function App() {
           >
             Buses
           </button>
+          <div class="top-menu run-mode-menu">
+            <button
+              type="button"
+              disabled={!online}
+              aria-haspopup="menu"
+              aria-expanded={runModeOpen}
+              title={
+                replaying
+                  ? "Offline plays the recording selected in Run"
+                  : "Online runs generators and follows the bus mode"
+              }
+              onClick={(event) => {
+                runModeTriggerRef.current = event.currentTarget;
+                setRunModeOpen((open) => !open);
+              }}
+            >
+              {runModeLabel}
+              <span class="top-menu-caret" aria-hidden="true">
+                ▾
+              </span>
+            </button>
+            {runModeOpen && (
+              <div
+                class="top-menu-panel mode-panel"
+                role="menu"
+                aria-label="Run mode"
+                ref={runModeMenuRef}
+                onKeyDown={(event) =>
+                  handleMenuKey(
+                    event,
+                    runModeMenuRef.current,
+                    () => setRunModeOpen(false),
+                    runModeTriggerRef.current,
+                  )
+                }
+              >
+                <button
+                  type="button"
+                  role="menuitemradio"
+                  aria-checked={!replaying}
+                  onClick={() => chooseRunMode(false)}
+                >
+                  <span class="menu-check" aria-hidden="true">
+                    {!replaying ? "✓" : ""}
+                  </span>
+                  <span class="menu-copy">
+                    <strong>Online</strong>
+                    <small>Run generators and analyse traffic.</small>
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  role="menuitemradio"
+                  aria-checked={replaying}
+                  onClick={() => chooseRunMode(true)}
+                >
+                  <span class="menu-check" aria-hidden="true">
+                    {replaying ? "✓" : ""}
+                  </span>
+                  <span class="menu-copy">
+                    <strong>Offline</strong>
+                    <small>Play a recording; choose files in Run…</small>
+                  </span>
+                </button>
+              </div>
+            )}
+          </div>
           <div class="top-menu bus-mode-menu">
             <button
               type="button"
@@ -3361,10 +3461,10 @@ export function App() {
                   disabled={attachedBuses === 0}
                   onClick={() => chooseBusMode(true)}
                 >
-                  <span class="bus-mode-check" aria-hidden="true">
+                  <span class="menu-check" aria-hidden="true">
                     {busLive ? "✓" : ""}
                   </span>
-                  <span class="bus-mode-copy">
+                  <span class="menu-copy">
                     <strong>Real bus</strong>
                     <small>
                       {attachedBuses === 0
@@ -3379,10 +3479,10 @@ export function App() {
                   aria-checked={!busLive}
                   onClick={() => chooseBusMode(false)}
                 >
-                  <span class="bus-mode-check" aria-hidden="true">
+                  <span class="menu-check" aria-hidden="true">
                     {!busLive ? "✓" : ""}
                   </span>
-                  <span class="bus-mode-copy">
+                  <span class="menu-copy">
                     <strong>Simulated bus</strong>
                     <small>
                       Keep adapters parked; generators run in real time.
@@ -4926,99 +5026,133 @@ export function App() {
             onMouseDown={(event) => event.stopPropagation()}
           >
             <header class="modal-head">
-              <h2>Run</h2>
+              <h2>{state ? `Run · ${runModeLabel}` : "Run"}</h2>
               <button type="button" onClick={() => setSessionOpen(false)}>
                 Close
               </button>
             </header>
             <div class="session-body">
-              <div class="run-mode" role="group" aria-label="Run mode">
-                <span>Mode</span>
-                <button
-                  type="button"
-                  class={!replaying ? "on" : ""}
-                  onClick={() =>
-                    void run({ type: "set_run_mode", mode: "simulation" })
-                  }
-                >
+              <section class="session-task">
+                <h3>
                   Online
-                </button>
-                <button
-                  type="button"
-                  class={replaying ? "on" : ""}
-                  onClick={() =>
-                    void run({ type: "set_run_mode", mode: "replay" })
-                  }
-                >
-                  Offline
-                </button>
-              </div>
-              <div class="session-tasks">
-                <section class="session-task">
-                  <h3>Online</h3>
-                  <p>
-                    Run generators and analyse traffic. Hardware follows the
-                    toolbar's Real bus / Simulated bus mode.
-                  </p>
-                  <span class="task-state">
-                    {measuring && !replaying
-                      ? `Online · ${state?.fps.toFixed(0)} f/s`
-                      : replaying
-                        ? "Switch to Online to run the generator"
-                        : "Ready · use Start in the toolbar"}
-                  </span>
-                </section>
+                  {!replaying && <span class="source-badge">Active</span>}
+                </h3>
+                <p>
+                  Run generators and analyse traffic. Hardware follows the
+                  toolbar's Real bus / Simulated bus mode.
+                </p>
+                <span class="task-state">
+                  {measuring && !replaying
+                    ? `Online · ${state?.fps.toFixed(0)} f/s`
+                    : replaying
+                      ? "Switch to Online in the toolbar to run the generator"
+                      : "Ready · use Start in the toolbar"}
+                </span>
+              </section>
 
-                <section class="session-task">
-                  <h3>Offline</h3>
-                  <p>
-                    Play an ASC or BLF recording forward with the same analysis
-                    tools.
-                  </p>
-                  <form
-                    class="task-form"
-                    onSubmit={(event) => {
-                      event.preventDefault();
-                      loadLog(logPath);
-                    }}
-                  >
-                    <input
-                      value={logPath}
-                      placeholder="C:\logs\drive.asc or .blf"
-                      onInput={(event) =>
-                        setLogPath((event.target as HTMLInputElement).value)
-                      }
+              <section class="session-task">
+                <h3>
+                  Offline
+                  {replaying && <span class="source-badge">Active</span>}
+                </h3>
+                <p>
+                  Choose a recording below; Start plays it forward with the same
+                  analysis tools.
+                </p>
+                <form
+                  class="task-form"
+                  onSubmit={(event) => {
+                    event.preventDefault();
+                    loadLog(logPath);
+                  }}
+                >
+                  <input
+                    value={logPath}
+                    placeholder="C:\logs\drive.asc or .blf"
+                    onInput={(event) =>
+                      setLogPath((event.target as HTMLInputElement).value)
+                    }
+                  />
+                  <div class="task-actions">
+                    <button
+                      type="button"
+                      disabled={!logPath.trim()}
+                      title="Load the log and park it at the beginning"
+                      onClick={() => loadLog(logPath, false)}
+                    >
+                      Open
+                    </button>
+                    <button
+                      type="submit"
+                      class="primary"
+                      disabled={!logPath.trim()}
+                    >
+                      Open &amp; play
+                    </button>
+                    <FilePick
+                      label="Choose…"
+                      accept=".asc,.blf"
+                      onError={setError}
+                      onPick={(path) => {
+                        setLogPath(path);
+                        loadLog(path, false);
+                      }}
                     />
-                    <div class="task-actions">
-                      <button
-                        type="button"
-                        disabled={!logPath.trim()}
-                        title="Load the log and park it at the beginning"
-                        onClick={() => loadLog(logPath, false)}
-                      >
-                        Open
-                      </button>
-                      <button
-                        type="submit"
-                        class="primary"
-                        disabled={!logPath.trim()}
-                      >
-                        Open &amp; play
-                      </button>
-                      <FilePick
-                        label="Choose…"
-                        accept=".asc,.blf"
-                        onError={setError}
-                        onPick={(path) => {
-                          setLogPath(path);
-                          loadLog(path);
-                        }}
-                      />
-                    </div>
-                  </form>
-                  {recent(state?.recentLogs ?? [], loadLog)}
-                </section>
-              </div>
+                  </div>
+                </form>
+                <div class="replay-source-list" role="list">
+                  {replayLogs.length === 0 ? (
+                    <p class="replay-source-empty">
+                      No recordings yet — choose an ASC or BLF.
+                    </p>
+                  ) : (
+                    replayLogs.map((path) => {
+                      const active = state?.log
+                        ? baseName(state.log).toLowerCase() ===
+                          baseName(path).toLowerCase()
+                        : false;
+                      return (
+                        <div
+                          class={`replay-source-row ${active ? "on" : ""}`}
+                          role="listitem"
+                          key={path}
+                          title={path}
+                        >
+                          <span
+                            class="replay-source-dot"
+                            aria-hidden="true"
+                          />
+                          <div class="replay-source-meta">
+                            <strong>{baseName(path)}</strong>
+                            <small>{path}</small>
+                          </div>
+                          <div class="replay-source-actions">
+                            <button
+                              type="button"
+                              class="mini"
+                              onClick={() => loadLog(path, false)}
+                            >
+                              Open
+                            </button>
+                            <button
+                              type="button"
+                              class="mini"
+                              onClick={() => loadLog(path, true)}
+                            >
+                              Play
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })
+                  )}
+                </div>
+                <span class="task-state">
+                  {state?.log
+                    ? `Active recording: ${baseName(state.log)}`
+                    : "No recording selected"}
+                </span>
+              </section>
 
               <details class="session-more">
                 <summary>Recording</summary>
