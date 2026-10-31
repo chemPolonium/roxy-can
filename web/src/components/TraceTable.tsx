@@ -169,6 +169,7 @@ export function TraceTable({
   leading,
   title,
   tools,
+  empty,
   onQuery,
   onChartCursor,
   onSetChartCursor,
@@ -188,6 +189,8 @@ export function TraceTable({
   leading?: ComponentChildren;
   title?: ComponentChildren;
   tools?: ComponentChildren;
+  /// Replaces the plain "No frames yet" state, e.g. with workspace actions.
+  empty?: ComponentChildren;
   onQuery?: (text: string) => void;
   onChartCursor?: (tUs: number) => void;
   onSetChartCursor?: (slot: "A" | "B", tUs: number) => void;
@@ -439,10 +442,12 @@ export function TraceTable({
     return (
       <>
         {head}
-        <div class="empty">
-          <strong>No frames yet</strong>
-          <span>Start the simulation or clear the filter.</span>
-        </div>
+        {empty ?? (
+          <div class="empty">
+            <strong>No frames yet</strong>
+            <span>Start the simulation or clear the filter.</span>
+          </div>
+        )}
       </>
     );
   }

@@ -1,4 +1,5 @@
 import { Fragment } from "preact";
+import type { ComponentChildren } from "preact";
 import { useState } from "preact/hooks";
 import type { Message } from "../types";
 
@@ -11,13 +12,16 @@ export function MessageTable({
   rows,
   filtered = false,
   onExpand,
+  empty,
 }: {
   rows: Message[];
   filtered?: boolean;
   onExpand?: (key: string, on: boolean) => void;
+  empty?: ComponentChildren;
 }) {
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   if (rows.length === 0) {
+    if (empty && !filtered) return <>{empty}</>;
     return (
       <div class="empty">
         <strong>{filtered ? "No matching messages" : "No messages seen"}</strong>

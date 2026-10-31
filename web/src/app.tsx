@@ -338,6 +338,28 @@ function baseName(path: string): string {
   return cut >= 0 ? path.slice(cut + 1) : path;
 }
 
+const RECENT_PROJECTS_KEY = "roxy-can-web.recentProjects";
+
+function loadLocalRecentProjects(): string[] {
+  try {
+    const raw = localStorage.getItem(RECENT_PROJECTS_KEY);
+    const parsed: unknown = raw ? JSON.parse(raw) : [];
+    return Array.isArray(parsed)
+      ? parsed.filter((path): path is string => typeof path === "string").slice(0, 8)
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveLocalRecentProjects(paths: string[]): void {
+  try {
+    localStorage.setItem(RECENT_PROJECTS_KEY, JSON.stringify(paths));
+  } catch {
+    // Private mode can reject storage; the session still works.
+  }
+}
+
 function fileNameOf(path: string): string {
   const cut = Math.max(path.lastIndexOf("\\"), path.lastIndexOf("/"));
   return cut >= 0 ? path.slice(cut + 1) : path;
@@ -401,6 +423,10 @@ export function App() {
     savedView.overlay ?? false,
   );
   const [sessionOpen, setSessionOpen] = useState(false);
+  const [localRecentProjects, setLocalRecentProjects] = useState<string[]>(
+    loadLocalRecentProjects,
+  );
+  const [clearArmed, setClearArmed] = useState(false);
   const [replayStepMs, setReplayStepMs] = useState(100);
   const [replayForS, setReplayForS] = useState(5);
   const [replayTo, setReplayTo] = useState("");
@@ -688,6 +714,26 @@ export function App() {
     applyTheme(theme);
     saveTheme(theme);
   }, [theme]);
+
+  useEffect(() => {
+    const path = state?.projectPath;
+    if (!path) return;
+    setLocalRecentProjects((old) => {
+      if (old[0] === path) return old;
+      const next = [path, ...old.filter((known) => known !== path)].slice(
+        0,
+        8,
+      );
+      saveLocalRecentProjects(next);
+      return next;
+    });
+  }, [state?.projectPath]);
+
+  useEffect(() => {
+    if (!clearArmed) return;
+    const timer = window.setTimeout(() => setClearArmed(false), 3000);
+    return () => window.clearTimeout(timer);
+  }, [clearArmed]);
 
   // Transport changes deserve a message even though the status line keeps
   // showing the bus state rather than the command result.
@@ -1987,6 +2033,52 @@ export function App() {
   const session = state
     ? [state.project || "Untitled", state.log].filter(Boolean).join(" · ")
     : "";
+  const projectRecents = useMemo(() => {
+    const all = [...(state?.recentProjects ?? []), ...localRecentProjects];
+    return all
+      .filter((path, index) => all.indexOf(path) === index)
+      .slice(0, 6);
+  }, [state?.recentProjects, localRecentProjects]);
+
+  const emptyWorkspace = (
+    <div class="empty empty-workspace">
+      <strong>No buses yet</strong>
+      <span>Open a project, create a sample, or add a bus to get started.</span>
+      <div class="empty-actions">
+        <button
+          type="button"
+          class="primary"
+          onClick={() => void run({ type: "pick_project" })}
+        >
+          Open project…
+        </button>
+        <button
+          type="button"
+          onClick={() => void run({ type: "create_sample_project" })}
+        >
+          Sample project
+        </button>
+        <button type="button" onClick={openBuses}>
+          Add bus…
+        </button>
+      </div>
+      {projectRecents.length > 0 && (
+        <div class="empty-recent">
+          <span>Recent</span>
+          {projectRecents.slice(0, 3).map((path) => (
+            <button
+              type="button"
+              key={path}
+              title={path}
+              onClick={() => loadProject(path)}
+            >
+              {baseName(path)}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
   const replayText =
     state?.replayPosUs != null && state?.replayTotalUs != null
       ? `${(state.replayPosUs / 1e6).toFixed(2)} / ${(state.replayTotalUs / 1e6).toFixed(2)} s`
@@ -2890,10 +2982,10 @@ export function App() {
                   </svg>
                   <span>Open project…</span>
                 </button>
-                {state && state.recentProjects.length > 0 && (
+                {projectRecents.length > 0 && (
                   <>
                     <div class="brand-menu-label">Recent projects</div>
-                    {state.recentProjects.slice(0, 4).map((path) => (
+                    {projectRecents.slice(0, 4).map((path) => (
                       <button
                         type="button"
                         role="menuitem"
@@ -3007,14 +3099,35 @@ export function App() {
               </span>
               {state?.recording && <span class="rec-badge">REC</span>}
             </h1>
-            <p>
-              {state
-                ? state.buses.length === 0
-                  ? "no buses · open a project or create a sample"
-                  : session ||
-                    `${state.channels.length} buses · ${state.channels.map((c) => c.name).join(", ")}`
-                : "connecting to the bus core"}
-            </p>
+            <button
+              type="button"
+              class="brand-project"
+              title={
+                state?.projectPath
+                  ? `${state.projectPath} — project menu`
+                  : "Project menu"
+              }
+              aria-haspopup="menu"
+              aria-expanded={menuOpen}
+              onClick={() => setMenuOpen((open) => !open)}
+            >
+              <span>
+                {state
+                  ? state.buses.length === 0
+                    ? "no buses · open a project or create a sample"
+                    : session ||
+                      `${state.channels.length} buses · ${state.channels.map((c) => c.name).join(", ")}`
+                  : "connecting to the bus core"}
+              </span>
+              {state?.dirty && (
+                <span class="brand-dirty" title="Unsaved changes">
+                  *
+                </span>
+              )}
+              <span class="brand-caret" aria-hidden="true">
+                ▾
+              </span>
+            </button>
           </div>
         </div>
         <div class="actions">
@@ -3101,14 +3214,6 @@ export function App() {
             onClick={() => void run({ type: "pause", on: !state?.tracePaused })}
           >
             {state?.tracePaused ? "Resume" : "Pause"}
-          </button>
-          <button
-            type="button"
-            disabled={!canControl}
-            title="Clear the visible trace; measurement keeps running"
-            onClick={() => void run({ type: "clear_trace" })}
-          >
-            Clear trace
           </button>
         </div>
       </header>
@@ -3391,6 +3496,26 @@ export function App() {
                 >
                   Filters
                 </button>
+                <button
+                  type="button"
+                  class={`mini ${clearArmed ? "danger" : ""}`}
+                  disabled={!canControl || traceRows.length === 0}
+                  title={
+                    clearArmed
+                      ? "Click again to clear the visible trace"
+                      : "Clear the visible trace; measurement keeps running"
+                  }
+                  onClick={() => {
+                    if (!clearArmed) {
+                      setClearArmed(true);
+                      return;
+                    }
+                    setClearArmed(false);
+                    void run({ type: "clear_trace" });
+                  }}
+                >
+                  {clearArmed ? "Confirm" : "Clear"}
+                </button>
                 <ColumnsMenu
                   columns={traceColumns}
                   onChange={setTraceColumns}
@@ -3425,6 +3550,9 @@ export function App() {
               </>
             }
             onQuery={setQuery}
+            empty={
+              state && state.buses.length === 0 ? emptyWorkspace : undefined
+            }
             onChartCursor={placeChartCursor}
             onSetChartCursor={setChartCursorAt}
             onAddToChart={(frame) => void addFrameSignals(frame, "chart")}
@@ -3462,6 +3590,11 @@ export function App() {
                 key={state?.log ?? state?.projectPath ?? "untitled"}
                 rows={mainMessages}
                 filtered={messageQuery.trim() !== ""}
+                empty={
+                  state && state.buses.length === 0
+                    ? emptyWorkspace
+                    : undefined
+                }
                 onExpand={(key, on) =>
                   void run({ type: "set_message_expanded", key, on })
                 }
@@ -4023,7 +4156,12 @@ export function App() {
                 : state?.project
                   ? `${state.runMode} · ${state.project}`
                   : "simulated traffic · no project"
-              : state?.status || "waiting for core")}
+              : state?.status &&
+                  !["stopped", "paused"].includes(state.status.toLowerCase())
+                ? state.status
+                : state?.project
+                  ? `Ready · ${state.project}`
+                  : "No project")}
         </span>
         <span class="spacer" />
         {toast && (

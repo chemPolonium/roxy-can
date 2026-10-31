@@ -241,8 +241,8 @@ npm run dev                 # http://127.0.0.1:5173, proxies /api to :2010
   (direction, decoded-only, payload substring, time range, only/exclude hex
   ids), a canvas chart
   with total and per-bus frame rates plus dashed bus-load lines,
-  Start/Stop/Pause/Clear trace and the same core commands as the rest of the
-  app.
+  Start/Stop/Pause in the toolbar, and a two-step **Clear** in the Trace tools;
+  both drive the same core commands as the rest of the app.
   Trace merges CAN, FlexRay (`slot N` addresses) and Ethernet rows from the
   loaded session; the status bar reports the browser's own UI frame rate.
 - The Signals tab plots real DBC signals from the loaded project, FlexRay
