@@ -3694,7 +3694,7 @@ export function App() {
                   readRange={readRange}
                   readCount={readSeries.length}
                 />
-                {!chartSplit && (chartFullscreen || chartCursors.length > 0) && (
+                {!chartSplit && chartFullscreen && (
                   <CursorAnalysis
                     series={cursorSeries}
                     cursors={chartCursors}
