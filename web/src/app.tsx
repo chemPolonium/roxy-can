@@ -2663,7 +2663,7 @@ export function App() {
 
   const renderRate = () =>
     state && state.buses.length === 0 ? (
-      emptyWorkspace
+      <div class="rate-empty" />
     ) : (
       <RateChart
         points={state?.series ?? []}
@@ -4118,25 +4118,29 @@ export function App() {
               >
             {chartTab === "rate" ? (
               <>
-                <div class="chart-legend">
-                  <span class="legend-key">
-                    <i style={{ background: chartPalette.rateTotal }} />
-                    Total <b>{state ? state.fps.toFixed(0) : "—"}</b> f/s
-                  </span>
-                  {state?.channels.map((channel, index) => (
-                    <span class="legend-key" key={channel.name}>
-                      <i
-                        style={{
-                          background:
-                            chartPalette.buses[index % chartPalette.buses.length],
-                        }}
-                      />
-                      {channel.name}{" "}
-                      <b>{(latest?.busRates[index] ?? 0).toFixed(0)}</b> f/s
-                      <em>{(latest?.busLoads[index] ?? 0).toFixed(1)}%</em>
+                {(!state || state.buses.length > 0) && (
+                  <div class="chart-legend">
+                    <span class="legend-key">
+                      <i style={{ background: chartPalette.rateTotal }} />
+                      Total <b>{state ? state.fps.toFixed(0) : "—"}</b> f/s
                     </span>
-                  ))}
-                </div>
+                    {state?.channels.map((channel, index) => (
+                      <span class="legend-key" key={channel.name}>
+                        <i
+                          style={{
+                            background:
+                              chartPalette.buses[
+                                index % chartPalette.buses.length
+                              ],
+                          }}
+                        />
+                        {channel.name}{" "}
+                        <b>{(latest?.busRates[index] ?? 0).toFixed(0)}</b> f/s
+                        <em>{(latest?.busLoads[index] ?? 0).toFixed(1)}%</em>
+                      </span>
+                    ))}
+                  </div>
+                )}
                 {renderRate()}
               </>
             ) : chartTab === "signals" ? (

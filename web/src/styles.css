@@ -2901,6 +2901,11 @@ body.row-resizing {
   min-height: 0;
 }
 
+.rate-empty {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
 .signal-chart {
   cursor: grab;
   touch-action: none;
