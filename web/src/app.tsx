@@ -2142,6 +2142,7 @@ export function App() {
     state?.buses.filter((bus) => bus.can?.attached || bus.flexray?.attached)
       .length ?? 0;
   const replaying = state?.runMode === "Replay";
+  const runModeLabel = replaying ? "Offline" : "Online";
   const busLive = !replaying && Boolean(state?.realBus) && attachedBuses > 0;
   const busModeText = replaying
     ? "Bus mode"
@@ -2149,7 +2150,7 @@ export function App() {
       ? "Real bus"
       : "Simulated bus";
   const busModeDetail = replaying
-    ? "Replay runs from the log; bus mode applies to Simulation"
+    ? "Offline plays a recording; bus mode applies to Online"
     : attachedBuses === 0
       ? "No adapter attached — open Buses to attach one"
       : busLive
@@ -2383,7 +2384,7 @@ export function App() {
       id: "open-session",
       label: "Open Run…",
       group: "Open",
-      hint: "Projects, replay logs and recording",
+      hint: "Online/Offline modes, recording and logs",
       run: openSession,
     },
     {
@@ -3467,7 +3468,7 @@ export function App() {
                 : noBuses
                   ? "Add a bus or create a sample project first"
                   : needsLog
-                    ? "Load a replay log first"
+                    ? "Load a recording for Offline mode first"
                     : measuring
                       ? "Measurement is already running"
                       : "Start measurement"
@@ -3520,7 +3521,7 @@ export function App() {
         </div>
         <div class="stat">
           <span>Mode</span>
-          <strong>{state?.runMode ?? state?.mode ?? "—"}</strong>
+          <strong>{state ? runModeLabel : "—"}</strong>
         </div>
         <div class="stat">
           <span>Bus</span>
@@ -4443,9 +4444,9 @@ export function App() {
           {replayText ||
             (measuring
               ? state?.log
-                ? `${state.runMode} · ${state.log}`
+                ? `${runModeLabel} · ${state.log}`
                 : state?.project
-                  ? `${state.runMode} · ${state.project}`
+                  ? `${runModeLabel} · ${state.project}`
                   : "simulated traffic · no project"
               : state?.status &&
                   !["stopped", "paused"].includes(state.status.toLowerCase())
@@ -4931,61 +4932,48 @@ export function App() {
               </button>
             </header>
             <div class="session-body">
-              <div class="run-mode" role="group" aria-label="Run source">
-                <span>Source</span>
+              <div class="run-mode" role="group" aria-label="Run mode">
+                <span>Mode</span>
                 <button
                   type="button"
-                  class={state?.runMode !== "Replay" ? "on" : ""}
+                  class={!replaying ? "on" : ""}
                   onClick={() =>
                     void run({ type: "set_run_mode", mode: "simulation" })
                   }
                 >
-                  Simulation
+                  Online
                 </button>
                 <button
                   type="button"
-                  class={state?.runMode === "Replay" ? "on" : ""}
+                  class={replaying ? "on" : ""}
                   onClick={() =>
                     void run({ type: "set_run_mode", mode: "replay" })
                   }
                 >
-                  Replay
+                  Offline
                 </button>
               </div>
               <div class="session-tasks">
                 <section class="session-task">
-                  <h3>Bus mode</h3>
+                  <h3>Online</h3>
                   <p>
-                    Real bus puts attached adapters on the wire. Simulated bus
-                    keeps them parked and runs generators in real time.
-                  </p>
-                  <span class="task-state">{busModeDetail}</span>
-                  <p class="hint">
-                    Change the wire mode from the toolbar's Real bus /
-                    Simulated bus menu.
-                  </p>
-                </section>
-
-                <section class="session-task">
-                  <h3>Simulation</h3>
-                  <p>
-                    Start the loaded DBC with the generator. Real bus also sends
-                    simulated node traffic to the attached adapters.
+                    Run generators and analyse traffic. Hardware follows the
+                    toolbar's Real bus / Simulated bus mode.
                   </p>
                   <span class="task-state">
-                    {measuring && state?.runMode !== "Replay"
-                      ? `${state?.runMode ?? ""} · ${state?.fps.toFixed(0)} f/s`
-                      : state?.runMode === "Replay"
-                        ? "Switch Source to Simulation to run the generator"
+                    {measuring && !replaying
+                      ? `Online · ${state?.fps.toFixed(0)} f/s`
+                      : replaying
+                        ? "Switch to Online to run the generator"
                         : "Ready · use Start in the toolbar"}
                   </span>
                 </section>
 
                 <section class="session-task">
-                  <h3>Replay</h3>
+                  <h3>Offline</h3>
                   <p>
-                    Open an ASC or BLF and play it forward with the same
-                    analysis tools.
+                    Play an ASC or BLF recording forward with the same analysis
+                    tools.
                   </p>
                   <form
                     class="task-form"

@@ -31,10 +31,9 @@ The headless CLI modes (`--replay`/`--project` without `--web`, `--convert`,
 `--check-script`) keep their old meaning.
 
 The toolbar's **Run…** dialog configures the current session without restarting
-the server: a **Source** switch picks Simulation or Replay, a **Bus mode** card
-reports the wire mode chosen in the toolbar (Real bus puts attached adapters on
-the wire; Simulated parks them), the cards summarise the session, a
-replay log path can be loaded **Open**
+the server: a **Mode** switch picks Online (generators and live traffic) or
+Offline (play a recording), the cards summarise the running mode, and a
+recording path can be loaded **Open**
 (parked at the beginning) or **Open & play**, and recording is armed at the
 bottom. Replay logs can be typed or chosen with the browser's picker; uploaded
 logs land in the host's per-user application data folder
