@@ -1665,6 +1665,10 @@ struct PanelWriteEntry {
     value: f64,
 }
 
+fn default_true() -> bool {
+    true
+}
+
 #[derive(Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum WebCommand {
@@ -1761,8 +1765,14 @@ enum WebCommand {
     },
     PickProject,
     SaveProjectAs,
+    SetRunMode {
+        mode: String,
+    },
     OpenLog {
         path: String,
+        /// Load and start playback; false parks the log at its beginning.
+        #[serde(default = "default_true")]
+        play: bool,
     },
     SelectSignal {
         ch: u8,
@@ -2489,7 +2499,30 @@ fn app_loop(
                         None => app.status = "project open cancelled".to_string(),
                     }
                 }
-                WebCommand::OpenLog { path } => {
+                WebCommand::SetRunMode { mode } => {
+                    let target = match mode.to_ascii_lowercase().as_str() {
+                        "simulation" | "virtual" => Some(Mode::Virtual),
+                        "replay" => Some(Mode::Replay),
+                        _ => None,
+                    };
+                    match target {
+                        Some(target) => {
+                            if app.snap.measuring {
+                                app.stop();
+                            }
+                            app.send(BusCommand::SetRunMode(target));
+                            app.status = match target {
+                                Mode::Virtual => "simulation mode".to_string(),
+                                Mode::Replay if app.log_path.is_empty() => {
+                                    "replay mode · load a log".to_string()
+                                }
+                                Mode::Replay => "replay mode".to_string(),
+                            };
+                        }
+                        None => app.status = format!("unknown run mode: {mode}"),
+                    }
+                }
+                WebCommand::OpenLog { path, play } => {
                     if app.snap.measuring {
                         app.stop();
                     }
@@ -2507,7 +2540,9 @@ fn app_loop(
                         app.send(BusCommand::ClearAggregates);
                         app.send(BusCommand::SetRunMode(Mode::Replay));
                         reset_visual_stores(&trace, &mut series, &mut rate_window);
-                        app.start_selected();
+                        if play {
+                            app.start_selected();
+                        }
                     }
                 }
                 WebCommand::SelectSignal {
@@ -6591,6 +6626,31 @@ mod tests {
         }))
         .expect("save project as command");
         assert!(matches!(save_as, WebCommand::SaveProjectAs));
+        let set_mode: WebCommand = serde_json::from_value(serde_json::json!({
+            "type": "set_run_mode",
+            "mode": "replay",
+        }))
+        .expect("run mode command");
+        assert!(matches!(
+            set_mode,
+            WebCommand::SetRunMode { ref mode } if mode == "replay"
+        ));
+        let log: WebCommand = serde_json::from_value(serde_json::json!({
+            "type": "open_log",
+            "path": "drive.asc",
+        }))
+        .expect("log command");
+        assert!(matches!(
+            log,
+            WebCommand::OpenLog { play: true, ref path } if path == "drive.asc"
+        ));
+        let parked: WebCommand = serde_json::from_value(serde_json::json!({
+            "type": "open_log",
+            "path": "drive.asc",
+            "play": false,
+        }))
+        .expect("parked log command");
+        assert!(matches!(parked, WebCommand::OpenLog { play: false, .. }));
     }
 
     #[test]

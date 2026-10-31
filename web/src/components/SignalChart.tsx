@@ -473,6 +473,7 @@ export function SignalChart({
   paused,
   reference = null,
   onOpenReference,
+  onAddSignals,
   overlay = false,
   onToggleOverlay,
   hasReadout = false,
@@ -498,6 +499,8 @@ export function SignalChart({
   paused: boolean;
   reference?: ReferenceOverlay | null;
   onOpenReference?: () => void;
+  /// Opens the signal picker from inside the chart toolbar.
+  onAddSignals?: () => void;
   overlay?: boolean;
   onToggleOverlay?: () => void;
   /// Read-only signals exist: keep a cursor usable on an otherwise empty
@@ -1616,6 +1619,15 @@ export function SignalChart({
         </div>
       )}
       <div class="chart-cursor-tools">
+        {onAddSignals && (
+          <button
+            type="button"
+            title="Choose signals to plot or read at cursors"
+            onClick={onAddSignals}
+          >
+            + Signals
+          </button>
+        )}
         <button
           type="button"
           disabled={series.length === 0 && !hasReadout}

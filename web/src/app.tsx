@@ -457,6 +457,7 @@ export function App() {
   const [drag, setDrag] = useState<Drag>(null);
   const [theme, setTheme] = useState<Theme>(loadTheme);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [setupOpen, setSetupOpen] = useState(false);
   const [signalView, setSignalView] = useState<SignalView>(
     savedView.signalView ?? { windowS: 30, endS: null },
   );
@@ -808,6 +809,27 @@ export function App() {
       window.removeEventListener("keydown", escape);
     };
   }, [menuOpen]);
+
+  useEffect(() => {
+    if (!setupOpen) return;
+    const close = (event: PointerEvent) => {
+      if (
+        !(event.target instanceof Element) ||
+        !event.target.closest(".top-menu")
+      ) {
+        setSetupOpen(false);
+      }
+    };
+    const escape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setSetupOpen(false);
+    };
+    window.addEventListener("pointerdown", close);
+    window.addEventListener("keydown", escape);
+    return () => {
+      window.removeEventListener("pointerdown", close);
+      window.removeEventListener("keydown", escape);
+    };
+  }, [setupOpen]);
 
   useEffect(() => {
     if (!chartFullscreen) return;
@@ -1405,10 +1427,10 @@ export function App() {
     setScriptsOpen(false);
   };
 
-  const loadLog = (path: string) => {
+  const loadLog = (path: string, play = true) => {
     const value = path.trim();
     if (!value) return;
-    void run({ type: "open_log", path: value });
+    void run({ type: "open_log", path: value, play });
     resetChartTools();
     setSessionOpen(false);
     setScriptsOpen(false);
@@ -2027,6 +2049,16 @@ export function App() {
   const measuring = state?.measuring ?? false;
   const needsLog = state?.runMode === "Replay" && !state?.log;
   const noBuses = state ? state.buses.length === 0 : false;
+  const attachedBuses =
+    state?.buses.filter((bus) => bus.can?.attached || bus.flexray?.attached)
+      .length ?? 0;
+  const hardwareTitle = state
+    ? attachedBuses === 0
+      ? "Simulated · no adapter attached"
+      : state.realBus
+        ? `Real bus · ${attachedBuses} adapter(s) attached`
+        : `Simulated · ${attachedBuses} adapter(s) attached`
+    : "Bus setup";
   const latest = state?.series.length
     ? state.series[state.series.length - 1]
     : undefined;
@@ -2560,6 +2592,7 @@ export function App() {
           paused={state?.tracePaused ?? false}
           reference={reference}
           onOpenReference={() => setReferenceOpen(true)}
+          onAddSignals={() => void openPicker()}
           overlay={signalOverlay}
           onToggleOverlay={() => setSignalOverlay((value) => !value)}
           yModes={chartYModes}
@@ -3156,21 +3189,58 @@ export function App() {
           </button>
           <button
             type="button"
+            class="buses-button"
             disabled={!online}
-            onClick={openTriggers}
+            title={hardwareTitle}
+            onClick={openBuses}
           >
-            Triggers…
-          </button>
-          <button type="button" disabled={!online} onClick={openBuses}>
             Buses…
+            <span
+              class={`hw-dot ${attachedBuses > 0 && state?.realBus ? "on" : ""}`}
+              aria-hidden="true"
+            />
+            {attachedBuses > 0 && (
+              <span class="hw-count">{attachedBuses}</span>
+            )}
           </button>
-          <button
-            type="button"
-            disabled={!online}
-            onClick={() => openVariables()}
-          >
-            Variables…
-          </button>
+          <div class="top-menu">
+            <button
+              type="button"
+              disabled={!online}
+              aria-haspopup="menu"
+              aria-expanded={setupOpen}
+              onClick={() => setSetupOpen((open) => !open)}
+            >
+              Setup
+              <span class="top-menu-caret" aria-hidden="true">
+                ▾
+              </span>
+            </button>
+            {setupOpen && (
+              <div class="top-menu-panel" role="menu">
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    setSetupOpen(false);
+                    openTriggers();
+                  }}
+                >
+                  Triggers…
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    setSetupOpen(false);
+                    openVariables();
+                  }}
+                >
+                  Variables…
+                </button>
+              </div>
+            )}
+          </div>
           <button type="button" disabled={!online} onClick={openSession}>
             Run…
           </button>
@@ -3671,16 +3741,6 @@ export function App() {
                   State
                 </button>
               </div>
-              {chartTab === "signals" && (
-                <button
-                  type="button"
-                  class="mini"
-                  title="Choose signals to plot or read at cursors"
-                  onClick={() => void openPicker()}
-                >
-                  + Signals
-                </button>
-              )}
               {chartTab === "monitor" && (
                 <>
                   <button
@@ -3871,6 +3931,7 @@ export function App() {
                   paused={state?.tracePaused ?? false}
                   reference={reference}
                   onOpenReference={() => setReferenceOpen(true)}
+                  onAddSignals={() => void openPicker()}
                   overlay={signalOverlay}
                   onToggleOverlay={() => setSignalOverlay((value) => !value)}
                   yModes={chartYModes}
@@ -4014,7 +4075,7 @@ export function App() {
                   class={tab === "bus" ? "on" : ""}
                   onClick={() => setTab("bus")}
                 >
-                  Bus
+                  Bus stats
                 </button>
                 <button
                   type="button"
@@ -4645,49 +4706,54 @@ export function App() {
               </button>
             </header>
             <div class="session-body">
+              <div class="run-mode" role="group" aria-label="Run source">
+                <span>Source</span>
+                <button
+                  type="button"
+                  class={state?.runMode !== "Replay" ? "on" : ""}
+                  onClick={() =>
+                    void run({ type: "set_run_mode", mode: "simulation" })
+                  }
+                >
+                  Simulation
+                </button>
+                <button
+                  type="button"
+                  class={state?.runMode === "Replay" ? "on" : ""}
+                  onClick={() =>
+                    void run({ type: "set_run_mode", mode: "replay" })
+                  }
+                >
+                  Replay
+                </button>
+              </div>
               <div class="session-tasks">
                 <section class="session-task">
-                  <h3>Connect real bus</h3>
+                  <h3>Hardware</h3>
                   <p>
-                    Attach a Vector or Kvaser channel, load its DBC and map
-                    node roles.
+                    Adapters and bus modes live in Bus setup. Simulation uses
+                    the generator; Real bus mirrors traffic on the wire.
                   </p>
-                  <div class="task-actions">
-                    <button
-                      type="button"
-                      class="primary"
-                      onClick={() => {
-                        setSessionOpen(false);
-                        openBuses();
-                      }}
-                    >
-                      Open Buses…
-                    </button>
-                  </div>
                   <span class="task-state">
-                    {(state?.buses.filter(
-                      (bus) => bus.can?.attached || bus.flexray?.attached,
-                    ).length ?? 0) === 0
+                    {attachedBuses === 0
                       ? "No adapter attached"
-                      : `${state?.buses.filter(
-                          (bus) => bus.can?.attached || bus.flexray?.attached,
-                        ).length} adapter(s) attached · ${
-                          state?.realBus ? "real bus on" : "simulation only"
+                      : `${attachedBuses} adapter(s) · Real bus ${
+                          state?.realBus ? "on" : "off"
                         }`}
                   </span>
                 </section>
 
                 <section class="session-task">
-                  <h3>Simulate</h3>
+                  <h3>Simulation</h3>
                   <p>
-                    Start the loaded DBC from the toolbar. Attached hardware
+                    Start the loaded DBC with the generator. Attached hardware
                     is used when Real bus is on.
                   </p>
                   <span class="task-state">
-                    {measuring
+                    {measuring && state?.runMode !== "Replay"
                       ? `${state?.runMode ?? ""} · ${state?.fps.toFixed(0)} f/s`
-                      : needsLog
-                        ? "Load a replay log first"
+                      : state?.runMode === "Replay"
+                        ? "Switch Source to Simulation to run the generator"
                         : "Ready · use Start in the toolbar"}
                   </span>
                 </section>
@@ -4713,6 +4779,14 @@ export function App() {
                       }
                     />
                     <div class="task-actions">
+                      <button
+                        type="button"
+                        disabled={!logPath.trim()}
+                        title="Load the log and park it at the beginning"
+                        onClick={() => loadLog(logPath, false)}
+                      >
+                        Open
+                      </button>
                       <button
                         type="submit"
                         class="primary"

@@ -632,7 +632,8 @@ export type Command =
   | { type: "pick_project" }
   | { type: "save_project_as" }
   | { type: "create_sample_project" }
-  | { type: "open_log"; path: string }
+  | { type: "set_run_mode"; mode: "simulation" | "replay" }
+  | { type: "open_log"; path: string; play?: boolean }
   | { type: "save_project"; path: string | null }
   | { type: "set_sys_var"; namespace: string; name: string; value: number }
   | {

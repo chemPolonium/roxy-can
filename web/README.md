@@ -31,15 +31,16 @@ The headless CLI modes (`--replay`/`--project` without `--web`, `--convert`,
 `--check-script`) keep their old meaning.
 
 The toolbar's **Run…** dialog configures the current session without restarting
-the server: it summarises the attached hardware with a shortcut to Buses, offers
-simulation and replay, takes a replay log path, and arms recording. Replay logs
-can be typed or chosen with the browser's picker; uploaded logs land in the
-host's per-user application data folder (`%LOCALAPPDATA%\roxy-can\web-uploads`
-on Windows, 256 MiB cap). Projects use host dialogs instead: **Open project…**,
-**Save project** and **Save project as…** live in the R menu (also Ctrl+O /
-Ctrl+S / Ctrl+Shift+S), so the project opens in place and keeps its sibling
-databases. Opening a project or log stops the current measurement and clears
-the trace; a log starts playing immediately. A loaded replay also gets a second, slim bar with the playhead,
+the server: a **Source** switch picks Simulation or Replay, the cards summarise
+hardware, simulation and replay, a replay log path can be loaded **Open**
+(parked at the beginning) or **Open & play**, and recording is armed at the
+bottom. Replay logs can be typed or chosen with the browser's picker; uploaded
+logs land in the host's per-user application data folder
+(`%LOCALAPPDATA%\roxy-can\web-uploads` on Windows, 256 MiB cap). Projects use
+host dialogs instead: **Open project…**, **Save project** and **Save project
+as…** live in the R menu (also Ctrl+O / Ctrl+S / Ctrl+Shift+S), so the project
+opens in place and keeps its sibling databases. Opening a project or log stops
+the current measurement and clears the trace. A loaded replay also gets a second, slim bar with the playhead,
 a speed ladder (0.5x/1x/2x/4x/Fast), a forward **Step** (10 ms–5 s), **Play
 for** (1–60 s) and **Play to** an absolute log time; both timed plays resume
 playback and pause at the target.
@@ -112,7 +113,8 @@ npm run dev                 # http://127.0.0.1:5173, proxies /api to :2010
   Lo/Hi, period, phase, Step sequence and Random redraw interval. A
   **Replay blocks** section injects a recorded ASC/BLF onto a chosen bus,
   optionally limited to one DBC node; blocks toggle and remove in place.
-- **Triggers…** shows the live rule list with condition summary, action,
+- **Setup ▾** holds **Triggers…** and **Variables…**. Triggers shows the live
+  rule list with condition summary, action,
   fired count and last-fire time. Default rules can be added by kind,
   enabled/disabled, removed and re-armed. The editor covers every condition
   kind (CAN signal/ID/error/timeout, FR frame/signal, sysvar), all five
@@ -150,7 +152,7 @@ npm run dev                 # http://127.0.0.1:5173, proxies /api to :2010
   delete. The core applies the same validation rules on the host;
   definitions are saved with the project. Values reset to Init when a
   measurement starts, and scripts reach them through `sys_get` / `sys_set`.
-- The lower panel has **Statistics / Bus / Spec / Write**. Messages shares
+- The lower panel has **Statistics / Bus stats / Spec / Write**. Messages shares
   the main pane with Trace through the **Trace / Messages** switch, and both
   the switch and the selected view are saved in the web workspace.
   Messages and Statistics include CAN, FlexRay and Ethernet rows when the
@@ -248,7 +250,7 @@ npm run dev                 # http://127.0.0.1:5173, proxies /api to :2010
 - The Signals tab plots real DBC signals from the loaded project, FlexRay
   signals when a cluster description is loaded (slots appear as `Slot N`
   instead of hex ids), and Ethernet signals when a matrix is loaded (frames
-  are addressed by name). **Pick signals…** opens a searchable
+  are addressed by name). The chart toolbar's **+ Signals** opens a searchable
   bus → message → signal catalog fetched from the backend. The generated
   sample opens with eight auto-selected generator sources,
   while other projects start from their first Signals chart and save the
