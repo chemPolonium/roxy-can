@@ -496,10 +496,13 @@ export function App() {
   const [theme, setTheme] = useState<Theme>(loadTheme);
   const [menuOpen, setMenuOpen] = useState(false);
   const [setupOpen, setSetupOpen] = useState(false);
+  const [busModeOpen, setBusModeOpen] = useState(false);
   const brandMenuRef = useRef<HTMLDivElement>(null);
   const setupMenuRef = useRef<HTMLDivElement>(null);
+  const busModeMenuRef = useRef<HTMLDivElement>(null);
   const brandTriggerRef = useRef<HTMLButtonElement | null>(null);
   const setupTriggerRef = useRef<HTMLButtonElement | null>(null);
+  const busModeTriggerRef = useRef<HTMLButtonElement | null>(null);
   const [signalView, setSignalView] = useState<SignalView>(
     savedView.signalView ?? { windowS: 30, endS: null },
   );
@@ -874,6 +877,27 @@ export function App() {
   }, [setupOpen]);
 
   useEffect(() => {
+    if (!busModeOpen) return;
+    const close = (event: PointerEvent) => {
+      if (
+        !(event.target instanceof Element) ||
+        !event.target.closest(".bus-mode-menu")
+      ) {
+        setBusModeOpen(false);
+      }
+    };
+    const escape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setBusModeOpen(false);
+    };
+    window.addEventListener("pointerdown", close);
+    window.addEventListener("keydown", escape);
+    return () => {
+      window.removeEventListener("pointerdown", close);
+      window.removeEventListener("keydown", escape);
+    };
+  }, [busModeOpen]);
+
+  useEffect(() => {
     if (!menuOpen) return;
     brandMenuRef.current
       ?.querySelector<HTMLButtonElement>("button:not(:disabled)")
@@ -886,6 +910,13 @@ export function App() {
       ?.querySelector<HTMLButtonElement>("button:not(:disabled)")
       ?.focus();
   }, [setupOpen]);
+
+  useEffect(() => {
+    if (!busModeOpen) return;
+    busModeMenuRef.current
+      ?.querySelector<HTMLButtonElement>("button:not(:disabled)")
+      ?.focus();
+  }, [busModeOpen]);
 
   useEffect(() => {
     if (!chartFullscreen) return;
@@ -2108,13 +2139,25 @@ export function App() {
   const attachedBuses =
     state?.buses.filter((bus) => bus.can?.attached || bus.flexray?.attached)
       .length ?? 0;
-  const hardwareTitle = state
-    ? attachedBuses === 0
-      ? "Simulated · no adapter attached"
-      : state.realBus
-        ? `Real bus · ${attachedBuses} adapter(s) attached`
-        : `Simulated · ${attachedBuses} adapter(s) attached`
-    : "Bus setup";
+  const replaying = state?.runMode === "Replay";
+  const busLive = !replaying && Boolean(state?.realBus) && attachedBuses > 0;
+  const busModeText = replaying
+    ? "Bus mode"
+    : busLive
+      ? "Real bus"
+      : "Simulated bus";
+  const busModeDetail = replaying
+    ? "Replay runs from the log; bus mode applies to Simulation"
+    : attachedBuses === 0
+      ? "No adapter attached — configure one in Bus setup"
+      : busLive
+        ? `${attachedBuses} adapter(s) live on the wire`
+        : `${attachedBuses} adapter(s) attached and parked`;
+  const chooseBusMode = (real: boolean) => {
+    setBusModeOpen(false);
+    if (!state || state.realBus === real) return;
+    void run({ type: "set_bus_mode", real });
+  };
   const latest = state?.series.length
     ? state.series[state.series.length - 1]
     : undefined;
@@ -3270,18 +3313,96 @@ export function App() {
             type="button"
             class="buses-button"
             disabled={!online}
-            title={hardwareTitle}
+            title="Attach adapters, bind descriptions and set bit rates"
             onClick={openBuses}
           >
             Buses…
-            <span
-              class={`hw-dot ${attachedBuses > 0 && state?.realBus ? "on" : ""}`}
-              aria-hidden="true"
-            />
-            {attachedBuses > 0 && (
-              <span class="hw-count">{attachedBuses}</span>
-            )}
           </button>
+          <div class="top-menu bus-mode-menu">
+            <button
+              type="button"
+              disabled={!online || replaying}
+              aria-haspopup="menu"
+              aria-expanded={busModeOpen}
+              title={busModeDetail}
+              onClick={(event) => {
+                busModeTriggerRef.current = event.currentTarget;
+                setBusModeOpen((open) => !open);
+              }}
+            >
+              <span class={`hw-dot ${busLive ? "on" : ""}`} aria-hidden="true" />
+              {busModeText}
+              {attachedBuses > 0 && !replaying && (
+                <span class="hw-count">{attachedBuses}</span>
+              )}
+              <span class="top-menu-caret" aria-hidden="true">
+                ▾
+              </span>
+            </button>
+            {busModeOpen && (
+              <div
+                class="top-menu-panel bus-mode-panel"
+                role="menu"
+                aria-label="Bus mode"
+                ref={busModeMenuRef}
+                onKeyDown={(event) =>
+                  handleMenuKey(
+                    event,
+                    busModeMenuRef.current,
+                    () => setBusModeOpen(false),
+                    busModeTriggerRef.current,
+                  )
+                }
+              >
+                <button
+                  type="button"
+                  role="menuitemradio"
+                  aria-checked={busLive}
+                  disabled={attachedBuses === 0}
+                  onClick={() => chooseBusMode(true)}
+                >
+                  <span class="bus-mode-check" aria-hidden="true">
+                    {busLive ? "✓" : ""}
+                  </span>
+                  <span class="bus-mode-copy">
+                    <strong>Real bus</strong>
+                    <small>
+                      {attachedBuses === 0
+                        ? "Attach an adapter in Bus setup first."
+                        : "Attached adapters receive and transmit on the wire."}
+                    </small>
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  role="menuitemradio"
+                  aria-checked={!busLive}
+                  onClick={() => chooseBusMode(false)}
+                >
+                  <span class="bus-mode-check" aria-hidden="true">
+                    {!busLive ? "✓" : ""}
+                  </span>
+                  <span class="bus-mode-copy">
+                    <strong>Simulated bus</strong>
+                    <small>
+                      Keep adapters parked; generators run in real time.
+                    </small>
+                  </span>
+                </button>
+                <div class="bus-mode-sep" />
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    setBusModeOpen(false);
+                    openBuses();
+                  }}
+                >
+                  Bus setup…
+                </button>
+              </div>
+            )}
+          </div>
           <div class="top-menu">
             <button
               type="button"
@@ -3402,6 +3523,20 @@ export function App() {
         <div class="stat">
           <span>Mode</span>
           <strong>{state?.runMode ?? state?.mode ?? "—"}</strong>
+        </div>
+        <div class="stat">
+          <span>Bus</span>
+          <strong>
+            {!state
+              ? "—"
+              : replaying
+                ? "—"
+                : attachedBuses === 0
+                  ? "Simulated"
+                  : busLive
+                    ? `Real · ${attachedBuses}`
+                    : `Simulated · ${attachedBuses}`}
+          </strong>
         </div>
         {error && <div class="error-pill">{error}</div>}
       </section>
@@ -4822,25 +4957,58 @@ export function App() {
               </div>
               <div class="session-tasks">
                 <section class="session-task">
-                  <h3>Hardware</h3>
+                  <h3>Bus mode</h3>
                   <p>
-                    Adapters and bus modes live in Bus setup. Simulation uses
-                    the generator; Real bus mirrors traffic on the wire.
+                    Real bus puts attached adapters on the wire. Simulated bus
+                    keeps them parked and runs generators in real time.
                   </p>
-                  <span class="task-state">
-                    {attachedBuses === 0
-                      ? "No adapter attached"
-                      : `${attachedBuses} adapter(s) · Real bus ${
-                          state?.realBus ? "on" : "off"
-                        }`}
-                  </span>
+                  <div
+                    class="run-mode bus-mode-choice"
+                    role="group"
+                    aria-label="Bus mode"
+                  >
+                    <button
+                      type="button"
+                      class={busLive ? "on" : ""}
+                      disabled={replaying || attachedBuses === 0}
+                      title={
+                        attachedBuses === 0
+                          ? "Attach an adapter in Bus setup first"
+                          : replaying
+                            ? "Replay runs from the log"
+                            : "Use attached adapters on the wire"
+                      }
+                      onClick={() => chooseBusMode(true)}
+                    >
+                      Real bus
+                    </button>
+                    <button
+                      type="button"
+                      class={!busLive ? "on" : ""}
+                      disabled={replaying}
+                      title={
+                        replaying
+                          ? "Replay runs from the log"
+                          : "Keep adapters attached but offline"
+                      }
+                      onClick={() => chooseBusMode(false)}
+                    >
+                      Simulated
+                    </button>
+                  </div>
+                  <span class="task-state">{busModeDetail}</span>
+                  <div class="task-actions">
+                    <button type="button" onClick={openBuses}>
+                      Bus setup…
+                    </button>
+                  </div>
                 </section>
 
                 <section class="session-task">
                   <h3>Simulation</h3>
                   <p>
-                    Start the loaded DBC with the generator. Attached hardware
-                    is used when Real bus is on.
+                    Start the loaded DBC with the generator. Real bus also sends
+                    simulated node traffic to the attached adapters.
                   </p>
                   <span class="task-state">
                     {measuring && state?.runMode !== "Replay"

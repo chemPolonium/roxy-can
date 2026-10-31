@@ -823,6 +823,7 @@
 /* Menu rows are flat rows, not buttons: the base light `button` rule would
    paint each one white with a border and turn the menu into a button stack. */
 [data-theme="light"] .brand-menu-panel button,
+[data-theme="light"] .top-menu-panel button,
 [data-theme="light"] .page-add-menu button,
 [data-theme="light"] .page-suggest-menu button {
   border: 0;
@@ -831,6 +832,7 @@
 }
 
 [data-theme="light"] .brand-menu-panel button:hover:not(:disabled),
+[data-theme="light"] .top-menu-panel button:hover:not(:disabled),
 [data-theme="light"] .page-add-menu button:hover:not(:disabled),
 [data-theme="light"] .page-add-menu button:focus-visible,
 [data-theme="light"] .page-suggest-menu button:hover,

@@ -440,7 +440,58 @@ select:disabled {
 }
 
 .top-menu-panel button {
+  border: 0;
+  background: transparent;
   text-align: left;
+}
+
+.top-menu-panel button:hover:not(:disabled) {
+  background: var(--accent-soft);
+}
+
+.bus-mode-panel {
+  min-width: 252px;
+}
+
+.bus-mode-panel button {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  width: 100%;
+  padding: 6px 8px;
+}
+
+.bus-mode-check {
+  flex: 0 0 10px;
+  color: var(--accent);
+  font-size: 11px;
+  line-height: 14px;
+  text-align: center;
+}
+
+.bus-mode-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.bus-mode-copy strong {
+  font-size: 11.5px;
+  font-weight: 600;
+}
+
+.bus-mode-copy small {
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.35;
+  white-space: normal;
+}
+
+.bus-mode-sep {
+  height: 1px;
+  margin: 4px;
+  background: var(--line);
 }
 
 .stats {
@@ -4719,6 +4770,11 @@ button.mini.on {
   border-color: var(--accent);
   background: var(--accent-soft);
   color: var(--accent);
+}
+
+.session-task .bus-mode-choice {
+  flex-wrap: wrap;
+  margin-bottom: 0;
 }
 
 .session-tasks {

@@ -31,8 +31,10 @@ The headless CLI modes (`--replay`/`--project` without `--web`, `--convert`,
 `--check-script`) keep their old meaning.
 
 The toolbar's **Run…** dialog configures the current session without restarting
-the server: a **Source** switch picks Simulation or Replay, the cards summarise
-hardware, simulation and replay, a replay log path can be loaded **Open**
+the server: a **Source** switch picks Simulation or Replay, a **Bus mode**
+switch chooses Real bus (attached adapters on the wire) or Simulated (adapters
+parked, generators and analysis only), the cards summarise the session, a
+replay log path can be loaded **Open**
 (parked at the beginning) or **Open & play**, and recording is armed at the
 bottom. Replay logs can be typed or chosen with the browser's picker; uploaded
 logs land in the host's per-user application data folder
@@ -87,9 +89,12 @@ npm run dev                 # http://127.0.0.1:5173, proxies /api to :2010
   buffers. A loaded project starts clean, plain **Save project** rewrites it
   in place, and **Save project as…** targets a new path — both use the current
   project format.
-- **Buses…** lists each bus with its DBCs and bit rates, probes Kvaser/Vector
+- The toolbar's **Real bus / Simulated bus** menu switches the wire mode at
+  any time, including while measuring, and shows the attached-adapter count;
+  its **Bus setup…** row opens the editor below. **Buses…** lists each bus
+  with its DBCs and bit rates, probes Kvaser/Vector
   adapters on demand, attaches/detaches a selected channel at the bus's
-  configured rates, and toggles the Simulated/Real bus mode. Buses can be
+  configured rates, and mirrors the toolbar's Simulated/Real bus mode. Buses can be
   added, removed, renamed, re-rated and given a new DBC by host path; removing
   one remaps the web signal keys with the core's channel indices. Each DBC
   node appears as a chip with its generator-entry count; ticking it declares
