@@ -1759,6 +1759,7 @@ enum WebCommand {
         #[serde(default)]
         parent: Option<String>,
     },
+    PickProject,
     OpenLog {
         path: String,
     },
@@ -2461,6 +2462,30 @@ fn app_loop(
                             Err(e) => app.status = format!("sample project failed: {e}"),
                         },
                         None => app.status = "sample project cancelled".to_string(),
+                    }
+                }
+                WebCommand::PickProject => {
+                    let start = app
+                        .project_path
+                        .as_ref()
+                        .and_then(|path| path.parent())
+                        .map(std::path::Path::to_path_buf)
+                        .unwrap_or_else(|| web_data_dir("samples"));
+                    let picked = rfd::FileDialog::new()
+                        .set_title("Open roxy-can project")
+                        .add_filter("roxy-can project", &["rxproj"])
+                        .set_directory(start)
+                        .pick_file();
+                    match picked {
+                        Some(path) => open_project_session(
+                            &mut app,
+                            &path,
+                            &signals,
+                            &trace,
+                            &mut series,
+                            &mut rate_window,
+                        ),
+                        None => app.status = "project open cancelled".to_string(),
                     }
                 }
                 WebCommand::OpenLog { path } => {
@@ -3518,8 +3543,11 @@ fn write_sample_project(parent: &std::path::Path) -> Result<std::path::PathBuf, 
         return Ok(project_path);
     }
     std::fs::create_dir_all(&dir).map_err(|e| format!("sample folder {}: {e}", dir.display()))?;
-    let sample_dbc = dir.join("sample.dbc");
-    let motbus_dbc = dir.join("motbus.dbc");
+    let databases = dir.join("databases");
+    std::fs::create_dir_all(&databases)
+        .map_err(|e| format!("sample databases {}: {e}", databases.display()))?;
+    let sample_dbc = databases.join("sample.dbc");
+    let motbus_dbc = databases.join("motbus.dbc");
     std::fs::write(&sample_dbc, crate::sample_data::SAMPLE_DBC)
         .map_err(|e| format!("sample.dbc: {e}"))?;
     std::fs::write(&motbus_dbc, crate::sample_data::MOTBUS_DBC)
@@ -6531,6 +6559,11 @@ mod tests {
             sample,
             WebCommand::CreateSampleProject { parent: Some(ref p) } if p == "C:/tmp"
         ));
+        let pick: WebCommand = serde_json::from_value(serde_json::json!({
+            "type": "pick_project",
+        }))
+        .expect("pick project command");
+        assert!(matches!(pick, WebCommand::PickProject));
     }
 
     #[test]
@@ -6656,8 +6689,9 @@ mod tests {
         );
     }
 
-    /// The sample project is a normal file-based project: the DBCs sit next
-    /// to the .rxproj, reopen through relative paths, and start on demand.
+    /// The sample project is a normal file-based project: the DBCs sit in
+    /// its databases folder, reopen through relative paths, and start on
+    /// demand.
     #[test]
     fn the_sample_project_is_file_based_and_reopenable() {
         let dir =
@@ -6666,14 +6700,40 @@ mod tests {
         std::fs::create_dir_all(&dir).expect("temp dir");
         let project = write_sample_project(&dir).expect("sample project written");
         assert!(project.ends_with("roxy-can-sample/roxy-can-sample.rxproj"));
-        assert!(project.with_file_name("sample.dbc").exists());
-        assert!(project.with_file_name("motbus.dbc").exists());
+        let databases = project.parent().expect("project folder").join("databases");
+        assert!(databases.join("sample.dbc").exists());
+        assert!(databases.join("motbus.dbc").exists());
         let json = std::fs::read_to_string(&project).expect("project json");
-        assert!(json.contains("\"sample.dbc\""), "relative DBC path");
-        assert!(json.contains("\"motbus.dbc\""), "relative DBC path");
+        let parsed: crate::model::ProjectV2 = serde_json::from_str(&json).expect("project parses");
+        let paths: Vec<&str> = parsed
+            .clusters
+            .iter()
+            .flat_map(|cluster| cluster.sources.iter())
+            .filter_map(|source| match source {
+                crate::model::ClusterSource::Dbc { path } => Some(path.as_str()),
+                _ => None,
+            })
+            .collect();
         assert!(
-            !json.contains("builtin:"),
-            "no internal source in the project"
+            paths
+                .iter()
+                .any(|path| std::path::Path::new(path)
+                    == std::path::Path::new("databases/sample.dbc")),
+            "relative DBC path: {paths:?}"
+        );
+        assert!(
+            paths
+                .iter()
+                .any(|path| std::path::Path::new(path)
+                    == std::path::Path::new("databases/motbus.dbc")),
+            "relative DBC path: {paths:?}"
+        );
+        assert!(
+            paths
+                .iter()
+                .all(|path| !path.starts_with("builtin:")
+                    && !std::path::Path::new(path).is_absolute()),
+            "no internal or absolute source in the project"
         );
 
         let mut app = App::blank();
@@ -6701,6 +6761,12 @@ mod tests {
             app.tick(now);
         }
         assert!(!app.snap.trace.is_empty(), "the sample produces frames");
+        assert!(
+            TraceStore::seed_rows(&app)
+                .iter()
+                .any(|frame| !frame.name.is_empty()),
+            "the reopened sample decodes signal/message names"
+        );
 
         let reopened = write_sample_project(&dir).expect("existing sample reopens");
         assert_eq!(reopened, project, "the same sample is reused");

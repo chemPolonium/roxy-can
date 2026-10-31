@@ -13,12 +13,13 @@ cd web
 npm install
 npm run build
 cd ..
-cargo run                                       # demo simulation
+cargo run                                       # empty workspace
 cargo run -- --web --project <path.rxproj>      # project, stopped
 cargo run -- --web --replay <path.asc|path.blf> # load and start a replay
 ```
 
-With neither flag the generator demo starts automatically. `--project` loads
+With neither flag the shell starts empty; the R menu's **Sample project** writes
+a file-based starter project. `--project` loads
 the project but leaves it stopped; `--replay` loads the log and starts
 playback. A project and a replay can be combined. `--profile <name>` overlays
 `profiles/<name>.toml` from the project directory onto its roles and hardware
@@ -246,9 +247,9 @@ npm run dev                 # http://127.0.0.1:5173, proxies /api to :2010
   signals when a cluster description is loaded (slots appear as `Slot N`
   instead of hex ids), and Ethernet signals when a matrix is loaded (frames
   are addressed by name). **Pick signals…** opens a searchable
-  bus → message → signal catalog fetched from the backend. The demo starts
-  with eight auto-selected generator sources,
-  while real projects start from their first Signals chart and save the
+  bus → message → signal catalog fetched from the backend. The generated
+  sample opens with eight auto-selected generator sources,
+  while other projects start from their first Signals chart and save the
   selection back there, so lanes survive save/reload. The core samples at up
   to 200 Hz; each series keeps 12k points (one minute at that rate), and the
   canvas reduces them to one min/max span per pixel column. Wheel zoom and
@@ -288,14 +289,14 @@ CANoe's Trace buffer is commonly around 100k events by default and can be
 raised into the millions. The web spike caps at 50k, the same order of
 magnitude and the core trace ring's limit.
 
-The demo generates 9 messages at 20 Hz. To fill 50k rows quickly, shorten
-the generator period through the environment:
+The sample project generates 9 messages at 20 Hz. To fill 50k rows quickly,
+shorten the generator period through the environment:
 
 ```bash
 ROXY_WEB_CYCLE_US=5000 ./target/debug/roxy-can.exe --web
 ```
 
-At 5 ms the demo runs around 1,800 frames/s, so the 50k buffer fills in
+At 5 ms the sample runs around 1,800 frames/s, so the 50k buffer fills in
 under 30 seconds. The same period drives the eight signal curves at 200 Hz,
 so each series reaches its 12k-point cap in about a minute. The page keeps
 a UI frame-rate readout in the status bar.

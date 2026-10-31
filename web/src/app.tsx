@@ -4604,15 +4604,16 @@ export function App() {
                   >
                     Open project
                   </button>
-                  <FilePick
-                    label="Choose file…"
-                    accept=".rxproj,application/json"
-                    onError={setError}
-                    onPick={(path) => {
-                      setProjectPath(path);
-                      loadProject(path);
+                  <button
+                    type="button"
+                    title="Pick a .rxproj on this machine; sibling databases stay next to it"
+                    onClick={() => {
+                      void run({ type: "pick_project" });
+                      setSessionOpen(false);
                     }}
-                  />
+                  >
+                    Browse…
+                  </button>
                 </form>
                 <div class="save-row">
                   <button
