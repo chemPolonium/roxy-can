@@ -250,9 +250,9 @@ npm run dev                 # http://127.0.0.1:5173, proxies /api to :2010
 - The Signals tab plots real DBC signals from the loaded project, FlexRay
   signals when a cluster description is loaded (slots appear as `Slot N`
   instead of hex ids), and Ethernet signals when a matrix is loaded (frames
-  are addressed by name). The chart toolbar's **+ Signals** opens a searchable
-  bus → message → signal catalog fetched from the backend. The generated
-  sample opens with eight auto-selected generator sources,
+  are addressed by name). **+ Signals** in the Signals tab header opens a
+  searchable bus → message → signal catalog fetched from the backend. The
+  generated sample opens with eight auto-selected generator sources,
   while other projects start from their first Signals chart and save the
   selection back there, so lanes survive save/reload. The core samples at up
   to 200 Hz; each series keeps 12k points (one minute at that rate), and the

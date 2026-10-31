@@ -2653,7 +2653,6 @@ export function App() {
           paused={state?.tracePaused ?? false}
           reference={reference}
           onOpenReference={() => setReferenceOpen(true)}
-          onAddSignals={() => void openPicker()}
           overlay={signalOverlay}
           onToggleOverlay={() => setSignalOverlay((value) => !value)}
           yModes={chartYModes}
@@ -3836,6 +3835,16 @@ export function App() {
                   State
                 </button>
               </div>
+              {chartTab === "signals" && (
+                <button
+                  type="button"
+                  class="mini"
+                  title="Choose signals to plot or read at cursors"
+                  onClick={() => void openPicker()}
+                >
+                  + Signals
+                </button>
+              )}
               {chartTab === "monitor" && (
                 <>
                   <button
@@ -4016,7 +4025,6 @@ export function App() {
                   paused={state?.tracePaused ?? false}
                   reference={reference}
                   onOpenReference={() => setReferenceOpen(true)}
-                  onAddSignals={() => void openPicker()}
                   overlay={signalOverlay}
                   onToggleOverlay={() => setSignalOverlay((value) => !value)}
                   yModes={chartYModes}
