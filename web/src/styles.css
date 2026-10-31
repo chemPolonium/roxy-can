@@ -4793,6 +4793,42 @@ button.mini.on {
   background: var(--panel-2);
 }
 
+.fb-new {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel-2);
+}
+
+.fb-new input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.fb-error {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--error);
+  font-size: 10px;
+}
+
+.fb-sort {
+  cursor: pointer;
+  user-select: none;
+}
+
+.fb-sort:hover {
+  color: var(--accent);
+}
+
+.fb-sort.num {
+  text-align: right;
+}
+
 .fb-row {
   display: grid;
   grid-template-columns: 18px minmax(0, 1fr) 150px 78px;

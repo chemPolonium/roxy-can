@@ -40,8 +40,10 @@ format and id/slot filter; **Setup → Replay…** is the independent replay
 source list: add files or persistent folders, **Refresh** rescans them, and a
 per-row checkbox makes one recording the active Offline source for Start.
 The in-app file browser chooses host files and folders for projects, replay
-sources, descriptions and the recording folder; it only lists names and
-metadata, while text imports still use the browser's upload picker. Uploaded
+sources, descriptions and the recording folder; it supports quick access,
+parent navigation, creating folders and sorting by name/modified/size. It
+only lists names and metadata, while text imports still use the browser's
+upload picker. Uploaded
 logs land in the host's per-user application data folder
 (`%LOCALAPPDATA%\roxy-can\web-uploads` on Windows, 256 MiB cap). Projects use
 that browser too: **Open project…**, **Save project** and **Save project

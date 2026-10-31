@@ -222,6 +222,7 @@ pub fn run(args: &[String], open: bool) -> Result<(), String> {
             .route("/catalog", get(catalog_handler))
             .route("/hardware", get(hardware_handler))
             .route("/fs/list", get(fs_list_handler))
+            .route("/fs/mkdir", post(create_folder_handler))
             .route("/nodes", get(scripts_handler))
             .route("/script-help", get(script_help_handler))
             .route(
@@ -1491,6 +1492,60 @@ async fn fs_list_handler(
     Query(query): Query<FsListQuery>,
 ) -> Result<Json<FsList>, (StatusCode, String)> {
     list_directory(query.path.as_deref())
+        .map(Json)
+        .map_err(|error| (StatusCode::BAD_REQUEST, error))
+}
+
+#[derive(Deserialize)]
+struct CreateFolderRequest {
+    path: String,
+    name: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct NewFolder {
+    path: String,
+    name: String,
+}
+
+fn create_folder(parent: &str, name: &str) -> Result<NewFolder, String> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err("folder name is empty".to_string());
+    }
+    if name == "." || name == ".." || name.ends_with(' ') || name.ends_with('.') {
+        return Err("folder name is not valid".to_string());
+    }
+    if name.chars().any(|ch| {
+        ch.is_control() || matches!(ch, '/' | '\\' | '<' | '>' | ':' | '"' | '|' | '?' | '*')
+    }) {
+        return Err("folder name contains an invalid character".to_string());
+    }
+    let parent = std::fs::canonicalize(parent).map_err(|error| {
+        format!(
+            "cannot open {}: {error}",
+            clean_path(std::path::Path::new(parent))
+        )
+    })?;
+    if !parent.is_dir() {
+        return Err(format!("not a folder: {}", clean_path(&parent)));
+    }
+    let path = parent.join(name);
+    if path.exists() {
+        return Err(format!("folder already exists: {}", clean_path(&path)));
+    }
+    std::fs::create_dir(&path).map_err(|error| format!("cannot create folder: {error}"))?;
+    Ok(NewFolder {
+        path: clean_path(&path),
+        name: name.to_string(),
+    })
+}
+
+async fn create_folder_handler(
+    Json(request): Json<CreateFolderRequest>,
+) -> Result<Json<NewFolder>, (StatusCode, String)> {
+    create_folder(&request.path, &request.name)
         .map(Json)
         .map_err(|error| (StatusCode::BAD_REQUEST, error))
 }
@@ -8377,6 +8432,20 @@ mod tests {
         assert_eq!(list.entries[1].size, 3);
         assert!(list.parent.is_some());
         assert!(!list.roots.is_empty());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn creating_a_folder_rejects_duplicates_and_path_escapes() {
+        let dir = std::env::temp_dir().join(format!("roxy-can-mkdir-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let parent = dir.to_string_lossy().into_owned();
+        let created = create_folder(&parent, "take 1").unwrap();
+        assert_eq!(created.name, "take 1");
+        assert!(std::path::Path::new(&created.path).is_dir());
+        assert!(create_folder(&parent, "take 1").is_err());
+        assert!(create_folder(&parent, "../escape").is_err());
+        assert!(create_folder(&parent, "nested/name").is_err());
         std::fs::remove_dir_all(&dir).ok();
     }
 }

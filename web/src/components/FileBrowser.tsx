@@ -6,7 +6,7 @@ import {
   useEffect,
   useState,
 } from "preact/hooks";
-import { listDirectory } from "../api";
+import { listDirectory, createFolder } from "../api";
 import type { FsEntry, FsList } from "../types";
 
 export interface FilePickOptions {
@@ -167,6 +167,8 @@ function EntryIcon({ dir }: { dir: boolean }) {
   );
 }
 
+type SortKey = "name" | "modified" | "size";
+
 function FileBrowser({
   mode,
   title,
@@ -180,6 +182,13 @@ function FileBrowser({
   const [name, setName] = useState(initialName);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [creating, setCreating] = useState(false);
+  const [newFolder, setNewFolder] = useState("");
+  const [createError, setCreateError] = useState("");
+  const [sort, setSort] = useState<{ key: SortKey; dir: 1 | -1 }>({
+    key: "name",
+    dir: 1,
+  });
 
   const allowed = (entry: FsEntry) =>
     mode === "folder"
@@ -197,6 +206,28 @@ function FileBrowser({
       setError(reason instanceof Error ? reason.message : String(reason));
     } finally {
       setLoading(false);
+    }
+  };
+
+  const sortBy = (key: SortKey) => {
+    setSort((current) =>
+      current.key === key
+        ? { key, dir: current.dir === 1 ? -1 : 1 }
+        : { key, dir: key === "name" ? 1 : -1 },
+    );
+  };
+
+  const create = async () => {
+    const folder = newFolder.trim();
+    if (!listing || !folder) return;
+    setCreateError("");
+    try {
+      const created = await createFolder(listing.path, folder);
+      setCreating(false);
+      setNewFolder("");
+      await load(created.path);
+    } catch (reason) {
+      setCreateError(reason instanceof Error ? reason.message : String(reason));
     }
   };
 
@@ -237,7 +268,29 @@ function FileBrowser({
     }
   };
 
-  const entries = (listing?.entries ?? []).filter(allowed);
+  const entries = (listing?.entries ?? [])
+    .filter(allowed)
+    .sort((a, b) => {
+      if (a.dir !== b.dir) return a.dir ? -1 : 1;
+      let cmp = 0;
+      if (sort.key === "name") {
+        cmp = a.name.localeCompare(b.name, undefined, {
+          numeric: true,
+          sensitivity: "base",
+        });
+      } else if (sort.key === "modified") {
+        cmp = a.modifiedMs - b.modifiedMs;
+      } else {
+        cmp = a.size - b.size;
+      }
+      if (cmp === 0) {
+        cmp = a.name.localeCompare(b.name, undefined, {
+          numeric: true,
+          sensitivity: "base",
+        });
+      }
+      return cmp * sort.dir;
+    });
   const primaryDisabled =
     mode === "folder"
       ? !listing
@@ -303,6 +356,18 @@ function FileBrowser({
           <button
             type="button"
             class="mini"
+            disabled={!listing || loading}
+            title="Create a folder in this folder"
+            onClick={() => {
+              setCreating(true);
+              setCreateError("");
+            }}
+          >
+            New folder
+          </button>
+          <button
+            type="button"
+            class="mini"
             disabled={loading}
             title="Reload this folder"
             onClick={() => void load(listing?.path)}
@@ -310,12 +375,90 @@ function FileBrowser({
             Refresh
           </button>
         </div>
+        {creating && (
+          <form
+            class="fb-new"
+            onSubmit={(event) => {
+              event.preventDefault();
+              void create();
+            }}
+          >
+            <input
+              autoFocus
+              value={newFolder}
+              placeholder="Folder name"
+              aria-label="New folder name"
+              onInput={(event) =>
+                setNewFolder((event.target as HTMLInputElement).value)
+              }
+            />
+            <button
+              type="submit"
+              class="mini"
+              disabled={!newFolder.trim() || loading}
+            >
+              Create
+            </button>
+            <button
+              type="button"
+              class="mini"
+              onClick={() => {
+                setCreating(false);
+                setNewFolder("");
+                setCreateError("");
+              }}
+            >
+              Cancel
+            </button>
+            {createError && <span class="fb-error">{createError}</span>}
+          </form>
+        )}
         <div class="fb-list" role="listbox" aria-label="Folder contents">
           <div class="fb-row fb-head" role="presentation">
             <span />
-            <span>Name</span>
-            <span>Modified</span>
-            <span>Size</span>
+            <span
+              class="fb-sort"
+              role="button"
+              tabIndex={0}
+              onClick={() => sortBy("name")}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" || event.key === " ") {
+                  event.preventDefault();
+                  sortBy("name");
+                }
+              }}
+            >
+              Name {sort.key === "name" ? (sort.dir === 1 ? "▲" : "▼") : ""}
+            </span>
+            <span
+              class="fb-sort num"
+              role="button"
+              tabIndex={0}
+              onClick={() => sortBy("modified")}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" || event.key === " ") {
+                  event.preventDefault();
+                  sortBy("modified");
+                }
+              }}
+            >
+              Modified{" "}
+              {sort.key === "modified" ? (sort.dir === 1 ? "▲" : "▼") : ""}
+            </span>
+            <span
+              class="fb-sort num"
+              role="button"
+              tabIndex={0}
+              onClick={() => sortBy("size")}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" || event.key === " ") {
+                  event.preventDefault();
+                  sortBy("size");
+                }
+              }}
+            >
+              Size {sort.key === "size" ? (sort.dir === 1 ? "▲" : "▼") : ""}
+            </span>
           </div>
           {loading && <p class="fb-note">Reading folder…</p>}
           {error && <p class="fb-note error">{error}</p>}
