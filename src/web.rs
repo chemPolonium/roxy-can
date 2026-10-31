@@ -1760,6 +1760,7 @@ enum WebCommand {
         parent: Option<String>,
     },
     PickProject,
+    SaveProjectAs,
     OpenLog {
         path: String,
     },
@@ -2789,6 +2790,27 @@ fn app_loop(
                         None => {
                             app.status = "save needs a project path".to_string();
                         }
+                    }
+                }
+                WebCommand::SaveProjectAs => {
+                    let start = app
+                        .project_path
+                        .as_ref()
+                        .and_then(|path| path.parent())
+                        .map(std::path::Path::to_path_buf)
+                        .unwrap_or_else(|| web_data_dir("samples"));
+                    let _ = std::fs::create_dir_all(&start);
+                    let picked = rfd::FileDialog::new()
+                        .set_title("Save roxy-can project")
+                        .add_filter("roxy-can project", &["rxproj"])
+                        .set_directory(start)
+                        .set_file_name(format!("{}.rxproj", app.project_name()))
+                        .save_file();
+                    match picked {
+                        Some(path) => {
+                            app.save_project(Some(path));
+                        }
+                        None => app.status = "project save cancelled".to_string(),
                     }
                 }
                 WebCommand::AddScript {
@@ -6564,6 +6586,11 @@ mod tests {
         }))
         .expect("pick project command");
         assert!(matches!(pick, WebCommand::PickProject));
+        let save_as: WebCommand = serde_json::from_value(serde_json::json!({
+            "type": "save_project_as",
+        }))
+        .expect("save project as command");
+        assert!(matches!(save_as, WebCommand::SaveProjectAs));
     }
 
     #[test]

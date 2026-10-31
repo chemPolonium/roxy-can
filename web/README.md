@@ -30,20 +30,21 @@ default and keeps scripted runs silent (`ROXY_WEB_NO_OPEN=1` does the same).
 The headless CLI modes (`--replay`/`--project` without `--web`, `--convert`,
 `--check-script`) keep their old meaning.
 
-The toolbar's **Session…** dialog can switch sessions without restarting the
-server: enter a host path, pick a recent project/log, or choose a file with
-the browser's picker. Chosen files are uploaded to the host's per-user
-application data folder (`%LOCALAPPDATA%\roxy-can\web-uploads` on Windows,
-256 MiB cap) and the returned path is opened, so a saved project keeps its
-picked DBCs. Opening a project or log stops
-the current measurement and clears the trace; a log starts playing
-immediately. A loaded replay also gets a second, slim bar with the playhead,
+The toolbar's **Run…** dialog configures the current session without restarting
+the server: it summarises the attached hardware with a shortcut to Buses, offers
+simulation and replay, takes a replay log path, and arms recording. Replay logs
+can be typed or chosen with the browser's picker; uploaded logs land in the
+host's per-user application data folder (`%LOCALAPPDATA%\roxy-can\web-uploads`
+on Windows, 256 MiB cap). Projects use host dialogs instead: **Open project…**,
+**Save project** and **Save project as…** live in the R menu (also Ctrl+O /
+Ctrl+S / Ctrl+Shift+S), so the project opens in place and keeps its sibling
+databases. Opening a project or log stops the current measurement and clears
+the trace; a log starts playing immediately. A loaded replay also gets a second, slim bar with the playhead,
 a speed ladder (0.5x/1x/2x/4x/Fast), a forward **Step** (10 ms–5 s), **Play
 for** (1–60 s) and **Play to** an absolute log time; both timed plays resume
 playback and pause at the target.
-**Save** writes the open project; **Save as** writes a copy to a typed path,
-and a bare file name plus **Save & download** hands that copy to the browser.
-The dialog marks unsaved changes next to the current name. The
+**Save project** rewrites the open project; **Save project as…** asks for a new
+host path. The header marks unsaved changes next to the project name. The
 **Recording** section starts/stops an ASC or BLF capture with a typed file
 name and an optional whitelist (`100, 3F4x, FR0:13`); relative names land in
 `Record/` beside the project, and arming while stopped creates the file on
@@ -79,11 +80,12 @@ npm run dev                 # http://127.0.0.1:5173, proxies /api to :2010
   matches the address column (`0x100`, `slot 13`, EtherType). Click a column
   header to sort ascending, again for descending, and a third time to restore
   the live newest-first order.
-- A project or log can be loaded from the Session dialog by host path or
-  from recents. The header, mode chip and status bar carry the session name
-  and replay playhead; switching sessions resets the trace and curve buffers.
-  A loaded project starts clean, plain **Save** rewrites it in place, and
-  **Save as** targets a new path — both use the current project format.
+- A project opens from the R menu (host picker or recent) and a replay log
+  from the Run dialog. The header, mode chip and status bar carry the session
+  name and replay playhead; switching sessions resets the trace and curve
+  buffers. A loaded project starts clean, plain **Save project** rewrites it
+  in place, and **Save project as…** targets a new path — both use the current
+  project format.
 - **Buses…** lists each bus with its DBCs and bit rates, probes Kvaser/Vector
   adapters on demand, attaches/detaches a selected channel at the bus's
   configured rates, and toggles the Simulated/Real bus mode. Buses can be
@@ -269,8 +271,8 @@ npm run dev                 # http://127.0.0.1:5173, proxies /api to :2010
   rule color; rows are project state, so the rule survives a save. Selection
   reuses the same searchable catalog, and Clear unsubscribes every row. The
   row layout stacks controls under the value at narrow widths.
-- Shortcuts: F9 start/stop, Ctrl+S save, Ctrl+Shift+S Session, Ctrl+O
-  Session, Ctrl+E export, `?` for the help/about dialog (ignored while
+- Shortcuts: F9 start/stop, Ctrl+S save, Ctrl+Shift+S save as, Ctrl+O open
+  project, Ctrl+E export, `?` for the help/about dialog (ignored while
   typing). The **?** button at the right of the stats strip opens the same
   dialog.
 - The layout has been checked at 1024x768, 1200x800 and 1440x900.

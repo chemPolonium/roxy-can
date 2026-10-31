@@ -221,6 +221,27 @@ select:disabled {
   font-size: 10px;
 }
 
+.brand-menu-label {
+  padding: 5px 8px 2px;
+  color: var(--muted);
+  font-size: 9px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.brand-menu-sep {
+  height: 1px;
+  margin: 4px 4px;
+  background: var(--line);
+}
+
+.brand-menu-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .brand-text {
   min-width: 0;
 }
@@ -4580,11 +4601,6 @@ button.mini.on {
   line-height: 1.4;
 }
 
-.session-section {
-  display: flex;
-  flex-direction: column;
-}
-
 .session-more {
   padding-top: 10px;
   border-top: 1px solid var(--line-soft);
@@ -4620,12 +4636,6 @@ button.mini.on {
 .session-body input {
   flex: 1 1 auto;
   min-width: 0;
-}
-
-.save-row {
-  display: flex;
-  gap: 6px;
-  margin-top: 6px;
 }
 
 .record-row {
@@ -5051,11 +5061,6 @@ button.danger:hover:not(:disabled) {
   padding: 3px 6px;
   border-bottom: 1px solid #1c242e;
   color: #cdd8e4;
-}
-
-.save-row input {
-  flex: 1 1 auto;
-  min-width: 0;
 }
 
 .recent {

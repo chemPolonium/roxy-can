@@ -630,6 +630,7 @@ export type Command =
   | { type: "set_message_expanded"; key: string; on: boolean }
   | { type: "open_project"; path: string }
   | { type: "pick_project" }
+  | { type: "save_project_as" }
   | { type: "create_sample_project" }
   | { type: "open_log"; path: string }
   | { type: "save_project"; path: string | null }

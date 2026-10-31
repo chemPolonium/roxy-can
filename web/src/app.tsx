@@ -20,12 +20,7 @@ import {
   fetchState,
   sendCommand,
 } from "./api";
-import {
-  clearDownload,
-  isDownloadName,
-  triggerDownload,
-  waitForDownload,
-} from "./download";
+import { triggerDownload } from "./download";
 import { Activity } from "./components/Activity";
 import { BusesModal } from "./components/BusesModal";
 import { BusStatsPanel } from "./components/BusStatsPanel";
@@ -406,10 +401,6 @@ export function App() {
     savedView.overlay ?? false,
   );
   const [sessionOpen, setSessionOpen] = useState(false);
-  const [projectPath, setProjectPath] = useState("");
-  const [savePath, setSavePath] = useState("");
-  const [saveDownloading, setSaveDownloading] = useState(false);
-  const [saveDownloadError, setSaveDownloadError] = useState("");
   const [replayStepMs, setReplayStepMs] = useState(100);
   const [replayForS, setReplayForS] = useState(5);
   const [replayTo, setReplayTo] = useState("");
@@ -1404,21 +1395,9 @@ export function App() {
     await run({ type: "save_project", path });
   };
 
-  const saveAndDownload = async () => {
-    const name = savePath.trim();
-    if (!isDownloadName(name)) return;
-    setSaveDownloading(true);
-    setSaveDownloadError("");
-    await clearDownload(name);
-    await saveProject(name);
-    const url = await waitForDownload(name);
-    setSaveDownloading(false);
-    if (!url) {
-      setSaveDownloadError("The project was not written in time.");
-      return;
-    }
-    triggerDownload(url, name);
-    setSessionOpen(false);
+  const saveProjectAs = async () => {
+    await pushWorkspace().catch(() => {});
+    await run({ type: "save_project_as" });
   };
 
   const loadCatalog = async () => {
@@ -1558,14 +1537,14 @@ export function App() {
         void run({ type: state?.measuring ? "stop" : "start" });
       } else if (mod && event.shiftKey && key === "s") {
         event.preventDefault();
-        setSessionOpen(true);
+        void saveProjectAs();
       } else if (mod && key === "s") {
         event.preventDefault();
         if (state?.projectPath) void saveProject(null);
-        else setSessionOpen(true);
+        else void saveProjectAs();
       } else if (mod && key === "o") {
         event.preventDefault();
-        setSessionOpen(true);
+        void run({ type: "pick_project" });
       } else if (mod && key === "e") {
         event.preventDefault();
         if (mainView !== "panel") {
@@ -2177,7 +2156,7 @@ export function App() {
   const paletteCommands: PaletteCommand[] = [
     {
       id: "open-session",
-      label: "Open Session…",
+      label: "Open Run…",
       group: "Open",
       hint: "Projects, replay logs and recording",
       run: openSession,
@@ -2899,10 +2878,48 @@ export function App() {
                 <button
                   type="button"
                   role="menuitem"
+                  title="Pick a .rxproj on this machine"
+                  onClick={() => {
+                    setMenuOpen(false);
+                    void run({ type: "pick_project" });
+                  }}
+                >
+                  <svg viewBox="0 0 16 16" aria-hidden="true">
+                    <path d="M1.5 4.5h4l1.5 2h7v6.5h-12.5z" />
+                    <path d="M10 9.5l2 2 2-2M12 11.5v-4" />
+                  </svg>
+                  <span>Open project…</span>
+                </button>
+                {state && state.recentProjects.length > 0 && (
+                  <>
+                    <div class="brand-menu-label">Recent projects</div>
+                    {state.recentProjects.slice(0, 4).map((path) => (
+                      <button
+                        type="button"
+                        role="menuitem"
+                        key={path}
+                        title={path}
+                        onClick={() => {
+                          loadProject(path);
+                          setMenuOpen(false);
+                        }}
+                      >
+                        <svg viewBox="0 0 16 16" aria-hidden="true">
+                          <path d="M3 2.5h6l3 3v8H3z" />
+                          <path d="M9 2.5v3h3" />
+                        </svg>
+                        <span class="brand-menu-name">{baseName(path)}</span>
+                      </button>
+                    ))}
+                  </>
+                )}
+                <button
+                  type="button"
+                  role="menuitem"
                   title="Write a file-based sample project to a folder and open it"
                   onClick={() => {
                     setMenuOpen(false);
-                    run({ type: "create_sample_project" });
+                    void run({ type: "create_sample_project" });
                   }}
                 >
                   <svg viewBox="0 0 16 16" aria-hidden="true">
@@ -2911,6 +2928,42 @@ export function App() {
                   </svg>
                   <span>Sample project</span>
                 </button>
+                <div class="brand-menu-sep" />
+                <button
+                  type="button"
+                  role="menuitem"
+                  title="Save the current project; asks for a file when untitled"
+                  onClick={() => {
+                    setMenuOpen(false);
+                    if (state?.projectPath) void saveProject(null);
+                    else void saveProjectAs();
+                  }}
+                >
+                  <svg viewBox="0 0 16 16" aria-hidden="true">
+                    <path d="M3 2.5h8l2 2v9H3z" />
+                    <path d="M5.5 2.5v4h5v-4M5.5 13v-4h5v4" />
+                  </svg>
+                  <span>Save project</span>
+                  {state?.dirty && (
+                    <span class="brand-menu-state">unsaved</span>
+                  )}
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  title="Save the current project under a new name"
+                  onClick={() => {
+                    setMenuOpen(false);
+                    void saveProjectAs();
+                  }}
+                >
+                  <svg viewBox="0 0 16 16" aria-hidden="true">
+                    <path d="M2.5 2.5h8l2 2v6h-10z" />
+                    <path d="M4.5 2.5v4h4v-4M10 12.5h4M12 10.5v4" />
+                  </svg>
+                  <span>Save project as…</span>
+                </button>
+                <div class="brand-menu-sep" />
                 <button
                   type="button"
                   role="menuitem"
@@ -3006,7 +3059,7 @@ export function App() {
             Variables…
           </button>
           <button type="button" disabled={!online} onClick={openSession}>
-            Session…
+            Run…
           </button>
           <button
             type="button"
@@ -4444,11 +4497,11 @@ export function App() {
             class="session-modal"
             role="dialog"
             aria-modal="true"
-            aria-label="Session"
+            aria-label="Run"
             onMouseDown={(event) => event.stopPropagation()}
           >
             <header class="modal-head">
-              <h2>Session</h2>
+              <h2>Run</h2>
               <button type="button" onClick={() => setSessionOpen(false)}>
                 Close
               </button>
@@ -4489,48 +4542,15 @@ export function App() {
                 <section class="session-task">
                   <h3>Simulate</h3>
                   <p>
-                    Start the loaded DBC with the generator. Attached hardware
+                    Start the loaded DBC from the toolbar. Attached hardware
                     is used when Real bus is on.
                   </p>
-                  <div class="task-actions">
-                    <button
-                      type="button"
-                      class="primary"
-                      disabled={!canControl || measuring || needsLog || noBuses}
-                      title={
-                        !online
-                          ? "Waiting for the bus core"
-                          : noBuses
-                            ? "Add a bus or create a sample project first"
-                            : needsLog
-                              ? "Load a replay log first"
-                              : measuring
-                                ? "Measurement is already running"
-                                : "Start measurement"
-                      }
-                      onClick={() => {
-                        void run({ type: "start" });
-                        setSessionOpen(false);
-                      }}
-                    >
-                      Start
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setSessionOpen(false);
-                        openGenerator();
-                      }}
-                    >
-                      Generator…
-                    </button>
-                  </div>
                   <span class="task-state">
                     {measuring
                       ? `${state?.runMode ?? ""} · ${state?.fps.toFixed(0)} f/s`
                       : needsLog
                         ? "Load a replay log first"
-                        : "Ready with the loaded DBC"}
+                        : "Ready · use Start in the toolbar"}
                   </span>
                 </section>
 
@@ -4576,83 +4596,6 @@ export function App() {
                   {recent(state?.recentLogs ?? [], loadLog)}
                 </section>
               </div>
-
-              <section class="session-section">
-                <h3>Project</h3>
-                <p class="session-current">
-                  {state?.project
-                    ? `Current: ${state.project}${state.dirty ? " · unsaved changes" : ""}`
-                    : "Untitled workspace"}
-                </p>
-                <form
-                  onSubmit={(event) => {
-                    event.preventDefault();
-                    loadProject(projectPath);
-                  }}
-                >
-                  <input
-                    value={projectPath}
-                    placeholder="C:\projects\sample.rxproj"
-                    onInput={(event) =>
-                      setProjectPath((event.target as HTMLInputElement).value)
-                    }
-                  />
-                  <button
-                    type="submit"
-                    class="primary"
-                    disabled={!projectPath.trim()}
-                  >
-                    Open project
-                  </button>
-                  <button
-                    type="button"
-                    title="Pick a .rxproj on this machine; sibling databases stay next to it"
-                    onClick={() => {
-                      void run({ type: "pick_project" });
-                      setSessionOpen(false);
-                    }}
-                  >
-                    Browse…
-                  </button>
-                </form>
-                <div class="save-row">
-                  <button
-                    type="button"
-                    disabled={!state?.projectPath}
-                    onClick={() => void saveProject(null)}
-                  >
-                    Save
-                  </button>
-                  <input
-                    value={savePath}
-                    placeholder={
-                      state?.projectPath || "Save as file name or host path…"
-                    }
-                    onInput={(event) =>
-                      setSavePath((event.target as HTMLInputElement).value)
-                    }
-                  />
-                  <button
-                    type="button"
-                    disabled={!savePath.trim()}
-                    onClick={() => void saveProject(savePath.trim())}
-                  >
-                    Save as
-                  </button>
-                  <button
-                    type="button"
-                    disabled={!isDownloadName(savePath) || saveDownloading}
-                    title="A bare file name lands in the host's web download folder"
-                    onClick={() => void saveAndDownload()}
-                  >
-                    {saveDownloading ? "Waiting…" : "Save & download"}
-                  </button>
-                </div>
-                {saveDownloadError && (
-                  <p class="modal-error">{saveDownloadError}</p>
-                )}
-                {recent(state?.recentProjects ?? [], loadProject)}
-              </section>
 
               <details class="session-more">
                 <summary>Recording</summary>
@@ -4758,8 +4701,8 @@ export function App() {
               </details>
 
               <p class="hint">
-                Paths are resolved on the host. Opening a project or log stops
-                the current measurement and clears the trace.
+                Paths are resolved on the host. Opening a log stops the
+                current measurement and clears the trace.
               </p>
             </div>
           </div>
