@@ -108,6 +108,37 @@ pub enum Mode {
     Replay,
 }
 
+/// One file offered by the Replay page: a direct file, a folder scan hit, the
+/// current log or a recent log. `folder` is the source folder shown in the
+/// table; direct/recent files fall back to their own directory.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ReplaySourceFile {
+    pub path: String,
+    pub name: String,
+    pub folder: String,
+    pub size: u64,
+    pub modified_ms: u64,
+}
+
+fn path_key(path: &str) -> String {
+    path.replace('\\', "/")
+        .trim_end_matches('/')
+        .to_ascii_lowercase()
+}
+
+fn is_replay_log(path: &std::path::Path) -> bool {
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("asc") || ext.eq_ignore_ascii_case("blf"))
+}
+
+fn direct_folder(path: &str) -> String {
+    std::path::Path::new(path)
+        .parent()
+        .map(|dir| dir.to_string_lossy().into_owned())
+        .unwrap_or_default()
+}
+
 /// One row of the Monitor window: a watched signal, its display name,
 /// the decimals shown, and an optional coloring rule (`rising` compares
 /// `value >= threshold`, otherwise `<=`; the palette `color` slots the
@@ -187,6 +218,12 @@ pub struct App {
     pub log_info: Option<String>,
     pub recent_dbc: Vec<String>,
     pub recent_log: Vec<String>,
+    /// Replay folders/files the operator added. Folders are persisted with
+    /// the project and rescanned on load or Refresh.
+    pub replay_folders: Vec<String>,
+    pub replay_files: Vec<String>,
+    /// Last scan of the sources plus the current/recent logs, newest first.
+    pub replay_scan: Vec<ReplaySourceFile>,
     /// Path of the currently open .rxproj project; None = untitled workspace.
     pub project_path: Option<PathBuf>,
     pub recent_projects: Vec<String>,
@@ -418,6 +455,9 @@ impl App {
             log_info: None,
             recent_dbc: Vec::new(),
             recent_log: Vec::new(),
+            replay_folders: Vec::new(),
+            replay_files: Vec::new(),
+            replay_scan: Vec::new(),
             project_path: None,
             recent_projects: Vec::new(),
             web_workspace: None,
@@ -937,9 +977,115 @@ impl App {
                     format!("loaded {name} [{info}]")
                 };
                 self.push_recent_log(path.to_string());
+                self.refresh_replay_sources();
             }
             Err(e) => self.fail(format!("log load failed [{path}]: {e}")),
         }
+    }
+
+    /// Adds a persisted replay folder and scans it immediately.
+    pub fn add_replay_folder(&mut self, path: String) -> Result<usize, String> {
+        let path = path.trim().to_string();
+        if path.is_empty() {
+            return Err("replay folder is empty".to_string());
+        }
+        if !std::path::Path::new(&path).is_dir() {
+            return Err(format!("replay folder not found: {path}"));
+        }
+        if !self
+            .replay_folders
+            .iter()
+            .any(|existing| path_key(existing) == path_key(&path))
+        {
+            self.replay_folders.push(path);
+        }
+        self.refresh_replay_sources();
+        Ok(self.replay_scan.len())
+    }
+
+    /// Adds one replay log file to the list.
+    pub fn add_replay_file(&mut self, path: String) -> Result<usize, String> {
+        let path = path.trim().to_string();
+        let p = std::path::Path::new(&path);
+        if !p.is_file() || !is_replay_log(p) {
+            return Err(format!("not an ASC/BLF recording: {path}"));
+        }
+        if !self
+            .replay_files
+            .iter()
+            .any(|existing| path_key(existing) == path_key(&path))
+        {
+            self.replay_files.push(path);
+        }
+        self.refresh_replay_sources();
+        Ok(self.replay_scan.len())
+    }
+
+    pub fn remove_replay_source(&mut self, path: &str, folder: bool) {
+        let key = path_key(path);
+        if folder {
+            self.replay_folders.retain(|item| path_key(item) != key);
+        } else {
+            self.replay_files.retain(|item| path_key(item) != key);
+        }
+        self.refresh_replay_sources();
+    }
+
+    /// Rebuilds the Replay page list from the saved folders/files, the current
+    /// log and the recent-log list. Only the first two persist.
+    pub fn refresh_replay_sources(&mut self) {
+        let mut seen = std::collections::HashSet::new();
+        let mut out: Vec<ReplaySourceFile> = Vec::new();
+        let mut add = |path: &str, folder: &str| {
+            let key = path_key(path);
+            if key.is_empty() || !seen.insert(key) {
+                return;
+            }
+            let p = std::path::Path::new(path);
+            if !p.is_file() || !is_replay_log(p) {
+                return;
+            }
+            let meta = std::fs::metadata(p).ok();
+            out.push(ReplaySourceFile {
+                path: path.to_string(),
+                name: p
+                    .file_name()
+                    .map(|name| name.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| path.to_string()),
+                folder: folder.to_string(),
+                size: meta.as_ref().map(|m| m.len()).unwrap_or(0),
+                modified_ms: meta
+                    .and_then(|m| m.modified().ok())
+                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map(|d| d.as_millis() as u64)
+                    .unwrap_or(0),
+            });
+        };
+        for folder in &self.replay_folders {
+            let Ok(entries) = std::fs::read_dir(folder) else {
+                continue;
+            };
+            for entry in entries.flatten() {
+                add(&entry.path().to_string_lossy(), folder);
+            }
+        }
+        for file in &self.replay_files {
+            let folder = direct_folder(file);
+            add(file, &folder);
+        }
+        for file in self.recent_log.iter().rev().chain([&self.log_path]) {
+            if !file.is_empty() {
+                let folder = direct_folder(file);
+                add(file, &folder);
+            }
+        }
+        out.sort_by(|a, b| {
+            b.modified_ms
+                .cmp(&a.modified_ms)
+                .then_with(|| a.name.cmp(&b.name))
+        });
+        out.truncate(1000);
+        self.replay_scan = out;
     }
 
     /// Starts playback of the selected log (the path the user loaded, or

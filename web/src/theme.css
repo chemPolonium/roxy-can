@@ -39,6 +39,17 @@
   background: #f2f5f9;
 }
 
+[data-theme="light"] .replay-source-chip button {
+  border: 0;
+  background: transparent;
+  color: #6b7788;
+}
+
+[data-theme="light"] .replay-source-chip button:hover:not(:disabled) {
+  background: transparent;
+  color: #1f6fd0;
+}
+
 /* The project line is a flat text trigger, not a button surface. */
 [data-theme="light"] .brand-project {
   border: 0;

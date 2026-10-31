@@ -37,8 +37,8 @@ file (green), and clicking Record while measuring starts a new file at once.
 Every green transition opens a new file. **Setup → Recording…** sets the save
 folder, base name (with `{date}`, `{time}` and `{index}` field codes), ASC/BLF
 format and id/slot filter; **Setup → Replay…** is the independent replay
-source list, where a file can be loaded **Open** (parked at the beginning) or
-**Open & play**, with an active marker and per-row **Open** / **Play** actions.
+source list: add files or persistent folders, **Refresh** rescans them, and a
+per-row checkbox makes one recording the active Offline source for Start.
 Replay logs can be typed or chosen with the browser's picker; uploaded
 logs land in the host's per-user application data folder
 (`%LOCALAPPDATA%\roxy-can\web-uploads` on Windows, 256 MiB cap). Projects use
@@ -126,8 +126,9 @@ npm run dev                 # http://127.0.0.1:5173, proxies /api to :2010
   optionally limited to one DBC node; blocks toggle and remove in place.
 - **Setup ▾** holds **Triggers…**, **Variables…**, **Scripts…**,
   **Recording…** and **Replay…**. Recording sets the save folder, base name
-  with field codes, ASC/BLF format and id/slot filter; Replay lists recent
-  files for Offline and loads them. Triggers shows the live
+  with field codes, ASC/BLF format and id/slot filter; Replay adds files or
+  project-persisted folders, rescans them on Refresh, and selects one active
+  recording with a checkbox. Triggers shows the live
   rule list with condition summary, action,
   fired count and last-fire time. Default rules can be added by kind,
   enabled/disabled, removed and re-armed. The editor covers every condition

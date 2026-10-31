@@ -1778,6 +1778,20 @@ enum WebCommand {
         #[serde(default = "default_true")]
         play: bool,
     },
+    AddReplayFolder {
+        /// Host folder; the Replay page leaves it empty so the picker decides.
+        #[serde(default)]
+        path: Option<String>,
+    },
+    AddReplayFile {
+        #[serde(default)]
+        path: Option<String>,
+    },
+    RemoveReplaySource {
+        path: String,
+        folder: bool,
+    },
+    RefreshReplaySources,
     SelectSignal {
         ch: u8,
         id: u32,
@@ -2553,6 +2567,50 @@ fn app_loop(
                             app.start_selected();
                         }
                     }
+                }
+                WebCommand::AddReplayFolder { path } => {
+                    let chosen = path.or_else(|| {
+                        rfd::FileDialog::new()
+                            .set_title("Add replay folder")
+                            .pick_folder()
+                            .map(|p| p.to_string_lossy().into_owned())
+                    });
+                    if let Some(path) = chosen {
+                        app.status = match app.add_replay_folder(path.clone()) {
+                            Ok(count) => {
+                                format!("replay folder added: {path} · {count} recording(s)")
+                            }
+                            Err(e) => e,
+                        };
+                    }
+                }
+                WebCommand::AddReplayFile { path } => {
+                    let chosen = path.or_else(|| {
+                        rfd::FileDialog::new()
+                            .set_title("Add replay recording")
+                            .add_filter("CAN logs", &["asc", "blf"])
+                            .pick_file()
+                            .map(|p| p.to_string_lossy().into_owned())
+                    });
+                    if let Some(path) = chosen {
+                        app.status = match app.add_replay_file(path.clone()) {
+                            Ok(count) => {
+                                format!("replay file added: {path} · {count} recording(s)")
+                            }
+                            Err(e) => e,
+                        };
+                    }
+                }
+                WebCommand::RemoveReplaySource { path, folder } => {
+                    app.remove_replay_source(&path, folder);
+                    app.status = "replay source removed".to_string();
+                }
+                WebCommand::RefreshReplaySources => {
+                    app.refresh_replay_sources();
+                    app.status = format!(
+                        "replay list refreshed · {} recording(s)",
+                        app.replay_scan.len()
+                    );
                 }
                 WebCommand::SelectSignal {
                     ch,
@@ -4758,6 +4816,16 @@ fn build_catalog(app: &App) -> WebCatalog {
 
 #[derive(Clone, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
+struct WebReplaySource {
+    path: String,
+    name: String,
+    folder: String,
+    size: u64,
+    modified_ms: u64,
+}
+
+#[derive(Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
 struct WebState {
     measuring: bool,
     trace_paused: bool,
@@ -4783,6 +4851,9 @@ struct WebState {
     replay_speed: f64,
     recent_projects: Vec<String>,
     recent_logs: Vec<String>,
+    replay_folders: Vec<String>,
+    replay_files: Vec<String>,
+    replay_recordings: Vec<WebReplaySource>,
     /// Workspace adopted from the saved project plus the revision that owns
     /// it; the browser applies it once per revision.
     workspace: Option<serde_json::Value>,
@@ -6452,6 +6523,19 @@ fn build_state(app: &App, series: &VecDeque<WebSeriesPoint>, fps: f64) -> WebSta
         },
         recent_projects: app.recent_projects.clone(),
         recent_logs: app.recent_log.clone(),
+        replay_folders: app.replay_folders.clone(),
+        replay_files: app.replay_files.clone(),
+        replay_recordings: app
+            .replay_scan
+            .iter()
+            .map(|file| WebReplaySource {
+                path: file.path.clone(),
+                name: file.name.clone(),
+                folder: file.folder.clone(),
+                size: file.size,
+                modified_ms: file.modified_ms,
+            })
+            .collect(),
         workspace: app.web_workspace.clone(),
         workspace_rev: app.workspace_rev,
         reference: app.reference.clone(),
@@ -6671,6 +6755,39 @@ mod tests {
             WebCommand::SetRecordSettings { ref name, format: 1 }
                 if name == "Record/drive"
         ));
+        let replay_folder: WebCommand = serde_json::from_value(serde_json::json!({
+            "type": "add_replay_folder",
+            "path": "C:/logs",
+        }))
+        .expect("replay folder command");
+        assert!(matches!(
+            replay_folder,
+            WebCommand::AddReplayFolder { path: Some(ref p) } if p == "C:/logs"
+        ));
+        let replay_file: WebCommand = serde_json::from_value(serde_json::json!({
+            "type": "add_replay_file",
+        }))
+        .expect("replay file command");
+        assert!(matches!(
+            replay_file,
+            WebCommand::AddReplayFile { path: None }
+        ));
+        let remove_replay: WebCommand = serde_json::from_value(serde_json::json!({
+            "type": "remove_replay_source",
+            "path": "C:/logs",
+            "folder": true,
+        }))
+        .expect("remove replay source");
+        assert!(matches!(
+            remove_replay,
+            WebCommand::RemoveReplaySource { ref path, folder: true }
+                if path == "C:/logs"
+        ));
+        let refresh_replay: WebCommand = serde_json::from_value(serde_json::json!({
+            "type": "refresh_replay_sources",
+        }))
+        .expect("refresh replay sources");
+        assert!(matches!(refresh_replay, WebCommand::RefreshReplaySources));
     }
 
     #[test]

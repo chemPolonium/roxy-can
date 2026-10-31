@@ -1,3 +1,11 @@
+export interface ReplayRecording {
+  path: string;
+  name: string;
+  folder: string;
+  size: number;
+  modifiedMs: number;
+}
+
 export interface State {
   measuring: boolean;
   tracePaused: boolean;
@@ -22,6 +30,9 @@ export interface State {
   replaySpeed: number;
   recentProjects: string[];
   recentLogs: string[];
+  replayFolders: string[];
+  replayFiles: string[];
+  replayRecordings: ReplayRecording[];
   workspace: unknown;
   workspaceRev: number;
   reference: {
@@ -635,6 +646,10 @@ export type Command =
   | { type: "create_sample_project" }
   | { type: "set_run_mode"; mode: "simulation" | "replay" }
   | { type: "open_log"; path: string; play?: boolean }
+  | { type: "add_replay_folder"; path?: string | null }
+  | { type: "add_replay_file"; path?: string | null }
+  | { type: "remove_replay_source"; path: string; folder: boolean }
+  | { type: "refresh_replay_sources" }
   | { type: "save_project"; path: string | null }
   | { type: "set_sys_var"; namespace: string; name: string; value: number }
   | {

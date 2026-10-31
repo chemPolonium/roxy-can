@@ -38,7 +38,6 @@ import {
   type DerivedReference,
 } from "./derived";
 import { ExportModal } from "./components/ExportModal";
-import { FilePick } from "./components/FilePick";
 import { GeneratorModal } from "./components/GeneratorModal";
 import { HelpModal } from "./components/HelpModal";
 import { TriggersModal } from "./components/TriggersModal";
@@ -338,6 +337,19 @@ function baseName(path: string): string {
   return cut >= 0 ? path.slice(cut + 1) : path;
 }
 
+function shortDateTime(ms: number): string {
+  if (!ms) return "—";
+  const d = new Date(ms);
+  const p = (value: number) => String(value).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
+function shortSize(bytes: number): string {
+  if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  if (bytes >= 1024) return `${(bytes / 1024).toFixed(0)} KB`;
+  return `${bytes} B`;
+}
+
 const RECENT_PROJECTS_KEY = "roxy-can-web.recentProjects";
 
 function loadLocalRecentProjects(): string[] {
@@ -477,7 +489,6 @@ export function App() {
   const [recordFormat, setRecordFormat] = useState(0);
   const [recordFilter, setRecordFilter] = useState("");
   const [helpOpen, setHelpOpen] = useState(false);
-  const [logPath, setLogPath] = useState("");
   const [pickerOpen, setPickerOpen] = useState(false);
   const [monitorPickerOpen, setMonitorPickerOpen] = useState(false);
   const [dataPickerOpen, setDataPickerOpen] = useState(false);
@@ -2203,22 +2214,6 @@ export function App() {
       .filter((path, index) => all.indexOf(path) === index)
       .slice(0, 6);
   }, [state?.recentProjects, localRecentProjects]);
-  const replayLogs = useMemo(() => {
-    const all = [
-      state?.recordFile ?? "",
-      ...(state?.recentLogs ?? []),
-      state?.log ?? "",
-    ].filter(Boolean);
-    const seen = new Set<string>();
-    return all
-      .filter((path) => {
-        const key = baseName(path).toLowerCase();
-        if (seen.has(key)) return false;
-        seen.add(key);
-        return true;
-      })
-      .slice(0, 10);
-  }, [state?.recordFile, state?.log, state?.recentLogs]);
 
   const emptyWorkspace = (
     <div class="empty empty-workspace">
@@ -5161,128 +5156,170 @@ export function App() {
 
               {sessionView === "replay" && (
                 <>
-              <section class="session-task">
-                <h3>Recordings</h3>
-                <p>
-                  Offline plays the active recording. Open parks a file; Play
-                  starts playback with the same analysis tools.
-                </p>
-                <form
-                  class="task-form"
-                  onSubmit={(event) => {
-                    event.preventDefault();
-                    loadLog(logPath);
-                  }}
-                >
-                  <input
-                    value={logPath}
-                    placeholder="C:\logs\drive.asc or .blf"
-                    onInput={(event) =>
-                      setLogPath((event.target as HTMLInputElement).value)
-                    }
-                  />
-                  <div class="task-actions">
-                    <button
-                      type="button"
-                      disabled={!logPath.trim()}
-                      title="Load the log and park it at the beginning"
-                      onClick={() => loadLog(logPath, false)}
-                    >
-                      Open
-                    </button>
-                    <button
-                      type="submit"
-                      class="primary"
-                      disabled={!logPath.trim()}
-                    >
-                      Open &amp; play
-                    </button>
-                    <FilePick
-                      label="Choose…"
-                      accept=".asc,.blf"
-                      onError={setError}
-                      onPick={(path) => {
-                        setLogPath(path);
-                        loadLog(path, false);
-                      }}
-                    />
-                  </div>
-                </form>
-                <div class="replay-source-list" role="list">
-                  {replayLogs.length === 0 ? (
-                    <p class="replay-source-empty">
-                      No recordings yet — choose an ASC or BLF.
-                    </p>
-                  ) : (
-                    replayLogs.map((path) => {
-                      const base = baseName(path).toLowerCase();
-                      const active = Boolean(
-                        state?.log && baseName(state.log).toLowerCase() === base,
-                      );
-                      const recordingThis = Boolean(
-                        recordActive &&
-                        state?.recordFile &&
-                        baseName(state.recordFile).toLowerCase() === base,
-                      );
-                      return (
-                        <div
-                          class={`replay-source-row ${active ? "on" : ""}`}
-                          role="listitem"
-                          key={path}
-                          title={path}
+                  <section class="session-task">
+                    <h3>Sources</h3>
+                    <div class="replay-toolbar">
+                      <button
+                        type="button"
+                        class="mini"
+                        onClick={() => void run({ type: "add_replay_file" })}
+                      >
+                        Add file…
+                      </button>
+                      <button
+                        type="button"
+                        class="mini"
+                        onClick={() => void run({ type: "add_replay_folder" })}
+                      >
+                        Add folder…
+                      </button>
+                      <button
+                        type="button"
+                        class="mini"
+                        onClick={() => void run({ type: "refresh_replay_sources" })}
+                      >
+                        Refresh
+                      </button>
+                      <span class="meta">
+                        {state?.replayRecordings.length ?? 0} recording(s)
+                      </span>
+                    </div>
+                    <div class="replay-sources">
+                      {(state?.replayFolders ?? []).map((folder) => (
+                        <span
+                          class="replay-source-chip"
+                          key={`folder:${folder}`}
+                          title={folder}
                         >
-                          <span
-                            class="replay-source-dot"
-                            aria-hidden="true"
-                          />
-                          <div class="replay-source-meta">
-                            <strong>{baseName(path)}</strong>
-                            <small>{path}</small>
-                          </div>
-                          <div class="replay-source-actions">
-                            <button
-                              type="button"
-                              class="mini"
-                              disabled={recordingThis}
-                              title={
-                                recordingThis
-                                  ? "Recording in progress"
-                                  : "Load the log and park it"
-                              }
-                              onClick={() => loadLog(path, false)}
-                            >
-                              Open
-                            </button>
-                            <button
-                              type="button"
-                              class="mini"
-                              disabled={recordingThis}
-                              title={
-                                recordingThis
-                                  ? "Recording in progress"
-                                  : "Load the log and start playback"
-                              }
-                              onClick={() => loadLog(path, true)}
-                            >
-                              Play
-                            </button>
-                          </div>
-                        </div>
-                      );
-                    })
-                  )}
-                </div>
-                <span class="task-state">
-                  {state?.log
-                    ? `Active recording: ${baseName(state.log)}`
-                    : "No recording selected"}
-                </span>
-              </section>
+                          <span class="kind">Folder</span>
+                          <span class="path">{folder}</span>
+                          <button
+                            type="button"
+                            title="Remove folder"
+                            onClick={() =>
+                              void run({
+                                type: "remove_replay_source",
+                                path: folder,
+                                folder: true,
+                              })
+                            }
+                          >
+                            ×
+                          </button>
+                        </span>
+                      ))}
+                      {(state?.replayFiles ?? []).map((file) => (
+                        <span
+                          class="replay-source-chip"
+                          key={`file:${file}`}
+                          title={file}
+                        >
+                          <span class="kind">File</span>
+                          <span class="path">{baseName(file)}</span>
+                          <button
+                            type="button"
+                            title="Remove file"
+                            onClick={() =>
+                              void run({
+                                type: "remove_replay_source",
+                                path: file,
+                                folder: false,
+                              })
+                            }
+                          >
+                            ×
+                          </button>
+                        </span>
+                      ))}
+                      {(state?.replayFolders.length ?? 0) === 0 &&
+                        (state?.replayFiles.length ?? 0) === 0 && (
+                          <span class="hint">
+                            No saved sources. Add a folder to keep it with the
+                            project.
+                          </span>
+                        )}
+                    </div>
+                  </section>
 
-              <p class="hint">
-                Paths are resolved on the host. Opening a log stops the
-                current measurement and clears the trace.
-              </p>
+                  <section class="session-task">
+                    <h3>Recordings</h3>
+                    <div
+                      class="replay-table"
+                      role="table"
+                      aria-label="Recordings"
+                    >
+                      <div class="replay-table-head" role="row">
+                        <span>Active</span>
+                        <span>Recording</span>
+                        <span>Folder</span>
+                        <span>Modified</span>
+                        <span>Size</span>
+                      </div>
+                      {(state?.replayRecordings ?? []).length === 0 ? (
+                        <p class="replay-source-empty">
+                          No recordings found — add a folder or refresh.
+                        </p>
+                      ) : (
+                        (state?.replayRecordings ?? []).map((file) => {
+                          const active = Boolean(
+                            state?.log &&
+                              baseName(state.log).toLowerCase() ===
+                                file.name.toLowerCase(),
+                          );
+                          return (
+                            <div
+                              class={`replay-table-row ${active ? "on" : ""}`}
+                              role="row"
+                              key={file.path}
+                              title={file.path}
+                            >
+                              <span class="replay-check">
+                                <input
+                                  type="checkbox"
+                                  checked={active}
+                                  aria-label={`Play ${file.name}`}
+                                  title={
+                                    active
+                                      ? "Active recording"
+                                      : "Make this the Offline source"
+                                  }
+                                  onChange={() => {
+                                    if (!active) loadLog(file.path, false);
+                                  }}
+                                  onClick={(event) => {
+                                    if (active) event.preventDefault();
+                                  }}
+                                />
+                              </span>
+                              <span class="replay-name">
+                                <strong>{file.name}</strong>
+                                <small>{file.path}</small>
+                              </span>
+                              <span class="replay-folder" title={file.folder}>
+                                {file.folder || "—"}
+                              </span>
+                              <span class="replay-modified">
+                                {shortDateTime(file.modifiedMs)}
+                              </span>
+                              <span class="replay-size">
+                                {shortSize(file.size)}
+                              </span>
+                            </div>
+                          );
+                        })
+                      )}
+                    </div>
+                    <span class="task-state">
+                      {state?.log
+                        ? `Active recording: ${baseName(state.log)} · Start plays it`
+                        : "Check a recording, then Start"}
+                    </span>
+                  </section>
+
+                  <p class="hint">
+                    Folders are saved with the project; Refresh rescans them.
+                    The checked row is the Offline source.
+                  </p>
                 </>
               )}
             </div>

@@ -12078,3 +12078,37 @@ fn an_ethernet_signal_drives_a_dotted_script_read() {
     );
     app.stop();
 }
+
+#[test]
+fn replay_folders_scan_asc_and_blf_files() {
+    let dir = std::env::temp_dir().join(format!("roxy-replay-sources-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let white = dir.join("white.asc");
+    let blue = dir.join("blue.blf");
+    let text = dir.join("notes.txt");
+    std::fs::write(&white, b"").unwrap();
+    std::fs::write(&blue, b"").unwrap();
+    std::fs::write(&text, b"").unwrap();
+
+    let mut app = App::headless();
+    let count = app
+        .add_replay_folder(dir.to_string_lossy().into_owned())
+        .expect("folder source");
+    assert_eq!(count, 2, "only ASC/BLF files are listed");
+    let names: Vec<&str> = app.replay_scan.iter().map(|f| f.name.as_str()).collect();
+    assert!(names.contains(&"white.asc"));
+    assert!(names.contains(&"blue.blf"));
+    assert_eq!(
+        app.replay_folders.len(),
+        1,
+        "folder source persists in config"
+    );
+
+    app.remove_replay_source(&dir.to_string_lossy(), true);
+    assert!(app.replay_folders.is_empty());
+    assert!(
+        app.replay_scan.is_empty(),
+        "removing the source clears its files"
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}

@@ -547,6 +547,11 @@ pub struct ProjectSettings {
     pub recent_dbc: Vec<String>,
     #[serde(default)]
     pub recent_log: Vec<String>,
+    /// Replay sources saved with the project; folders are rescanned on load.
+    #[serde(default)]
+    pub replay_folders: Vec<String>,
+    #[serde(default)]
+    pub replay_files: Vec<String>,
     #[serde(default)]
     pub spec: SpecCfg,
     /// Frontend workspace (tabs, cursors, column widths, splitters). Opaque
@@ -718,6 +723,8 @@ impl Default for ProjectSettings {
             counters: Counters::default(),
             recent_dbc: Vec::new(),
             recent_log: Vec::new(),
+            replay_folders: Vec::new(),
+            replay_files: Vec::new(),
             spec: SpecCfg::default(),
             workspace: None,
             limits: LimitsCfg::default(),
@@ -913,6 +920,8 @@ impl ProjectSettings {
             counters: app.window_counters(),
             recent_dbc: app.recent_dbc.clone(),
             recent_log: app.recent_log.clone(),
+            replay_folders: app.replay_folders.clone(),
+            replay_files: app.replay_files.clone(),
             spec: SpecCfg {
                 tolerance_percent: app.spec_tol_pct,
                 grace_cycles: app.spec_grace,
@@ -1147,6 +1156,9 @@ impl ProjectSettings {
         app.set_window_counters(self.counters);
         app.recent_dbc = self.recent_dbc;
         app.recent_log = self.recent_log;
+        app.replay_folders = self.replay_folders;
+        app.replay_files = self.replay_files;
+        app.refresh_replay_sources();
         // Restored signal lists need their subscriptions recreated,
         // otherwise they render grey and never receive values.
         let keys: Vec<crate::observe::SigKey> = app
