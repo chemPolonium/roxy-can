@@ -365,6 +365,44 @@ function fileNameOf(path: string): string {
   return cut >= 0 ? path.slice(cut + 1) : path;
 }
 
+function handleMenuKey(
+  event: KeyboardEvent,
+  panel: HTMLElement | null,
+  close: () => void,
+  trigger: HTMLElement | null,
+): void {
+  if (!panel) return;
+  const items = [
+    ...panel.querySelectorAll<HTMLButtonElement>("button:not(:disabled)"),
+  ];
+  if (items.length === 0) return;
+  const active = document.activeElement;
+  const index = items.indexOf(active as HTMLButtonElement);
+  switch (event.key) {
+    case "ArrowDown":
+      event.preventDefault();
+      items[index < 0 ? 0 : (index + 1) % items.length].focus();
+      break;
+    case "ArrowUp":
+      event.preventDefault();
+      items[index < 0 ? items.length - 1 : (index - 1 + items.length) % items.length].focus();
+      break;
+    case "Home":
+      event.preventDefault();
+      items[0].focus();
+      break;
+    case "End":
+      event.preventDefault();
+      items[items.length - 1].focus();
+      break;
+    case "Escape":
+      event.preventDefault();
+      close();
+      trigger?.focus();
+      break;
+  }
+}
+
 function clock(wallUs: number): string {  const total = wallUs / 1e6;
   const h = Math.floor(total / 3600);
   const m = Math.floor((total % 3600) / 60);
@@ -458,6 +496,10 @@ export function App() {
   const [theme, setTheme] = useState<Theme>(loadTheme);
   const [menuOpen, setMenuOpen] = useState(false);
   const [setupOpen, setSetupOpen] = useState(false);
+  const brandMenuRef = useRef<HTMLDivElement>(null);
+  const setupMenuRef = useRef<HTMLDivElement>(null);
+  const brandTriggerRef = useRef<HTMLButtonElement | null>(null);
+  const setupTriggerRef = useRef<HTMLButtonElement | null>(null);
   const [signalView, setSignalView] = useState<SignalView>(
     savedView.signalView ?? { windowS: 30, endS: null },
   );
@@ -829,6 +871,20 @@ export function App() {
       window.removeEventListener("pointerdown", close);
       window.removeEventListener("keydown", escape);
     };
+  }, [setupOpen]);
+
+  useEffect(() => {
+    if (!menuOpen) return;
+    brandMenuRef.current
+      ?.querySelector<HTMLButtonElement>("button:not(:disabled)")
+      ?.focus();
+  }, [menuOpen]);
+
+  useEffect(() => {
+    if (!setupOpen) return;
+    setupMenuRef.current
+      ?.querySelector<HTMLButtonElement>("button:not(:disabled)")
+      ?.focus();
   }, [setupOpen]);
 
   useEffect(() => {
@@ -2563,15 +2619,20 @@ export function App() {
     },
   ];
 
+  const renderRate = () =>
+    state && state.buses.length === 0 ? (
+      emptyWorkspace
+    ) : (
+      <RateChart
+        points={state?.series ?? []}
+        channels={state?.channels ?? []}
+        theme={theme}
+      />
+    );
+
   const renderSecondary = (tab: ChartTab) => {
     if (tab === "rate") {
-      return (
-        <RateChart
-          points={state?.series ?? []}
-          channels={state?.channels ?? []}
-          theme={theme}
-        />
-      );
+      return renderRate();
     }
     if (tab === "signals") {
       return (
@@ -2994,12 +3055,28 @@ export function App() {
               aria-expanded={menuOpen}
               aria-controls="brand-menu-panel"
               title="Menu"
-              onClick={() => setMenuOpen((open) => !open)}
+              onClick={(event) => {
+                brandTriggerRef.current = event.currentTarget;
+                setMenuOpen((open) => !open);
+              }}
             >
               R
             </button>
             {menuOpen && (
-              <div class="brand-menu-panel" id="brand-menu-panel" role="menu">
+              <div
+                class="brand-menu-panel"
+                id="brand-menu-panel"
+                role="menu"
+                ref={brandMenuRef}
+                onKeyDown={(event) =>
+                  handleMenuKey(
+                    event,
+                    brandMenuRef.current,
+                    () => setMenuOpen(false),
+                    brandTriggerRef.current,
+                  )
+                }
+              >
                 <button
                   type="button"
                   role="menuitem"
@@ -3142,7 +3219,10 @@ export function App() {
               }
               aria-haspopup="menu"
               aria-expanded={menuOpen}
-              onClick={() => setMenuOpen((open) => !open)}
+              onClick={(event) => {
+                brandTriggerRef.current = event.currentTarget;
+                setMenuOpen((open) => !open);
+              }}
             >
               <span>
                 {state
@@ -3209,7 +3289,10 @@ export function App() {
               disabled={!online}
               aria-haspopup="menu"
               aria-expanded={setupOpen}
-              onClick={() => setSetupOpen((open) => !open)}
+              onClick={(event) => {
+                setupTriggerRef.current = event.currentTarget;
+                setSetupOpen((open) => !open);
+              }}
             >
               Setup
               <span class="top-menu-caret" aria-hidden="true">
@@ -3217,7 +3300,19 @@ export function App() {
               </span>
             </button>
             {setupOpen && (
-              <div class="top-menu-panel" role="menu">
+              <div
+                class="top-menu-panel"
+                role="menu"
+                ref={setupMenuRef}
+                onKeyDown={(event) =>
+                  handleMenuKey(
+                    event,
+                    setupMenuRef.current,
+                    () => setSetupOpen(false),
+                    setupTriggerRef.current,
+                  )
+                }
+              >
                 <button
                   type="button"
                   role="menuitem"
@@ -3801,14 +3896,8 @@ export function App() {
                   </button>
                 </>
               )}
-              {(chartTab === "rate" || chartTab === "signals") && (
-                <span class="meta">
-                  {chartTab === "rate"
-                    ? "solid f/s · dashed load"
-                    : `${chartSeries.length} channels${
-                        readSeries.length ? ` · ${readSeries.length} read` : ""
-                      }${signalOverlay ? " · overlay" : " · wheel zoom"}`}
-                </span>
+              {chartTab === "rate" && (
+                <span class="meta">solid f/s · dashed load</span>
               )}
               {chartTab === "rate" && (
                 <strong class="readout">
@@ -3906,11 +3995,7 @@ export function App() {
                     </span>
                   ))}
                 </div>
-                <RateChart
-                  points={state?.series ?? []}
-                  channels={state?.channels ?? []}
-                  theme={theme}
-                />
+                {renderRate()}
               </>
             ) : chartTab === "signals" ? (
               <div class="signal-stack">
