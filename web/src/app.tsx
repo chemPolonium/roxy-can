@@ -1767,6 +1767,10 @@ export function App() {
     closeDialogs();
     setBusesOpen(true);
   };
+  const openScripts = () => {
+    closeDialogs();
+    setScriptsOpen(true);
+  };
 
   const openSession = () => {
     closeDialogs();
@@ -1959,8 +1963,6 @@ export function App() {
     void run({ type: "attach_fr_hardware", bus, index });
   const detachFrHardware = (bus: number) =>
     void run({ type: "detach_fr_hardware", bus });
-  const setRealBus = (real: boolean) =>
-    void run({ type: "set_bus_mode", real });
   const addBus = (kind: "can" | "flexray" | "ethernet") =>
     void run({ type: "add_bus", kind });
   const removeBus = (bus: number) => void run({ type: "remove_bus", ch: bus });
@@ -2149,7 +2151,7 @@ export function App() {
   const busModeDetail = replaying
     ? "Replay runs from the log; bus mode applies to Simulation"
     : attachedBuses === 0
-      ? "No adapter attached — configure one in Bus setup"
+      ? "No adapter attached — open Buses… to attach one"
       : busLive
         ? `${attachedBuses} adapter(s) live on the wire`
         : `${attachedBuses} adapter(s) attached and parked`;
@@ -2388,7 +2390,7 @@ export function App() {
       id: "open-buses",
       label: "Open Buses…",
       group: "Open",
-      hint: "DBC, hardware and bus modes",
+      hint: "DBCs, adapters, rates and node roles",
       run: openBuses,
     },
     {
@@ -2417,10 +2419,7 @@ export function App() {
       label: "Open Scripts…",
       group: "Open",
       hint: "Node scripts and their logs",
-      run: () => {
-        closeDialogs();
-        setScriptsOpen(true);
-      },
+      run: openScripts,
     },
     {
       id: "pick-signals",
@@ -3368,7 +3367,7 @@ export function App() {
                     <strong>Real bus</strong>
                     <small>
                       {attachedBuses === 0
-                        ? "Attach an adapter in Bus setup first."
+                        ? "Attach an adapter with Buses… first."
                         : "Attached adapters receive and transmit on the wire."}
                     </small>
                   </span>
@@ -3388,17 +3387,6 @@ export function App() {
                       Keep adapters parked; generators run in real time.
                     </small>
                   </span>
-                </button>
-                <div class="bus-mode-sep" />
-                <button
-                  type="button"
-                  role="menuitem"
-                  onClick={() => {
-                    setBusModeOpen(false);
-                    openBuses();
-                  }}
-                >
-                  Bus setup…
                 </button>
               </div>
             )}
@@ -3452,6 +3440,16 @@ export function App() {
                   }}
                 >
                   Variables…
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    setSetupOpen(false);
+                    openScripts();
+                  }}
+                >
+                  Scripts…
                 </button>
               </div>
             )}
@@ -4592,7 +4590,7 @@ export function App() {
           replayMap={
             state?.replayMap ?? { can: [], fr: [], eth: [] }
           }
-          realBus={state?.realBus ?? false}
+          realBus={busLive}
           hardware={hardware}
           loading={hardwareLoading}
           error={hardwareError}
@@ -4618,11 +4616,6 @@ export function App() {
           onSetReplay={(kind, raw, target) =>
             void run({ type: "set_replay_channel", kind, raw, target })
           }
-          onSetReal={setRealBus}
-          onOpenScripts={() => {
-            setBusesOpen(false);
-            setScriptsOpen(true);
-          }}
           onClose={() => setBusesOpen(false)}
         />
       )}
@@ -4962,46 +4955,11 @@ export function App() {
                     Real bus puts attached adapters on the wire. Simulated bus
                     keeps them parked and runs generators in real time.
                   </p>
-                  <div
-                    class="run-mode bus-mode-choice"
-                    role="group"
-                    aria-label="Bus mode"
-                  >
-                    <button
-                      type="button"
-                      class={busLive ? "on" : ""}
-                      disabled={replaying || attachedBuses === 0}
-                      title={
-                        attachedBuses === 0
-                          ? "Attach an adapter in Bus setup first"
-                          : replaying
-                            ? "Replay runs from the log"
-                            : "Use attached adapters on the wire"
-                      }
-                      onClick={() => chooseBusMode(true)}
-                    >
-                      Real bus
-                    </button>
-                    <button
-                      type="button"
-                      class={!busLive ? "on" : ""}
-                      disabled={replaying}
-                      title={
-                        replaying
-                          ? "Replay runs from the log"
-                          : "Keep adapters attached but offline"
-                      }
-                      onClick={() => chooseBusMode(false)}
-                    >
-                      Simulated
-                    </button>
-                  </div>
                   <span class="task-state">{busModeDetail}</span>
-                  <div class="task-actions">
-                    <button type="button" onClick={openBuses}>
-                      Bus setup…
-                    </button>
-                  </div>
+                  <p class="hint">
+                    Change the wire mode from the toolbar's Real bus /
+                    Simulated bus menu.
+                  </p>
                 </section>
 
                 <section class="session-task">

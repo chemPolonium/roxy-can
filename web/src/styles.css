@@ -488,12 +488,6 @@ select:disabled {
   white-space: normal;
 }
 
-.bus-mode-sep {
-  height: 1px;
-  margin: 4px;
-  background: var(--line);
-}
-
 .stats {
   display: flex;
   align-items: stretch;
@@ -3696,20 +3690,6 @@ button.mini.on {
   border-bottom: 1px solid var(--line);
 }
 
-.real-toggle {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 11.5px;
-  color: #c9d6e5;
-  white-space: nowrap;
-}
-
-.real-toggle input {
-  margin: 0;
-  accent-color: var(--accent);
-}
-
 .buses-tools .hint {
   font-size: 10px;
   overflow: hidden;
@@ -4770,11 +4750,6 @@ button.mini.on {
   border-color: var(--accent);
   background: var(--accent-soft);
   color: var(--accent);
-}
-
-.session-task .bus-mode-choice {
-  flex-wrap: wrap;
-  margin-bottom: 0;
 }
 
 .session-tasks {

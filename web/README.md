@@ -31,9 +31,9 @@ The headless CLI modes (`--replay`/`--project` without `--web`, `--convert`,
 `--check-script`) keep their old meaning.
 
 The toolbar's **Run…** dialog configures the current session without restarting
-the server: a **Source** switch picks Simulation or Replay, a **Bus mode**
-switch chooses Real bus (attached adapters on the wire) or Simulated (adapters
-parked, generators and analysis only), the cards summarise the session, a
+the server: a **Source** switch picks Simulation or Replay, a **Bus mode** card
+reports the wire mode chosen in the toolbar (Real bus puts attached adapters on
+the wire; Simulated parks them), the cards summarise the session, a
 replay log path can be loaded **Open**
 (parked at the beginning) or **Open & play**, and recording is armed at the
 bottom. Replay logs can be typed or chosen with the browser's picker; uploaded
@@ -89,12 +89,12 @@ npm run dev                 # http://127.0.0.1:5173, proxies /api to :2010
   buffers. A loaded project starts clean, plain **Save project** rewrites it
   in place, and **Save project as…** targets a new path — both use the current
   project format.
-- The toolbar's **Real bus / Simulated bus** menu switches the wire mode at
-  any time, including while measuring, and shows the attached-adapter count;
-  its **Bus setup…** row opens the editor below. **Buses…** lists each bus
+- The toolbar's **Real bus / Simulated bus** menu is the single wire-mode
+  control and switches at any time, including while measuring; it shows the
+  attached-adapter count. **Buses…** lists each bus
   with its DBCs and bit rates, probes Kvaser/Vector
   adapters on demand, attaches/detaches a selected channel at the bus's
-  configured rates, and mirrors the toolbar's Simulated/Real bus mode. Buses can be
+  configured rates, and reports the toolbar's Simulated/Real bus mode. Buses can be
   added, removed, renamed, re-rated and given a new DBC by host path; removing
   one remaps the web signal keys with the core's channel indices. Each DBC
   node appears as a chip with its generator-entry count; ticking it declares
@@ -118,7 +118,7 @@ npm run dev                 # http://127.0.0.1:5173, proxies /api to :2010
   Lo/Hi, period, phase, Step sequence and Random redraw interval. A
   **Replay blocks** section injects a recorded ASC/BLF onto a chosen bus,
   optionally limited to one DBC node; blocks toggle and remove in place.
-- **Setup ▾** holds **Triggers…** and **Variables…**. Triggers shows the live
+- **Setup ▾** holds **Triggers…**, **Variables…** and **Scripts…**. Triggers shows the live
   rule list with condition summary, action,
   fired count and last-fire time. Default rules can be added by kind,
   enabled/disabled, removed and re-armed. The editor covers every condition
@@ -138,7 +138,7 @@ npm run dev                 # http://127.0.0.1:5173, proxies /api to :2010
   colors and in-band labels; an analog sweep collapses to one neutral band.
   **bands** opens the Value Definition editor: ascending cut points, a name
   per band and Default to return to quantized values.
-- **Scripts…** (from the Buses dialog) manages simulation node scripts:
+- **Scripts…** (from the Setup menu) manages simulation node scripts:
   create an unbound script or bind it to a DBC node, edit the C-like source
   in a plain textarea, enable/disable it, apply while measuring (the node
   recompiles and restarts), see its log and compile errors, insert a starter

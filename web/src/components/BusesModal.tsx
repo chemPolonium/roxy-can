@@ -44,8 +44,6 @@ interface Props {
   onAttachFr: (bus: number, index: number) => void;
   onDetachFr: (bus: number) => void;
   onSetReplay: (kind: string, raw: number, target: number | null) => void;
-  onSetReal: (real: boolean) => void;
-  onOpenScripts: () => void;
   onClose: () => void;
 }
 
@@ -539,8 +537,6 @@ export function BusesModal({
   onAttachFr,
   onDetachFr,
   onSetReplay,
-  onSetReal,
-  onOpenScripts,
   onClose,
 }: Props) {
   const [addOpen, setAddOpen] = useState(false);
@@ -712,9 +708,6 @@ export function BusesModal({
                 </div>
               )}
             </div>
-            <button type="button" onClick={onOpenScripts}>
-              Scripts…
-            </button>
             <button type="button" onClick={onClose}>
               Close
             </button>
@@ -903,23 +896,9 @@ export function BusesModal({
         )}
 
         <div class="buses-tools">
-          <label
-            class="real-toggle"
-            title="Applies to every bus with an attached adapter"
-          >
-            <input
-              type="checkbox"
-              checked={realBus}
-              onChange={(event) =>
-                onSetReal((event.target as HTMLInputElement).checked)
-              }
-            />
-            Real bus
-          </label>
           <span class="hint">
-            {realBus
-              ? "Every attached adapter receives and transmits on the wire."
-              : "Simulated: configured adapters stay attached but neither receive nor transmit."}
+            Wire mode: <strong>{realBus ? "Real bus" : "Simulated bus"}</strong>
+            {" "}· change it from the toolbar's bus mode menu.
           </span>
           <button
             type="button"
