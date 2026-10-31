@@ -4,9 +4,15 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useRef,
   useState,
 } from "preact/hooks";
-import { listDirectory, createFolder } from "../api";
+import {
+  createFolder,
+  deleteFolder,
+  listDirectory,
+  renameFolder,
+} from "../api";
 import type { FsEntry, FsList } from "../types";
 
 export interface FilePickOptions {
@@ -185,6 +191,14 @@ function FileBrowser({
   const [creating, setCreating] = useState(false);
   const [newFolder, setNewFolder] = useState("");
   const [createError, setCreateError] = useState("");
+  const [renaming, setRenaming] = useState<FsEntry | null>(null);
+  const [renameName, setRenameName] = useState("");
+  const [renameError, setRenameError] = useState("");
+  const [actionError, setActionError] = useState("");
+  const [menuFor, setMenuFor] = useState<string | null>(null);
+  const [menuPos, setMenuPos] = useState({ top: 0, left: 0 });
+  const menuRef = useRef<HTMLDivElement>(null);
+  const menuTriggerRef = useRef<HTMLButtonElement | null>(null);
   const [sort, setSort] = useState<{ key: SortKey; dir: 1 | -1 }>({
     key: "name",
     dir: 1,
@@ -231,6 +245,56 @@ function FileBrowser({
     }
   };
 
+  const startRename = (entry: FsEntry) => {
+    setMenuFor(null);
+    setCreating(false);
+    setRenaming(entry);
+    setRenameName(entry.name);
+    setRenameError("");
+    setActionError("");
+  };
+
+  const rename = async () => {
+    if (!listing || !renaming || !renameName.trim()) return;
+    setRenameError("");
+    try {
+      await renameFolder(renaming.path, renameName.trim());
+      setRenaming(null);
+      setRenameName("");
+      await load(listing.path);
+    } catch (reason) {
+      setRenameError(reason instanceof Error ? reason.message : String(reason));
+    }
+  };
+
+  const remove = async (entry: FsEntry) => {
+    if (!listing) return;
+    setMenuFor(null);
+    setActionError("");
+    try {
+      await deleteFolder(entry.path);
+      await load(listing.path);
+    } catch (reason) {
+      setActionError(reason instanceof Error ? reason.message : String(reason));
+    }
+  };
+
+  const openMenu = (
+    entry: FsEntry,
+    left: number,
+    top: number,
+    trigger: HTMLButtonElement | null,
+  ) => {
+    if (!entry.dir) return;
+    menuTriggerRef.current = trigger;
+    setMenuPos({
+      left: Math.max(8, Math.min(left, window.innerWidth - 170)),
+      top: Math.max(8, Math.min(top, window.innerHeight - 90)),
+    });
+    setMenuFor(entry.path);
+    setActionError("");
+  };
+
   useEffect(() => {
     void load(initialPath);
     // The dialog is mounted per request; later path changes come from clicks.
@@ -241,16 +305,44 @@ function FileBrowser({
     const onKey = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         event.preventDefault();
+        event.stopImmediatePropagation();
+        if (menuFor) {
+          setMenuFor(null);
+          menuTriggerRef.current?.focus();
+          return;
+        }
+        if (renaming) {
+          setRenaming(null);
+          return;
+        }
+        if (creating) {
+          setCreating(false);
+          return;
+        }
         // The modal underneath also listens for Escape on window; keep the
         // browser's close from dismissing its owner too. Close on the next
         // turn so that listener still sees the browser in the DOM.
-        event.stopImmediatePropagation();
         window.setTimeout(() => onClose(null), 0);
       }
     };
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
-  }, [onClose]);
+  }, [onClose, menuFor, renaming, creating]);
+
+  useEffect(() => {
+    if (!menuFor) return;
+    menuRef.current?.querySelector<HTMLButtonElement>("button")?.focus();
+    const close = (event: PointerEvent) => {
+      if (
+        !(event.target instanceof Element) ||
+        !event.target.closest(".fb-menu")
+      ) {
+        setMenuFor(null);
+      }
+    };
+    window.addEventListener("pointerdown", close);
+    return () => window.removeEventListener("pointerdown", close);
+  }, [menuFor]);
 
   const choose = (path: string | null) => {
     if (path) onClose(path);
@@ -297,6 +389,8 @@ function FileBrowser({
       : mode === "save"
         ? !listing || !name.trim()
         : !selected || selected.dir;
+  const menuEntry =
+    (listing?.entries ?? []).find((entry) => entry.path === menuFor) ?? null;
 
   return (
     <div class="modal-backdrop" onMouseDown={() => onClose(null)}>
@@ -360,6 +454,7 @@ function FileBrowser({
             title="Create a folder in this folder"
             onClick={() => {
               setCreating(true);
+              setRenaming(null);
               setCreateError("");
             }}
           >
@@ -413,6 +508,44 @@ function FileBrowser({
             {createError && <span class="fb-error">{createError}</span>}
           </form>
         )}
+        {renaming && (
+          <form
+            class="fb-new"
+            onSubmit={(event) => {
+              event.preventDefault();
+              void rename();
+            }}
+          >
+            <input
+              autoFocus
+              value={renameName}
+              placeholder="Folder name"
+              aria-label="Rename folder"
+              onInput={(event) =>
+                setRenameName((event.target as HTMLInputElement).value)
+              }
+            />
+            <button
+              type="submit"
+              class="mini"
+              disabled={!renameName.trim() || loading}
+            >
+              Rename
+            </button>
+            <button
+              type="button"
+              class="mini"
+              onClick={() => {
+                setRenaming(null);
+                setRenameError("");
+              }}
+            >
+              Cancel
+            </button>
+            {renameError && <span class="fb-error">{renameError}</span>}
+          </form>
+        )}
+        {actionError && <p class="fb-note error">{actionError}</p>}
         <div class="fb-list" role="listbox" aria-label="Folder contents">
           <div class="fb-row fb-head" role="presentation">
             <span />
@@ -459,6 +592,7 @@ function FileBrowser({
             >
               Size {sort.key === "size" ? (sort.dir === 1 ? "▲" : "▼") : ""}
             </span>
+            <span />
           </div>
           {loading && <p class="fb-note">Reading folder…</p>}
           {error && <p class="fb-note error">{error}</p>}
@@ -484,6 +618,12 @@ function FileBrowser({
                   if (entry.dir) void load(entry.path);
                   else if (mode !== "folder") choose(entry.path);
                 }}
+                onContextMenu={(event) => {
+                  if (!entry.dir) return;
+                  event.preventDefault();
+                  event.stopPropagation();
+                  openMenu(entry, event.clientX, event.clientY, null);
+                }}
               >
                 <EntryIcon dir={entry.dir} />
                 <span class="fb-name">{entry.name}</span>
@@ -494,6 +634,31 @@ function FileBrowser({
                 </span>
                 <span class="fb-size">
                   {entry.dir ? "" : `${entry.size} B`}
+                </span>
+                <span class="fb-actions">
+                  {entry.dir && (
+                    <button
+                      type="button"
+                      class="fb-row-menu"
+                      aria-haspopup="menu"
+                      aria-expanded={menuFor === entry.path}
+                      aria-label={`Actions for ${entry.name}`}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        const rect = (
+                          event.currentTarget as HTMLButtonElement
+                        ).getBoundingClientRect();
+                        openMenu(
+                          entry,
+                          rect.right - 150,
+                          rect.bottom + 2,
+                          event.currentTarget as HTMLButtonElement,
+                        );
+                      }}
+                    >
+                      ⋯
+                    </button>
+                  )}
                 </span>
               </div>
             ))}
@@ -539,6 +704,59 @@ function FileBrowser({
             {mode === "folder" ? "Select folder" : mode === "save" ? "Save" : "Open"}
           </button>
         </footer>
+        {menuEntry && (
+          <div
+            class="fb-menu"
+            role="menu"
+            ref={menuRef}
+            style={{ top: `${menuPos.top}px`, left: `${menuPos.left}px` }}
+            onKeyDown={(event) => {
+              const menu = event.currentTarget;
+              const items = [
+                ...menu.querySelectorAll<HTMLButtonElement>("button"),
+              ];
+              const at = items.indexOf(
+                document.activeElement as HTMLButtonElement,
+              );
+              if (event.key === "Escape") {
+                event.preventDefault();
+                event.stopPropagation();
+                setMenuFor(null);
+                menuTriggerRef.current?.focus();
+                return;
+              }
+              const next =
+                event.key === "ArrowDown"
+                  ? (at + 1) % items.length
+                  : event.key === "ArrowUp"
+                    ? (at - 1 + items.length) % items.length
+                    : event.key === "Home"
+                      ? 0
+                      : event.key === "End"
+                        ? items.length - 1
+                        : -1;
+              if (next >= 0) {
+                event.preventDefault();
+                items[next].focus();
+              }
+            }}
+          >
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => startRename(menuEntry)}
+            >
+              Rename
+            </button>
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => void remove(menuEntry)}
+            >
+              Delete empty folder
+            </button>
+          </div>
+        )}
       </div>
     </div>
   );

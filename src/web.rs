@@ -223,6 +223,8 @@ pub fn run(args: &[String], open: bool) -> Result<(), String> {
             .route("/hardware", get(hardware_handler))
             .route("/fs/list", get(fs_list_handler))
             .route("/fs/mkdir", post(create_folder_handler))
+            .route("/fs/rename", post(rename_folder_handler))
+            .route("/fs/delete", post(delete_folder_handler))
             .route("/nodes", get(scripts_handler))
             .route("/script-help", get(script_help_handler))
             .route(
@@ -1509,7 +1511,7 @@ struct NewFolder {
     name: String,
 }
 
-fn create_folder(parent: &str, name: &str) -> Result<NewFolder, String> {
+fn valid_folder_name(name: &str) -> Result<&str, String> {
     let name = name.trim();
     if name.is_empty() {
         return Err("folder name is empty".to_string());
@@ -1522,6 +1524,11 @@ fn create_folder(parent: &str, name: &str) -> Result<NewFolder, String> {
     }) {
         return Err("folder name contains an invalid character".to_string());
     }
+    Ok(name)
+}
+
+fn create_folder(parent: &str, name: &str) -> Result<NewFolder, String> {
+    let name = valid_folder_name(name)?;
     let parent = std::fs::canonicalize(parent).map_err(|error| {
         format!(
             "cannot open {}: {error}",
@@ -1547,6 +1554,78 @@ async fn create_folder_handler(
 ) -> Result<Json<NewFolder>, (StatusCode, String)> {
     create_folder(&request.path, &request.name)
         .map(Json)
+        .map_err(|error| (StatusCode::BAD_REQUEST, error))
+}
+
+#[derive(Deserialize)]
+struct RenameFolderRequest {
+    path: String,
+    name: String,
+}
+
+#[derive(Deserialize)]
+struct DeleteFolderRequest {
+    path: String,
+}
+
+fn rename_folder(path: &str, name: &str) -> Result<NewFolder, String> {
+    let name = valid_folder_name(name)?;
+    let path =
+        std::fs::canonicalize(path).map_err(|error| format!("cannot open {path}: {error}"))?;
+    if !path.is_dir() {
+        return Err(format!("not a folder: {}", clean_path(&path)));
+    }
+    let parent = path
+        .parent()
+        .ok_or_else(|| "cannot rename a root folder".to_string())?;
+    let target = parent.join(name);
+    if target == path {
+        return Ok(NewFolder {
+            path: clean_path(&path),
+            name: name.to_string(),
+        });
+    }
+    if target.exists() {
+        return Err(format!("folder already exists: {}", clean_path(&target)));
+    }
+    std::fs::rename(&path, &target).map_err(|error| format!("cannot rename folder: {error}"))?;
+    Ok(NewFolder {
+        path: clean_path(&target),
+        name: name.to_string(),
+    })
+}
+
+fn delete_folder(path: &str) -> Result<(), String> {
+    let path =
+        std::fs::canonicalize(path).map_err(|error| format!("cannot open {path}: {error}"))?;
+    if !path.is_dir() {
+        return Err(format!("not a folder: {}", clean_path(&path)));
+    }
+    if path.parent().is_none() {
+        return Err("cannot delete a root folder".to_string());
+    }
+    match std::fs::remove_dir(&path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::DirectoryNotEmpty => {
+            Err("folder is not empty; remove its contents first".to_string())
+        }
+        Err(error) => Err(format!("cannot delete folder: {error}")),
+    }
+}
+
+async fn rename_folder_handler(
+    Json(request): Json<RenameFolderRequest>,
+) -> Result<Json<NewFolder>, (StatusCode, String)> {
+    rename_folder(&request.path, &request.name)
+        .map(Json)
+        .map_err(|error| (StatusCode::BAD_REQUEST, error))
+}
+
+async fn delete_folder_handler(
+    Json(request): Json<DeleteFolderRequest>,
+) -> Result<StatusCode, (StatusCode, String)> {
+    delete_folder(&request.path)
+        .map(|()| StatusCode::NO_CONTENT)
         .map_err(|error| (StatusCode::BAD_REQUEST, error))
 }
 
@@ -8446,6 +8525,27 @@ mod tests {
         assert!(create_folder(&parent, "take 1").is_err());
         assert!(create_folder(&parent, "../escape").is_err());
         assert!(create_folder(&parent, "nested/name").is_err());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn renaming_and_deleting_folders_checks_names_and_emptiness() {
+        let dir = std::env::temp_dir().join(format!("roxy-can-rename-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let parent = dir.to_string_lossy().into_owned();
+        let old = create_folder(&parent, "old name").unwrap();
+        let renamed = rename_folder(&old.path, "new name").unwrap();
+        assert!(!std::path::Path::new(&old.path).exists());
+        assert!(std::path::Path::new(&renamed.path).is_dir());
+        assert!(rename_folder(&renamed.path, "../escape").is_err());
+        let other = create_folder(&parent, "other").unwrap();
+        assert!(rename_folder(&renamed.path, "other").is_err());
+        std::fs::write(std::path::Path::new(&renamed.path).join("keep.txt"), b"x").unwrap();
+        assert!(delete_folder(&renamed.path).is_err(), "non-empty folder");
+        std::fs::remove_file(std::path::Path::new(&renamed.path).join("keep.txt")).ok();
+        delete_folder(&renamed.path).unwrap();
+        delete_folder(&other.path).unwrap();
+        assert!(delete_folder(&renamed.path).is_err(), "already gone");
         std::fs::remove_dir_all(&dir).ok();
     }
 }

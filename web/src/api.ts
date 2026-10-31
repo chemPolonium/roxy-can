@@ -94,6 +94,34 @@ export async function createFolder(
   return (await response.json()) as { path: string; name: string };
 }
 
+export async function renameFolder(
+  path: string,
+  name: string,
+): Promise<{ path: string; name: string }> {
+  const response = await fetch("/api/fs/rename", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ path, name }),
+  });
+  if (!response.ok) {
+    const detail = await response.text();
+    throw new Error(detail || `rename: ${response.status}`);
+  }
+  return (await response.json()) as { path: string; name: string };
+}
+
+export async function deleteFolder(path: string): Promise<void> {
+  const response = await fetch("/api/fs/delete", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ path }),
+  });
+  if (!response.ok) {
+    const detail = await response.text();
+    throw new Error(detail || `delete: ${response.status}`);
+  }
+}
+
 export async function fetchScripts(): Promise<Script[]> {
   const response = await fetch("/api/nodes", { cache: "no-store" });
   if (!response.ok) {

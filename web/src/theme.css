@@ -50,6 +50,27 @@
   color: #1f6fd0;
 }
 
+[data-theme="light"] .fb-row-menu {
+  border: 0;
+  background: transparent;
+  color: #6b7788;
+}
+
+[data-theme="light"] .fb-row-menu:hover:not(:disabled) {
+  background: transparent;
+  color: #1f6fd0;
+}
+
+[data-theme="light"] .fb-menu button {
+  border: 0;
+  background: transparent;
+  color: inherit;
+}
+
+[data-theme="light"] .fb-menu button:hover:not(:disabled) {
+  background: #eef4fb;
+}
+
 /* The project line is a flat text trigger, not a button surface. */
 [data-theme="light"] .brand-project {
   border: 0;
