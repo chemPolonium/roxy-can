@@ -39,6 +39,18 @@
   background: #f2f5f9;
 }
 
+/* The project line is a flat text trigger, not a button surface. */
+[data-theme="light"] .brand-project {
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+}
+
+[data-theme="light"] .brand-project:hover:not(:disabled) {
+  background: transparent;
+  color: var(--accent);
+}
+
 [data-theme="light"] button.primary {
   border-color: #1a62bb;
   background: #1f6fd0;
