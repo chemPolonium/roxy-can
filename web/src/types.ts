@@ -6,6 +6,27 @@ export interface ReplayRecording {
   modifiedMs: number;
 }
 
+export interface FsEntry {
+  name: string;
+  path: string;
+  dir: boolean;
+  size: number;
+  modifiedMs: number;
+}
+
+export interface FsRoot {
+  name: string;
+  path: string;
+}
+
+export interface FsList {
+  path: string;
+  parent: string | null;
+  roots: FsRoot[];
+  entries: FsEntry[];
+  truncated: boolean;
+}
+
 export interface State {
   measuring: boolean;
   tracePaused: boolean;
@@ -643,7 +664,7 @@ export type Command =
   | { type: "open_project"; path: string }
   | { type: "pick_project" }
   | { type: "save_project_as" }
-  | { type: "create_sample_project" }
+  | { type: "create_sample_project"; parent?: string | null }
   | { type: "set_run_mode"; mode: "simulation" | "replay" }
   | { type: "open_log"; path: string; play?: boolean }
   | { type: "add_replay_folder"; path?: string | null }

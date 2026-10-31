@@ -7,7 +7,7 @@ import type {
   HwChannel,
   ReplayMap,
 } from "../types";
-import { FilePick } from "./FilePick";
+import { HostPathPick, fileBrowserOpen } from "./FileBrowser";
 
 interface Props {
   buses: Bus[];
@@ -191,7 +191,7 @@ function DescriptionList({
           </button>
         </div>
       )}
-      <FilePick
+      <HostPathPick
         label="Add description…"
         accept={accept}
         onError={onError}
@@ -653,7 +653,7 @@ export function BusesModal({
   }, [addOpen]);
   useEffect(() => {
     const close = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onClose();
+      if (event.key === "Escape" && !fileBrowserOpen()) onClose();
     };
     window.addEventListener("keydown", close);
     return () => window.removeEventListener("keydown", close);

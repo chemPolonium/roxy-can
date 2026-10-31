@@ -5,6 +5,7 @@ import {
   triggerDownload,
   waitForDownload,
 } from "../download";
+import { fileBrowserOpen, useFileBrowser } from "./FileBrowser";
 
 interface Props {
   initialKind: string;
@@ -42,6 +43,7 @@ export function ExportModal({
   onExport,
   onClose,
 }: Props) {
+  const pickHost = useFileBrowser();
   const [kind, setKind] = useState(
     KINDS.some(([value]) => value === initialKind) ? initialKind : "trace",
   );
@@ -53,7 +55,7 @@ export function ExportModal({
   const [useRange, setUseRange] = useState(range !== null);
   useEffect(() => {
     const close = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onClose();
+      if (event.key === "Escape" && !fileBrowserOpen()) onClose();
     };
     window.addEventListener("keydown", close);
     return () => window.removeEventListener("keydown", close);
@@ -117,18 +119,46 @@ export function ExportModal({
           </label>
           <label class="export-path">
             Host path
-            <input
-              value={path}
-              placeholder={`export${current[2]}`}
-              onInput={(event) =>
-                setPath((event.target as HTMLInputElement).value)
-              }
-              onKeyDown={(event) => {
-                if (event.key === "Enter" && path.trim()) {
-                  onExport(kind, path.trim(), selectedRange);
+            <div class="export-path-row">
+              <input
+                value={path}
+                placeholder={`export${current[2]}`}
+                onInput={(event) =>
+                  setPath((event.target as HTMLInputElement).value)
                 }
-              }}
-            />
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" && path.trim()) {
+                    onExport(kind, path.trim(), selectedRange);
+                  }
+                }}
+              />
+              <button
+                type="button"
+                class="mini"
+                onClick={async () => {
+                  const cut = Math.max(
+                    path.lastIndexOf("\\"),
+                    path.lastIndexOf("/"),
+                  );
+                  const folder = cut > 0 ? path.slice(0, cut) : null;
+                  const file = cut >= 0 ? path.slice(cut + 1) : path;
+                  const accept =
+                    kind === "trace"
+                      ? ["asc", "pcap"]
+                      : [current[2].replace(/^\./, "")];
+                  const picked = await pickHost({
+                    mode: "save",
+                    title: "Export to folder",
+                    accept,
+                    initialPath: folder,
+                    initialName: withExt(file || `export${current[2]}`, current[2]),
+                  });
+                  if (picked) setPath(picked);
+                }}
+              >
+                Browse…
+              </button>
+            </div>
           </label>
           {(kind === "trace" || kind === "signals") && range && (
             <label class="export-range">

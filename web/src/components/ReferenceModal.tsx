@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "preact/hooks";
-import { FilePick } from "./FilePick";
+import { HostPathPick, fileBrowserOpen } from "./FileBrowser";
 
 export interface ReferenceColumns {
   [label: string]: [number, number][];
@@ -62,7 +62,7 @@ export function ReferenceModal({
 
   useEffect(() => {
     const escape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onClose();
+      if (event.key === "Escape" && !fileBrowserOpen()) onClose();
     };
     window.addEventListener("keydown", escape);
     return () => window.removeEventListener("keydown", escape);
@@ -166,7 +166,7 @@ export function ReferenceModal({
                 >
                   Load log
                 </button>
-                <FilePick
+                <HostPathPick
                   label="Choose…"
                   accept=".asc,.blf"
                   onError={setLogError}

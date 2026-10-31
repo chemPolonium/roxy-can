@@ -8,7 +8,7 @@ import type {
   TxEntry,
   TxSource,
 } from "../types";
-import { FilePick } from "./FilePick";
+import { HostPathPick, fileBrowserOpen } from "./FileBrowser";
 import { formatReplayIds, parseReplayIds } from "../replayIds";
 
 interface Props {
@@ -841,7 +841,7 @@ export function GeneratorModal({
   }, [buses, blockBus]);
   useEffect(() => {
     const close = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onClose();
+      if (event.key === "Escape" && !fileBrowserOpen()) onClose();
     };
     window.addEventListener("keydown", close);
     return () => window.removeEventListener("keydown", close);
@@ -1012,7 +1012,7 @@ export function GeneratorModal({
                       <span class="gen-block-path" title={editPath}>
                         {editPath.split(/[\\/]/).pop() || "no log"}
                       </span>
-                      <FilePick
+                      <HostPathPick
                         label="Replace log…"
                         accept=".asc,.blf"
                         onPick={(path) => setEditPath(path)}
@@ -1058,7 +1058,7 @@ export function GeneratorModal({
                   setBlockNode((event.target as HTMLInputElement).value)
                 }
               />
-              <FilePick
+              <HostPathPick
                 label="Add from log…"
                 accept=".asc,.blf"
                 onPick={(path) => {

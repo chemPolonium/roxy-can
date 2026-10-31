@@ -221,6 +221,7 @@ pub fn run(args: &[String], open: bool) -> Result<(), String> {
             .route("/state", get(state))
             .route("/catalog", get(catalog_handler))
             .route("/hardware", get(hardware_handler))
+            .route("/fs/list", get(fs_list_handler))
             .route("/nodes", get(scripts_handler))
             .route("/script-help", get(script_help_handler))
             .route(
@@ -1351,6 +1352,147 @@ async fn hardware_handler(State(api): State<ApiState>) -> Json<WebHardware> {
         cache.data = Some(data.clone());
     }
     Json(data)
+}
+
+#[derive(Default, Deserialize)]
+struct FsListQuery {
+    path: Option<String>,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct FsRoot {
+    name: String,
+    path: String,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct FsEntry {
+    name: String,
+    path: String,
+    dir: bool,
+    size: u64,
+    modified_ms: u64,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct FsList {
+    path: String,
+    parent: Option<String>,
+    roots: Vec<FsRoot>,
+    entries: Vec<FsEntry>,
+    truncated: bool,
+}
+
+fn clean_path(path: &std::path::Path) -> String {
+    let text = path.to_string_lossy();
+    text.strip_prefix("\\\\?\\").unwrap_or(&text).to_string()
+}
+
+fn fs_roots() -> Vec<FsRoot> {
+    let mut roots = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    let mut push = |name: &str, path: std::path::PathBuf| {
+        let path = clean_path(&path);
+        if seen.insert(path.to_ascii_lowercase()) {
+            roots.push(FsRoot {
+                name: name.to_string(),
+                path,
+            });
+        }
+    };
+    if let Some(home) = std::env::var_os("USERPROFILE").or_else(|| std::env::var_os("HOME")) {
+        push("Home", std::path::PathBuf::from(home));
+    }
+    if let Ok(cwd) = std::env::current_dir() {
+        push("Working folder", cwd);
+    }
+    #[cfg(windows)]
+    {
+        for letter in b'C'..=b'Z' {
+            let root = format!("{}:\\", letter as char);
+            if std::path::Path::new(&root).exists() {
+                push(
+                    &format!("{}:", letter as char),
+                    std::path::PathBuf::from(root),
+                );
+            }
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        push("/", std::path::PathBuf::from("/"));
+    }
+    roots
+}
+
+fn list_directory(requested: Option<&str>) -> Result<FsList, String> {
+    let requested = requested
+        .map(str::trim)
+        .filter(|path| !path.is_empty())
+        .map(std::path::PathBuf::from)
+        .or_else(|| {
+            std::env::var_os("USERPROFILE")
+                .or_else(|| std::env::var_os("HOME"))
+                .map(std::path::PathBuf::from)
+        })
+        .or_else(|| std::env::current_dir().ok())
+        .ok_or_else(|| "no folder to list".to_string())?;
+    let current = std::fs::canonicalize(&requested)
+        .map_err(|error| format!("cannot open {}: {error}", clean_path(&requested)))?;
+    if !current.is_dir() {
+        return Err(format!("not a folder: {}", clean_path(&current)));
+    }
+    let mut entries = Vec::new();
+    let mut truncated = false;
+    if let Ok(read) = std::fs::read_dir(&current) {
+        for entry in read.flatten() {
+            if entries.len() >= 2000 {
+                truncated = true;
+                break;
+            }
+            let Ok(meta) = entry.metadata() else {
+                continue;
+            };
+            let name = entry.file_name().to_string_lossy().into_owned();
+            entries.push(FsEntry {
+                name,
+                path: clean_path(&entry.path()),
+                dir: meta.is_dir(),
+                size: if meta.is_file() { meta.len() } else { 0 },
+                modified_ms: meta
+                    .modified()
+                    .ok()
+                    .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map(|duration| duration.as_millis() as u64)
+                    .unwrap_or(0),
+            });
+        }
+    }
+    entries.sort_by(|a, b| {
+        b.dir.cmp(&a.dir).then_with(|| {
+            a.name
+                .to_ascii_lowercase()
+                .cmp(&b.name.to_ascii_lowercase())
+        })
+    });
+    Ok(FsList {
+        path: clean_path(&current),
+        parent: current.parent().map(clean_path),
+        roots: fs_roots(),
+        entries,
+        truncated,
+    })
+}
+
+async fn fs_list_handler(
+    Query(query): Query<FsListQuery>,
+) -> Result<Json<FsList>, (StatusCode, String)> {
+    list_directory(query.path.as_deref())
+        .map(Json)
+        .map_err(|error| (StatusCode::BAD_REQUEST, error))
 }
 
 #[derive(Default, Deserialize)]
@@ -8220,5 +8362,21 @@ mod tests {
         let tail = store.after(store.next_seq - 6);
         assert_eq!(tail.len(), 5);
         assert_eq!(tail[0].t_us, (TRACE_LOG_CAP + 9) as u64);
+    }
+
+    #[test]
+    fn listing_a_folder_puts_folders_first_with_metadata() {
+        let dir = std::env::temp_dir().join(format!("roxy-can-fs-list-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("sub")).unwrap();
+        std::fs::write(dir.join("alpha.asc"), b"abc").unwrap();
+        std::fs::write(dir.join("notes.txt"), b"x").unwrap();
+        let list = list_directory(Some(&dir.to_string_lossy())).unwrap();
+        let names: Vec<&str> = list.entries.iter().map(|e| e.name.as_str()).collect();
+        assert_eq!(names, ["sub", "alpha.asc", "notes.txt"]);
+        assert!(list.entries[0].dir);
+        assert_eq!(list.entries[1].size, 3);
+        assert!(list.parent.is_some());
+        assert!(!list.roots.is_empty());
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

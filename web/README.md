@@ -39,17 +39,19 @@ folder, base name (with `{date}`, `{time}` and `{index}` field codes), ASC/BLF
 format and id/slot filter; **Setup → Replay…** is the independent replay
 source list: add files or persistent folders, **Refresh** rescans them, and a
 per-row checkbox makes one recording the active Offline source for Start.
-Replay logs can be typed or chosen with the browser's picker; uploaded
+The in-app file browser chooses host files and folders for projects, replay
+sources, descriptions and the recording folder; it only lists names and
+metadata, while text imports still use the browser's upload picker. Uploaded
 logs land in the host's per-user application data folder
 (`%LOCALAPPDATA%\roxy-can\web-uploads` on Windows, 256 MiB cap). Projects use
-host dialogs instead: **Open project…**, **Save project** and **Save project
+that browser too: **Open project…**, **Save project** and **Save project
 as…** live in the R menu (also Ctrl+O / Ctrl+S / Ctrl+Shift+S), so the project
 opens in place and keeps its sibling databases. Opening a project or log stops
 the current measurement and clears the trace. A loaded replay also gets a second, slim bar with the playhead,
 a speed ladder (0.5x/1x/2x/4x/Fast), a forward **Step** (10 ms–5 s), **Play
 for** (1–60 s) and **Play to** an absolute log time; both timed plays resume
 playback and pause at the target.
-**Save project** rewrites the open project; **Save project as…** asks for a new
+**Save project** rewrites the open project; **Save project as…** picks a new
 host path. The header marks unsaved changes next to the project name. The
 **Record** button arms capture (blue) and turns green when a file is open;
 Start with an armed capture opens a new file, and clicking Record while
@@ -58,8 +60,8 @@ folder, base name, ASC/BLF format and optional whitelist (`100, 3F4x, FR0:13`);
 relative paths land in `Record/` beside the project. The header REC badge and
 status line show an active capture, and **Download last recording** fetches the
 file through the browser.
-Recording names still take host paths; opening projects, logs, DBCs and
-ARXML descriptions can use the browser picker, and bare export/save names
+Recording names still take host paths; projects, logs, DBCs and ARXML
+descriptions use the same in-app browser, and bare export/save names
 download through the browser.
 
 For hot reload, keep the server running and start Vite in a second terminal:
@@ -106,7 +108,7 @@ npm run dev                 # http://127.0.0.1:5173, proxies /api to :2010
   node appears as a chip with its generator-entry count; ticking it declares
   the node Simulated (its DBC traffic joins the generator), unticking takes it
   offline. **FlexRay** and **Ethernet** sections load a FIBEX/ARXML cluster or
-  an AUTOSAR matrix (host path or browser picker) and list the resulting bus,
+  an AUTOSAR matrix (in-app file browser) and list the resulting bus,
   cluster and frame count; loading or removing a description stops the
   measurement. **Import ARXML…** adds every CAN, FlexRay and Ethernet cluster
   in one file as its own bus. A loaded FlexRay bus can attach a Vector FlexRay

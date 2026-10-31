@@ -3,6 +3,7 @@ import type {
   Command,
   DebugCommand,
   DebugView,
+  FsList,
   Hardware,
   Script,
   ScriptFunctionHelp,
@@ -65,6 +66,16 @@ export async function fetchHardware(): Promise<Hardware> {
     throw new Error(`hardware: ${response.status}`);
   }
   return (await response.json()) as Hardware;
+}
+
+export async function listDirectory(path?: string | null): Promise<FsList> {
+  const query = path ? `?${new URLSearchParams({ path })}` : "";
+  const response = await fetch(`/api/fs/list${query}`, { cache: "no-store" });
+  if (!response.ok) {
+    const detail = await response.text();
+    throw new Error(detail || `list: ${response.status}`);
+  }
+  return (await response.json()) as FsList;
 }
 
 export async function fetchScripts(): Promise<Script[]> {

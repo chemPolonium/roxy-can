@@ -38,6 +38,7 @@ import {
   type DerivedReference,
 } from "./derived";
 import { ExportModal } from "./components/ExportModal";
+import { fileBrowserOpen, useFileBrowser } from "./components/FileBrowser";
 import { GeneratorModal } from "./components/GeneratorModal";
 import { HelpModal } from "./components/HelpModal";
 import { TriggersModal } from "./components/TriggersModal";
@@ -424,6 +425,7 @@ function clock(wallUs: number): string {  const total = wallUs / 1e6;
 }
 
 export function App() {
+  const pickHost = useFileBrowser();
   const [state, setState] = useState<State | null>(null);
   const [traceRows, setTraceRows] = useState<Frame[]>([]);
   const [traceEpoch, setTraceEpoch] = useState(0);
@@ -1071,7 +1073,7 @@ export function App() {
   useEffect(() => {
     if (!sessionOpen) return;
     const close = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setSessionOpen(false);
+      if (event.key === "Escape" && !fileBrowserOpen()) setSessionOpen(false);
     };
     window.addEventListener("keydown", close);
     return () => window.removeEventListener("keydown", close);
@@ -1566,7 +1568,68 @@ export function App() {
 
   const saveProjectAs = async () => {
     await pushWorkspace().catch(() => {});
-    await run({ type: "save_project_as" });
+    const base = (state?.project || "roxy-can").replace(/\.rxproj$/i, "");
+    const path = await pickHost({
+      mode: "save",
+      title: "Save roxy-can project",
+      accept: ["rxproj"],
+      initialPath: projectFolder,
+      initialName: `${base}.rxproj`,
+    });
+    if (path) await run({ type: "save_project", path });
+  };
+
+  const openProjectPicker = async () => {
+    const path = await pickHost({
+      mode: "file",
+      title: "Open roxy-can project",
+      accept: ["rxproj"],
+      initialPath: projectFolder,
+    });
+    if (path) void run({ type: "open_project", path });
+  };
+
+  const createSampleProject = async () => {
+    const folder = await pickHost({
+      mode: "folder",
+      title: "Choose a folder for the sample project",
+      initialPath: projectFolder,
+    });
+    if (folder) void run({ type: "create_sample_project", parent: folder });
+  };
+
+  const chooseRecordFolder = async () => {
+    const folder = await pickHost({
+      mode: "folder",
+      title: "Choose recording folder",
+      initialPath: recordDir || projectFolder,
+    });
+    if (!folder) return;
+    setRecordDir(folder);
+    void run({
+      type: "set_record_settings",
+      name: composeRecordPath(folder, recordName),
+      format: recordFormat,
+    });
+  };
+
+  const addReplayFile = async () => {
+    const path = await pickHost({
+      mode: "file",
+      title: "Add replay recording",
+      accept: ["asc", "blf"],
+      initialPath: projectFolder,
+    });
+    if (path) void run({ type: "add_replay_file", path });
+  };
+
+  const addReplayFolder = async () => {
+    const folder = await pickHost({
+      mode: "folder",
+      title: "Add replay folder",
+      initialPath: projectFolder,
+    });
+    if (folder) void run({ type: "add_replay_folder", path: folder });
   };
 
   const loadCatalog = async () => {
@@ -1713,7 +1776,7 @@ export function App() {
         else void saveProjectAs();
       } else if (mod && key === "o") {
         event.preventDefault();
-        void run({ type: "pick_project" });
+        void openProjectPicker();
       } else if (mod && key === "e") {
         event.preventDefault();
         if (mainView !== "panel") {
@@ -2147,12 +2210,19 @@ export function App() {
   const runModeLabel = replaying ? "Offline" : "Online";
   const recordActive = Boolean(state?.recording) && measuring;
   const recordArmed = Boolean(state?.recording) && !measuring;
-  const recordDraftPath = () => {
-    const name = recordName.trim() || "record";
-    if (/^(?:[A-Za-z]:[\\/]|[\\/])/.test(name)) return name;
-    const dir = recordDir.trim();
-    return dir ? `${dir.replace(/[\\/]+$/, "")}/${name}` : name;
+  const projectFolder = (() => {
+    const path = state?.projectPath;
+    if (!path) return null;
+    const cut = Math.max(path.lastIndexOf("\\"), path.lastIndexOf("/"));
+    return cut > 0 ? path.slice(0, cut) : null;
+  })();
+  const composeRecordPath = (dir: string, name: string) => {
+    const file = name.trim() || "record";
+    if (/^(?:[A-Za-z]:[\\/]|[\\/])/.test(file)) return file;
+    const folder = dir.trim();
+    return folder ? `${folder.replace(/[\\/]+$/, "")}/${file}` : file;
   };
+  const recordDraftPath = () => composeRecordPath(recordDir, recordName);
   const insertRecordField = (token: string) => {
     const input = recordNameRef.current;
     if (!input) {
@@ -2228,13 +2298,13 @@ export function App() {
         <button
           type="button"
           class="primary"
-          onClick={() => void run({ type: "pick_project" })}
+          onClick={() => void openProjectPicker()}
         >
           Open project…
         </button>
         <button
           type="button"
-          onClick={() => void run({ type: "create_sample_project" })}
+          onClick={() => void createSampleProject()}
         >
           Sample project
         </button>
@@ -3178,7 +3248,7 @@ export function App() {
                   title="Pick a .rxproj on this machine"
                   onClick={() => {
                     setMenuOpen(false);
-                    void run({ type: "pick_project" });
+                    void openProjectPicker();
                   }}
                 >
                   <svg viewBox="0 0 16 16" aria-hidden="true">
@@ -3216,7 +3286,7 @@ export function App() {
                   title="Write a file-based sample project to a folder and open it"
                   onClick={() => {
                     setMenuOpen(false);
-                    void run({ type: "create_sample_project" });
+                    void createSampleProject();
                   }}
                 >
                   <svg viewBox="0 0 16 16" aria-hidden="true">
@@ -5035,18 +5105,25 @@ export function App() {
                         : "Not recording"}
                 </p>
                 <div class="record-settings">
-                  <label class="record-field">
-                    Save to
-                    <input
-                      value={recordDir}
-                      placeholder="Record/ beside the project"
-                      title="Folder for new recordings; leave blank for Record/ beside the project"
-                      onInput={(event) =>
-                        setRecordDir((event.target as HTMLInputElement).value)
-                      }
-                      onBlur={pushRecordSettings}
-                    />
-                  </label>
+                  <div class="record-field">
+                    <span>Save to</span>
+                    <div class="record-name-row">
+                      <input
+                        value={recordDir}
+                        readOnly
+                        placeholder="Record/ beside the project"
+                        title="Folder for new recordings; click Browse to choose"
+                        onClick={chooseRecordFolder}
+                      />
+                      <button
+                        type="button"
+                        class="mini"
+                        onClick={chooseRecordFolder}
+                      >
+                        Browse…
+                      </button>
+                    </div>
+                  </div>
                   <div class="record-field">
                     <span>File name</span>
                     <div class="record-name-row">
@@ -5167,14 +5244,14 @@ export function App() {
                       <button
                         type="button"
                         class="mini"
-                        onClick={() => void run({ type: "add_replay_file" })}
+                        onClick={() => void addReplayFile()}
                       >
                         Add file…
                       </button>
                       <button
                         type="button"
                         class="mini"
-                        onClick={() => void run({ type: "add_replay_folder" })}
+                        onClick={() => void addReplayFolder()}
                       >
                         Add folder…
                       </button>

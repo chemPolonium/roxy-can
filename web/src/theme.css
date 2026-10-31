@@ -275,7 +275,8 @@
 [data-theme="light"] .time-jump,
 [data-theme="light"] .state-rule-modal,
 [data-theme="light"] .scripts-modal,
-[data-theme="light"] .sysvars-modal {
+[data-theme="light"] .sysvars-modal,
+[data-theme="light"] .file-browser-modal {
   border-color: #d4dbe4;
   background: #ffffff;
   box-shadow: 0 20px 60px rgb(31 45 61 / 18%);

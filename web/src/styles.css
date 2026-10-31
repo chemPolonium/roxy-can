@@ -4753,6 +4753,165 @@ button.mini.on {
   letter-spacing: 0.06em;
 }
 
+.file-browser-modal {
+  display: flex;
+  flex-direction: column;
+  width: min(820px, 100%);
+  max-height: min(760px, 88vh);
+  overflow: hidden;
+  background: #10141a;
+  border: 1px solid #2b3542;
+  border-radius: 6px;
+  box-shadow: 0 20px 60px rgb(0 0 0 / 55%);
+}
+
+.file-browser-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--line);
+}
+
+.fb-roots {
+  flex: 0 0 auto;
+  max-width: 230px;
+  min-width: 0;
+}
+
+.fb-path {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-family: "Cascadia Mono", Consolas, monospace;
+  font-size: 11px;
+}
+
+.fb-list {
+  flex: 1 1 auto;
+  min-height: 240px;
+  overflow: auto;
+  background: var(--panel-2);
+}
+
+.fb-row {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr) 150px 78px;
+  gap: 8px;
+  align-items: center;
+  padding: 4px 12px;
+  min-width: 0;
+  border-bottom: 1px solid var(--line-soft);
+  font-size: 11px;
+}
+
+.fb-row.file,
+.fb-row.dir {
+  cursor: pointer;
+}
+
+.fb-row.file:hover,
+.fb-row.dir:hover {
+  background: var(--line-soft);
+}
+
+.fb-row.on {
+  background: var(--accent-soft);
+}
+
+.fb-head {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--head);
+  color: var(--muted);
+  font-size: 9px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.fb-head span:nth-child(3),
+.fb-head span:nth-child(4) {
+  text-align: right;
+}
+
+.fb-icon {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: var(--muted);
+  stroke-width: 1.2;
+  stroke-linejoin: round;
+}
+
+.fb-row.dir .fb-icon {
+  stroke: var(--accent);
+}
+
+.fb-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fb-date,
+.fb-size {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted);
+  font-size: 10px;
+  text-align: right;
+}
+
+.fb-note {
+  margin: 0;
+  padding: 14px 12px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.fb-note.error {
+  color: var(--error);
+}
+
+.fb-footer {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 9px 12px;
+  border-top: 1px solid var(--line);
+}
+
+.fb-selected {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted);
+  font-family: "Cascadia Mono", Consolas, monospace;
+  font-size: 10.5px;
+}
+
+.fb-name-field {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+  color: var(--muted);
+  font-size: 9px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.fb-name-field input {
+  width: 100%;
+  min-width: 0;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
 .session-task {
   display: flex;
   flex-direction: column;
@@ -5005,6 +5164,17 @@ button.mini.on {
   color: var(--accent);
   font-family: "Cascadia Mono", Consolas, monospace;
   font-weight: 500;
+}
+
+.export-path-row {
+  display: flex;
+  gap: 6px;
+  min-width: 0;
+}
+
+.export-path-row input {
+  flex: 1 1 auto;
+  min-width: 0;
 }
 
 .record-field {
