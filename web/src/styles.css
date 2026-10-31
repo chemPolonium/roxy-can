@@ -4972,7 +4972,7 @@ button.mini.on {
 
 .record-settings {
   display: grid;
-  grid-template-columns: minmax(0, 1.5fr) minmax(0, 1.5fr) 86px;
+  grid-template-columns: minmax(0, 1.2fr) minmax(0, 1.8fr) 86px;
   gap: 6px;
 }
 
@@ -4988,7 +4988,7 @@ button.mini.on {
 }
 
 .field-codes {
-  flex: 0 0 auto;
+  flex: 0 0 112px;
   width: 112px;
   letter-spacing: 0;
   text-transform: none;
@@ -5018,8 +5018,8 @@ button.mini.on {
   text-transform: uppercase;
 }
 
-.record-field input,
-.record-field select {
+.record-field > input,
+.record-field > select {
   width: 100%;
   min-width: 0;
   letter-spacing: 0;

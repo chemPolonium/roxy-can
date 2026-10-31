@@ -2159,8 +2159,13 @@ export function App() {
       setRecordName((name) => `${name}${token}`);
       return;
     }
-    const start = input.selectionStart ?? input.value.length;
-    const end = input.selectionEnd ?? start;
+    // Choosing from the code menu moves focus out of the input, so its old
+    // caret is not where the user is looking; append at the end instead.
+    const focused = document.activeElement === input;
+    const start = focused
+      ? (input.selectionStart ?? input.value.length)
+      : input.value.length;
+    const end = focused ? (input.selectionEnd ?? start) : start;
     setRecordName(`${input.value.slice(0, start)}${token}${input.value.slice(end)}`);
     requestAnimationFrame(() => {
       input.focus();
