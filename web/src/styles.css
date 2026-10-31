@@ -4900,8 +4900,39 @@ button.mini.on {
 
 .record-settings {
   display: grid;
-  grid-template-columns: minmax(0, 2fr) minmax(0, 1fr) 86px;
+  grid-template-columns: minmax(0, 1.5fr) minmax(0, 1.5fr) 86px;
   gap: 6px;
+}
+
+.record-name-row {
+  display: flex;
+  gap: 4px;
+  min-width: 0;
+}
+
+.record-name-row input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.field-codes {
+  flex: 0 0 auto;
+  width: 112px;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.record-preview {
+  margin: 0;
+  color: var(--muted);
+  font-size: 10.5px;
+  overflow-wrap: anywhere;
+}
+
+.record-preview strong {
+  color: var(--accent);
+  font-family: "Cascadia Mono", Consolas, monospace;
+  font-weight: 500;
 }
 
 .record-field {

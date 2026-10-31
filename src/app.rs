@@ -859,6 +859,14 @@ impl App {
         // Record/ folder. The combo is the single source of truth for
         // ASC vs BLF: its extension is stamped onto the stem, and the
         // recorder follows whatever extension it receives.
+        self.sync_record_path();
+        self.send(crate::bus::BusCommand::ToggleRecord);
+    }
+
+    /// Pushes the current record name/format to the recorder without arming
+    /// or starting it, so settings edited while already armed apply to the
+    /// next Start.
+    pub fn sync_record_path(&mut self) {
         let stem = strip_record_ext(self.record_path_buf.trim());
         let ext = if self.record_format == 1 {
             "blf"
@@ -867,7 +875,6 @@ impl App {
         };
         let path = self.record_full_path(&format!("{stem}.{ext}"));
         self.send(crate::bus::BusCommand::SetRecordPath(path));
-        self.send(crate::bus::BusCommand::ToggleRecord);
     }
 
     /// Resolves a record draft to the path the recorder derives its

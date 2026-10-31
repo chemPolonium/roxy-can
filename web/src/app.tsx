@@ -461,6 +461,9 @@ export function App() {
     savedView.overlay ?? false,
   );
   const [sessionOpen, setSessionOpen] = useState(false);
+  const [sessionView, setSessionView] = useState<"record" | "replay">(
+    "record",
+  );
   const [localRecentProjects, setLocalRecentProjects] = useState<string[]>(
     loadLocalRecentProjects,
   );
@@ -469,6 +472,7 @@ export function App() {
   const [replayForS, setReplayForS] = useState(5);
   const [replayTo, setReplayTo] = useState("");
   const [recordName, setRecordName] = useState("record");
+  const recordNameRef = useRef<HTMLInputElement>(null);
   const [recordDir, setRecordDir] = useState("");
   const [recordFormat, setRecordFormat] = useState(0);
   const [recordFilter, setRecordFilter] = useState("");
@@ -1773,6 +1777,12 @@ export function App() {
 
   const openRecord = () => {
     closeDialogs();
+    setSessionView("record");
+    setSessionOpen(true);
+  };
+  const openReplay = () => {
+    closeDialogs();
+    setSessionView("replay");
     setSessionOpen(true);
   };
 
@@ -2132,6 +2142,35 @@ export function App() {
     const dir = recordDir.trim();
     return dir ? `${dir.replace(/[\\/]+$/, "")}/${name}` : name;
   };
+  const insertRecordField = (token: string) => {
+    const input = recordNameRef.current;
+    if (!input) {
+      setRecordName((name) => `${name}${token}`);
+      return;
+    }
+    const start = input.selectionStart ?? input.value.length;
+    const end = input.selectionEnd ?? start;
+    setRecordName(`${input.value.slice(0, start)}${token}${input.value.slice(end)}`);
+    requestAnimationFrame(() => {
+      input.focus();
+      const at = start + token.length;
+      input.setSelectionRange(at, at);
+    });
+  };
+  const recordPreview = () => {
+    const now = new Date();
+    const pad = (value: number) => String(value).padStart(2, "0");
+    const date = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}`;
+    const time = `${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
+    const name = recordName.trim() || "record";
+    const hasCodes = /\{(?:date|time|index)\}/.test(name);
+    const expanded = name
+      .replace(/\{date\}/g, date)
+      .replace(/\{time\}/g, time)
+      .replace(/\{index\}/g, "001");
+    const stem = hasCodes ? expanded : `${expanded}_${date}_${time}`;
+    return `${stem}.${recordFormat === 1 ? "blf" : "asc"}`;
+  };
   const pushRecordSettings = () =>
     void run({
       type: "set_record_settings",
@@ -2391,8 +2430,15 @@ export function App() {
       id: "open-session",
       label: "Open recording settings…",
       group: "Open",
-      hint: "Save location, file name, format and recordings",
+      hint: "Save location, file name, field codes and format",
       run: openRecord,
+    },
+    {
+      id: "open-replay",
+      label: "Open replay list…",
+      group: "Open",
+      hint: "Choose the recording Offline plays",
+      run: openReplay,
     },
     {
       id: "open-buses",
@@ -3483,6 +3529,16 @@ export function App() {
                 >
                   Recording…
                 </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    setSetupOpen(false);
+                    openReplay();
+                  }}
+                >
+                  Replay…
+                </button>
               </div>
             )}
           </div>
@@ -3496,7 +3552,7 @@ export function App() {
               !online
                 ? "Waiting for the bus core"
                 : needsLog
-                  ? "Choose a recording in Setup first"
+                  ? "Choose a recording in Setup → Replay first"
                   : !replaying && noBuses
                     ? "Add a bus or create a sample project first"
                     : measuring
@@ -4954,17 +5010,18 @@ export function App() {
             class="session-modal"
             role="dialog"
             aria-modal="true"
-            aria-label="Recording"
+            aria-label={sessionView === "record" ? "Recording" : "Replay"}
             onMouseDown={(event) => event.stopPropagation()}
           >
             <header class="modal-head">
-              <h2>Recording</h2>
+              <h2>{sessionView === "record" ? "Recording" : "Replay"}</h2>
               <button type="button" onClick={() => setSessionOpen(false)}>
                 Close
               </button>
             </header>
             <div class="session-body">
-              <section class="session-task">
+              {sessionView === "record" && (
+                <section class="session-task">
                 <h3>Capture</h3>
                 <p class="session-current">
                   {recordActive
@@ -4990,20 +5047,37 @@ export function App() {
                       onBlur={pushRecordSettings}
                     />
                   </label>
-                  <label class="record-field">
-                    File name
-                    <input
-                      value={recordName}
-                      placeholder="record"
-                      title="Base name; a date suffix is added"
-                      onInput={(event) =>
-                        setRecordName(
-                          (event.target as HTMLInputElement).value,
-                        )
-                      }
-                      onBlur={pushRecordSettings}
-                    />
-                  </label>
+                  <div class="record-field">
+                    <span>File name</span>
+                    <div class="record-name-row">
+                      <input
+                        ref={recordNameRef}
+                        value={recordName}
+                        placeholder="record"
+                        title="Base name; use field codes and a timestamp is added automatically"
+                        onInput={(event) =>
+                          setRecordName(
+                            (event.target as HTMLInputElement).value,
+                          )
+                        }
+                        onBlur={pushRecordSettings}
+                      />
+                      <select
+                        class="field-codes"
+                        value=""
+                        title="Insert a field code into the file name"
+                        onChange={(event) => {
+                          const token = event.currentTarget.value;
+                          if (token) insertRecordField(token);
+                        }}
+                      >
+                        <option value="">Field codes…</option>
+                        <option value="{date}">Date</option>
+                        <option value="{time}">Time</option>
+                        <option value="{index}">Index</option>
+                      </select>
+                    </div>
+                  </div>
                   <label class="record-field record-format">
                     Format
                     <select
@@ -5026,6 +5100,9 @@ export function App() {
                     </select>
                   </label>
                 </div>
+                <p class="record-preview">
+                  Example: <strong>{recordPreview()}</strong>
+                </p>
                 <div class="task-actions">
                   <button
                     type="button"
@@ -5047,9 +5124,12 @@ export function App() {
                   </button>
                 </div>
                 <p class="hint">
-                  Settings apply to the next file. The toolbar Record button
-                  arms capture (blue); Start turns it green and opens a new
-                  dated file. Relative paths land in Record/ beside the
+                  Field codes expand when each file opens: {"{date}"} is the
+                  day, {"{time}"} the clock and {"{index}"} a per-session
+                  counter. Without a code the recorder appends its timestamp;
+                  a numeric suffix keeps duplicate names apart. The toolbar
+                  Record button arms capture (blue); Start turns it green and
+                  opens the file. Relative paths land in Record/ beside the
                   project.
                 </p>
                 <label class="record-filter">
@@ -5076,8 +5156,11 @@ export function App() {
                     }}
                   />
                 </label>
-              </section>
+                </section>
+              )}
 
+              {sessionView === "replay" && (
+                <>
               <section class="session-task">
                 <h3>Recordings</h3>
                 <p>
@@ -5200,6 +5283,8 @@ export function App() {
                 Paths are resolved on the host. Opening a log stops the
                 current measurement and clears the trace.
               </p>
+                </>
+              )}
             </div>
           </div>
         </div>

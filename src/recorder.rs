@@ -61,6 +61,8 @@ pub struct Recorder {
     pub record_path: String,
     /// The dated path of the most recent recording, kept as a replay source.
     pub last_record: String,
+    /// Monotonic per-session counter for `{index}` field codes.
+    record_counter: u64,
     /// Optional whitelist for the file. The filter gates the file's contents
     /// only -- trace, aggregates, and the spec always see the whole bus.
     pub filter: RecordFilter,
@@ -73,6 +75,7 @@ impl Recorder {
             recording: false,
             record_path: String::new(),
             last_record: String::new(),
+            record_counter: 0,
             filter: RecordFilter::default(),
         }
     }
@@ -161,14 +164,30 @@ impl Recorder {
             (false, 0)
         };
         let base_raw = &b[..b.len() - cut];
-        let base = if base_raw.is_empty() {
-            "record"
+        let has_codes = base_raw.contains("{date}")
+            || base_raw.contains("{time}")
+            || base_raw.contains("{index}");
+        self.record_counter = self.record_counter.saturating_add(1);
+        let now = chrono::Local::now();
+        let index = self.record_counter;
+        let expanded = base_raw
+            .replace("{date}", &now.format("%Y%m%d").to_string())
+            .replace("{time}", &now.format("%H%M%S").to_string())
+            .replace("{index}", &format!("{index:03}"));
+        let base = if expanded.is_empty() {
+            "record".to_string()
         } else {
-            base_raw
+            expanded
         };
-        let stamp = chrono::Local::now().format("%Y%m%d_%H%M%S").to_string();
         let ext = if blf { "blf" } else { "asc" };
-        let stem = format!("{base}_{stamp}");
+        // Without a field code the recorder owns uniqueness with its own
+        // timestamp; a pattern that already says when it ran keeps the name
+        // the operator wrote.
+        let stem = if has_codes {
+            base
+        } else {
+            format!("{base}_{}", now.format("%Y%m%d_%H%M%S"))
+        };
         let mut path = format!("{stem}.{ext}");
         // Two records in the same second must never overwrite each other:
         // every green lamp is a new file, even on a quick off/on toggle.
@@ -197,5 +216,48 @@ impl Recorder {
 impl Default for Recorder {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn temp_dir(tag: &str) -> std::path::PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("roxy-can-recorder-{tag}-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn field_codes_expand_in_record_names() {
+        let dir = temp_dir("codes");
+        let mut rec = Recorder::new();
+        rec.record_path = dir
+            .join("drive_{date}_{time}_{index}.blf")
+            .to_string_lossy()
+            .into_owned();
+        let path = rec.open().unwrap();
+        rec.close();
+        assert!(!path.contains('{'), "field codes were left literal: {path}");
+        assert!(path.ends_with("_001.blf"), "index code: {path}");
+        assert!(std::path::Path::new(&path).exists());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn repeated_starts_never_reuse_a_path() {
+        let dir = temp_dir("unique");
+        let mut rec = Recorder::new();
+        rec.record_path = dir.join("same.asc").to_string_lossy().into_owned();
+        let first = rec.open().unwrap();
+        rec.close();
+        let second = rec.open().unwrap();
+        rec.close();
+        assert_ne!(first, second, "each start opens a fresh file");
+        assert!(std::path::Path::new(&first).exists());
+        assert!(std::path::Path::new(&second).exists());
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

@@ -2334,6 +2334,7 @@ fn app_loop(
                 WebCommand::SetRecordSettings { name, format } => {
                     app.record_path_buf = name;
                     app.record_format = if format == 1 { 1 } else { 0 };
+                    app.sync_record_path();
                 }
                 WebCommand::SetRecordFilter { text } => {
                     app.record_filter_text = text.clone();

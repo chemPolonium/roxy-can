@@ -34,10 +34,11 @@ The toolbar's **Online / Offline** button chooses the run source: Online runs
 generators and follows the wire mode set in **Buses**; Offline plays the active
 recording. The **Record** button arms capture (blue); Start then opens a new
 file (green), and clicking Record while measuring starts a new file at once.
-Every green transition opens a new dated file. **Setup → Recording…** holds the
-save folder, base name, format, filter and the recordings list, where a file can
-be loaded **Open** (parked at the beginning) or **Open & play**; recent
-recordings carry an active marker and per-row **Open** / **Play** actions.
+Every green transition opens a new file. **Setup → Recording…** sets the save
+folder, base name (with `{date}`, `{time}` and `{index}` field codes), ASC/BLF
+format and id/slot filter; **Setup → Replay…** is the independent replay
+source list, where a file can be loaded **Open** (parked at the beginning) or
+**Open & play**, with an active marker and per-row **Open** / **Play** actions.
 Replay logs can be typed or chosen with the browser's picker; uploaded
 logs land in the host's per-user application data folder
 (`%LOCALAPPDATA%\roxy-can\web-uploads` on Windows, 256 MiB cap). Projects use
@@ -88,7 +89,7 @@ npm run dev                 # http://127.0.0.1:5173, proxies /api to :2010
   header to sort ascending, again for descending, and a third time to restore
   the live newest-first order.
 - A project opens from the R menu (host picker or recent) and a replay log
-  from Setup → Recording… The header, mode chip and status bar carry the session
+  from Setup → Replay…. The header, mode chip and status bar carry the session
   name and replay playhead; switching sessions resets the trace and curve
   buffers. A loaded project starts clean, plain **Save project** rewrites it
   in place, and **Save project as…** targets a new path — both use the current
@@ -123,9 +124,10 @@ npm run dev                 # http://127.0.0.1:5173, proxies /api to :2010
   Lo/Hi, period, phase, Step sequence and Random redraw interval. A
   **Replay blocks** section injects a recorded ASC/BLF onto a chosen bus,
   optionally limited to one DBC node; blocks toggle and remove in place.
-- **Setup ▾** holds **Triggers…**, **Variables…**, **Scripts…** and
-  **Recording…**. Recording sets the save folder, base name, ASC/BLF format,
-  id/slot filter and lists recent files for Offline. Triggers shows the live
+- **Setup ▾** holds **Triggers…**, **Variables…**, **Scripts…**,
+  **Recording…** and **Replay…**. Recording sets the save folder, base name
+  with field codes, ASC/BLF format and id/slot filter; Replay lists recent
+  files for Offline and loads them. Triggers shows the live
   rule list with condition summary, action,
   fired count and last-fire time. Default rules can be added by kind,
   enabled/disabled, removed and re-armed. The editor covers every condition
