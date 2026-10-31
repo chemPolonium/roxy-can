@@ -1698,6 +1698,10 @@ enum WebCommand {
         name: Option<String>,
         format: Option<u8>,
     },
+    SetRecordSettings {
+        name: String,
+        format: u8,
+    },
     SetRecordFilter {
         text: String,
     },
@@ -2326,6 +2330,10 @@ fn app_loop(
                         app.record_format = if format == 1 { 1 } else { 0 };
                     }
                     app.toggle_record();
+                }
+                WebCommand::SetRecordSettings { name, format } => {
+                    app.record_path_buf = name;
+                    app.record_format = if format == 1 { 1 } else { 0 };
                 }
                 WebCommand::SetRecordFilter { text } => {
                     app.record_filter_text = text.clone();
@@ -6651,6 +6659,17 @@ mod tests {
         }))
         .expect("parked log command");
         assert!(matches!(parked, WebCommand::OpenLog { play: false, .. }));
+        let record_settings: WebCommand = serde_json::from_value(serde_json::json!({
+            "type": "set_record_settings",
+            "name": "Record/drive",
+            "format": 1,
+        }))
+        .expect("record settings command");
+        assert!(matches!(
+            record_settings,
+            WebCommand::SetRecordSettings { ref name, format: 1 }
+                if name == "Record/drive"
+        ));
     }
 
     #[test]

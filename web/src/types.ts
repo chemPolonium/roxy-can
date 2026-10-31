@@ -567,6 +567,7 @@ export type Command =
       target: number | null;
     }
   | { type: "record_toggle"; name: string | null; format: number | null }
+  | { type: "set_record_settings"; name: string; format: number }
   | { type: "set_record_filter"; text: string }
   | {
       type: "add_script";

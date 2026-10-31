@@ -32,11 +32,13 @@ The headless CLI modes (`--replay`/`--project` without `--web`, `--convert`,
 
 The toolbar's **Online / Offline** button chooses the run source: Online runs
 generators and follows the wire mode set in **Buses**; Offline plays the active
-recording. The **Record** dialog manages capture and the recording list: a path
-can be loaded **Open** (parked at the beginning) or **Open & play**, recent
-recordings carry an active marker and per-row **Open** / **Play** actions, and
-the capture controls arm a file for the next Start. Replay logs can be typed
-or chosen with the browser's picker; uploaded
+recording. The **Record** button arms capture (blue); Start then opens a new
+file (green), and clicking Record while measuring starts a new file at once.
+Every green transition opens a new dated file. **Setup → Recording…** holds the
+save folder, base name, format, filter and the recordings list, where a file can
+be loaded **Open** (parked at the beginning) or **Open & play**; recent
+recordings carry an active marker and per-row **Open** / **Play** actions.
+Replay logs can be typed or chosen with the browser's picker; uploaded
 logs land in the host's per-user application data folder
 (`%LOCALAPPDATA%\roxy-can\web-uploads` on Windows, 256 MiB cap). Projects use
 host dialogs instead: **Open project…**, **Save project** and **Save project
@@ -48,11 +50,13 @@ for** (1–60 s) and **Play to** an absolute log time; both timed plays resume
 playback and pause at the target.
 **Save project** rewrites the open project; **Save project as…** asks for a new
 host path. The header marks unsaved changes next to the project name. The
-**Recording** section starts/stops an ASC or BLF capture with a typed file
-name and an optional whitelist (`100, 3F4x, FR0:13`); relative names land in
-`Record/` beside the project, and arming while stopped creates the file on
-the next Start. Once stopped, **Download** fetches the last recording
-through the browser. The live badge in the top bar turns red while recording.
+**Record** button arms capture (blue) and turns green when a file is open;
+Start with an armed capture opens a new file, and clicking Record while
+measuring starts a new file immediately. **Setup → Recording…** sets the save
+folder, base name, ASC/BLF format and optional whitelist (`100, 3F4x, FR0:13`);
+relative paths land in `Record/` beside the project. The header REC badge and
+status line show an active capture, and **Download last recording** fetches the
+file through the browser.
 Recording names still take host paths; opening projects, logs, DBCs and
 ARXML descriptions can use the browser picker, and bare export/save names
 download through the browser.
@@ -84,13 +88,14 @@ npm run dev                 # http://127.0.0.1:5173, proxies /api to :2010
   header to sort ascending, again for descending, and a third time to restore
   the live newest-first order.
 - A project opens from the R menu (host picker or recent) and a replay log
-  from the Record dialog. The header, mode chip and status bar carry the session
+  from Setup → Recording… The header, mode chip and status bar carry the session
   name and replay playhead; switching sessions resets the trace and curve
   buffers. A loaded project starts clean, plain **Save project** rewrites it
   in place, and **Save project as…** targets a new path — both use the current
   project format.
 - The toolbar's **Online / Offline** button is the run-mode control; **Record**
-  manages capture and the recordings Offline can play. **Buses** lists each bus
+  arms or starts capture, and **Setup → Recording…** sets its options and the
+  recordings Offline can play. **Buses** lists each bus
   with its DBCs and bit rates, probes Kvaser/Vector
   adapters on demand, attaches/detaches a selected channel at the bus's
   configured rates, and owns the **Real bus** / **Simulated** wire switch
@@ -118,13 +123,17 @@ npm run dev                 # http://127.0.0.1:5173, proxies /api to :2010
   Lo/Hi, period, phase, Step sequence and Random redraw interval. A
   **Replay blocks** section injects a recorded ASC/BLF onto a chosen bus,
   optionally limited to one DBC node; blocks toggle and remove in place.
-- **Setup ▾** holds **Triggers…**, **Variables…** and **Scripts…**. Triggers shows the live
+- **Setup ▾** holds **Triggers…**, **Variables…**, **Scripts…** and
+  **Recording…**. Recording sets the save folder, base name, ASC/BLF format,
+  id/slot filter and lists recent files for Offline. Triggers shows the live
   rule list with condition summary, action,
   fired count and last-fire time. Default rules can be added by kind,
   enabled/disabled, removed and re-armed. The editor covers every condition
   kind (CAN signal/ID/error/timeout, FR frame/signal, sysvar), all five
   actions including Send-to-generator-entry, and the pre/post/marker limits.
-  Insert-marker actions draw amber dashed lines in the Signals chart.
+  Start/stop-recording actions arm and disarm the same Record flag as the
+  toolbar button. Insert-marker actions draw amber dashed lines in the
+  Signals chart.
 - The **Data** tab mirrors the first Data window: per selected signal it
   shows the live value (or enum label), unit, raw wire value, min/avg/max and
   a bar scaled by the database's declared range (observed range as fallback).

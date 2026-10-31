@@ -166,19 +166,17 @@ impl Recorder {
         } else {
             base_raw
         };
-        let path = if blf {
-            format!(
-                "{}_{}.blf",
-                base,
-                chrono::Local::now().format("%Y%m%d_%H%M%S")
-            )
-        } else {
-            format!(
-                "{}_{}.asc",
-                base,
-                chrono::Local::now().format("%Y%m%d_%H%M%S")
-            )
-        };
+        let stamp = chrono::Local::now().format("%Y%m%d_%H%M%S").to_string();
+        let ext = if blf { "blf" } else { "asc" };
+        let stem = format!("{base}_{stamp}");
+        let mut path = format!("{stem}.{ext}");
+        // Two records in the same second must never overwrite each other:
+        // every green lamp is a new file, even on a quick off/on toggle.
+        let mut seq = 2;
+        while std::path::Path::new(&path).exists() {
+            path = format!("{stem}_{seq}.{ext}");
+            seq += 1;
+        }
         // The default home is the project's Record/ folder; make sure it
         // exists instead of failing the whole recording on a missing dir.
         if let Some(parent) = std::path::Path::new(&path).parent() {

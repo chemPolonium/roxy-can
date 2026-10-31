@@ -8520,32 +8520,41 @@ impl BusCore {
         for (action, at_us) in fired {
             match action {
                 TriggerAction::StartRecording => {
-                    if self.measuring && !self.recorder.recording {
+                    if !self.recorder.recording {
                         self.recorder.recording = true;
-                        let opened_path = self.recorder.open();
-                        self.recorder.recording = opened_path.is_ok();
-                        *status = match &opened_path {
-                            Ok(path) => format!("trigger started recording to {path}"),
-                            Err(e) => format!("trigger record failed: {e}"),
-                        };
-                        if opened_path.is_ok() {
-                            // A fresh recording cancels any pending roll.
-                            self.post_roll = None;
-                            // Oldest first: the file opens with the frames
-                            // that came before the trigger fired.
-                            for pre in self.pre_buffer.drain(..) {
-                                self.recorder.write(&pre);
+                        if self.measuring {
+                            let opened_path = self.recorder.open();
+                            self.recorder.recording = opened_path.is_ok();
+                            *status = match &opened_path {
+                                Ok(path) => format!("trigger started recording to {path}"),
+                                Err(e) => format!("trigger record failed: {e}"),
+                            };
+                            if opened_path.is_ok() {
+                                // A fresh recording cancels any pending roll.
+                                self.post_roll = None;
+                                // Oldest first: the file opens with the frames
+                                // that came before the trigger fired.
+                                for pre in self.pre_buffer.drain(..) {
+                                    self.recorder.write(&pre);
+                                }
                             }
+                        } else {
+                            *status = "trigger enabled recording for the next start".to_string();
                         }
                     }
                 }
                 TriggerAction::StopRecording => {
                     if self.recorder.recording {
-                        // Roll on: the file stays open for the post-roll,
-                        // then the step loop closes it once the countdown
-                        // is spent.
-                        self.post_roll = Some(self.post_frames);
-                        *status = "trigger stopping after post-roll".to_string();
+                        if self.measuring {
+                            // Roll on: the file stays open for the post-roll,
+                            // then the step loop closes it once the countdown
+                            // is spent.
+                            self.post_roll = Some(self.post_frames);
+                            *status = "trigger stopping after post-roll".to_string();
+                        } else {
+                            self.recorder.recording = false;
+                            *status = "trigger disabled recording".to_string();
+                        }
                     }
                 }
                 TriggerAction::Send { ch, id } => {

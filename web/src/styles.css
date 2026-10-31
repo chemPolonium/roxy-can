@@ -398,10 +398,16 @@ select:disabled {
   opacity: 0.55;
 }
 
-.record-button.on .record-dot {
-  background: #e5484d;
+.record-button.armed .record-dot {
+  background: #3b82f6;
   opacity: 1;
-  box-shadow: 0 0 5px rgb(229 72 77 / 50%);
+  box-shadow: 0 0 5px rgb(59 130 246 / 50%);
+}
+
+.record-button.active .record-dot {
+  background: var(--ok);
+  opacity: 1;
+  box-shadow: 0 0 5px rgb(84 192 138 / 50%);
 }
 
 .top-menu {
@@ -4892,24 +4898,29 @@ button.mini.on {
   min-width: 0;
 }
 
-.record-row {
-  display: flex;
+.record-settings {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(0, 1fr) 86px;
   gap: 6px;
-  margin-top: 6px;
 }
 
-.record-row input {
-  flex: 1 1 auto;
+.record-field {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
   min-width: 0;
+  color: var(--muted);
+  font-size: 9.5px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
 }
 
-.record-row select {
-  flex: 0 0 auto;
-  width: 72px;
-}
-
-.record-row button {
-  flex: 0 0 auto;
+.record-field input,
+.record-field select {
+  width: 100%;
+  min-width: 0;
+  letter-spacing: 0;
+  text-transform: none;
 }
 
 button.danger {

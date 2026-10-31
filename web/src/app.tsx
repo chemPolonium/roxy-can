@@ -469,6 +469,7 @@ export function App() {
   const [replayForS, setReplayForS] = useState(5);
   const [replayTo, setReplayTo] = useState("");
   const [recordName, setRecordName] = useState("record");
+  const [recordDir, setRecordDir] = useState("");
   const [recordFormat, setRecordFormat] = useState(0);
   const [recordFilter, setRecordFilter] = useState("");
   const [helpOpen, setHelpOpen] = useState(false);
@@ -2123,6 +2124,26 @@ export function App() {
       .length ?? 0;
   const replaying = state?.runMode === "Replay";
   const runModeLabel = replaying ? "Offline" : "Online";
+  const recordActive = Boolean(state?.recording) && measuring;
+  const recordArmed = Boolean(state?.recording) && !measuring;
+  const recordDraftPath = () => {
+    const name = recordName.trim() || "record";
+    if (/^(?:[A-Za-z]:[\\/]|[\\/])/.test(name)) return name;
+    const dir = recordDir.trim();
+    return dir ? `${dir.replace(/[\\/]+$/, "")}/${name}` : name;
+  };
+  const pushRecordSettings = () =>
+    void run({
+      type: "set_record_settings",
+      name: recordDraftPath(),
+      format: recordFormat,
+    });
+  const toggleRecord = () =>
+    void run({
+      type: "record_toggle",
+      name: recordDraftPath(),
+      format: recordFormat,
+    });
   const busLive = !replaying && Boolean(state?.realBus) && attachedBuses > 0;
   const chooseRunMode = (offline: boolean) => {
     setRunModeOpen(false);
@@ -2144,9 +2165,11 @@ export function App() {
       .slice(0, 6);
   }, [state?.recentProjects, localRecentProjects]);
   const replayLogs = useMemo(() => {
-    const all = [...(state?.recentLogs ?? []), state?.log ?? ""].filter(
-      Boolean,
-    );
+    const all = [
+      state?.recordFile ?? "",
+      ...(state?.recentLogs ?? []),
+      state?.log ?? "",
+    ].filter(Boolean);
     const seen = new Set<string>();
     return all
       .filter((path) => {
@@ -2156,7 +2179,7 @@ export function App() {
         return true;
       })
       .slice(0, 10);
-  }, [state?.log, state?.recentLogs]);
+  }, [state?.recordFile, state?.log, state?.recentLogs]);
 
   const emptyWorkspace = (
     <div class="empty empty-workspace">
@@ -2366,9 +2389,9 @@ export function App() {
   const paletteCommands: PaletteCommand[] = [
     {
       id: "open-session",
-      label: "Open Record…",
+      label: "Open recording settings…",
       group: "Open",
-      hint: "Recording controls and recording files",
+      hint: "Save location, file name, format and recordings",
       run: openRecord,
     },
     {
@@ -3233,7 +3256,7 @@ export function App() {
                 <span class="dot" />
                 {online ? "live" : "reconnecting"}
               </span>
-              {state?.recording && <span class="rec-badge">REC</span>}
+              {recordActive && <span class="rec-badge">REC</span>}
             </h1>
             <button
               type="button"
@@ -3310,7 +3333,7 @@ export function App() {
               aria-expanded={runModeOpen}
               title={
                 replaying
-                  ? "Offline plays the active recording from Record"
+                  ? "Offline plays the active recording from Setup"
                   : "Online runs generators and follows the bus mode"
               }
               onClick={(event) => {
@@ -3363,7 +3386,7 @@ export function App() {
                   </span>
                   <span class="menu-copy">
                     <strong>Offline</strong>
-                    <small>Play the active recording from Record.</small>
+                    <small>Play the active recording; choose files in Setup.</small>
                   </span>
                 </button>
               </div>
@@ -3371,10 +3394,21 @@ export function App() {
           </div>
           <button
             type="button"
-            class={`record-button ${state?.recording ? "on" : ""}`}
+            class={`record-button ${
+              recordActive ? "active" : recordArmed ? "armed" : ""
+            }`}
             disabled={!online}
-            title="Manage recording and recording files"
-            onClick={openRecord}
+            aria-pressed={Boolean(state?.recording)}
+            title={
+              recordActive
+                ? `Recording to ${state?.recordFile ? baseName(state.recordFile) : "a new file"} · click to stop`
+                : recordArmed
+                  ? "Record armed; Start opens a new file"
+                  : measuring
+                    ? "Start a new recording"
+                    : "Arm recording for the next Start"
+            }
+            onClick={toggleRecord}
           >
             <span class="record-dot" aria-hidden="true" />
             Record
@@ -3439,6 +3473,16 @@ export function App() {
                 >
                   Scripts…
                 </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    setSetupOpen(false);
+                    openRecord();
+                  }}
+                >
+                  Recording…
+                </button>
               </div>
             )}
           </div>
@@ -3452,7 +3496,7 @@ export function App() {
               !online
                 ? "Waiting for the bus core"
                 : needsLog
-                  ? "Load a recording from Record first"
+                  ? "Choose a recording in Setup first"
                   : !replaying && noBuses
                     ? "Add a bus or create a sample project first"
                     : measuring
@@ -4910,11 +4954,11 @@ export function App() {
             class="session-modal"
             role="dialog"
             aria-modal="true"
-            aria-label="Record"
+            aria-label="Recording"
             onMouseDown={(event) => event.stopPropagation()}
           >
             <header class="modal-head">
-              <h2>Record</h2>
+              <h2>Recording</h2>
               <button type="button" onClick={() => setSessionOpen(false)}>
                 Close
               </button>
@@ -4923,59 +4967,71 @@ export function App() {
               <section class="session-task">
                 <h3>Capture</h3>
                 <p class="session-current">
-                  {state?.recording
-                    ? state.recordFile
+                  {recordActive
+                    ? state?.recordFile
                       ? `Recording: ${fileNameOf(state.recordFile)}`
-                      : "Armed — starts with the measurement"
-                    : state?.recordFile
-                      ? `Last: ${fileNameOf(state.recordFile)}`
-                      : "Not recording"}
+                      : "Recording to a new file"
+                    : recordArmed
+                      ? "Armed — Start opens a new file"
+                      : state?.recordFile
+                        ? `Last: ${fileNameOf(state.recordFile)}`
+                        : "Not recording"}
                 </p>
-                <div class="record-row">
-                  <input
-                    value={recordName}
-                    placeholder="record"
-                    disabled={state?.recording}
-                    title="File name; a date suffix is added under the project's Record/ folder"
-                    onInput={(event) =>
-                      setRecordName(
-                        (event.target as HTMLInputElement).value,
-                      )
-                    }
-                  />
-                  <select
-                    value={recordFormat}
-                    disabled={state?.recording}
-                    title="Recording format"
-                    onChange={(event) =>
-                      setRecordFormat(
-                        Number((event.target as HTMLSelectElement).value),
-                      )
-                    }
-                  >
-                    <option value={0}>ASC</option>
-                    <option value={1}>BLF</option>
-                  </select>
+                <div class="record-settings">
+                  <label class="record-field">
+                    Save to
+                    <input
+                      value={recordDir}
+                      placeholder="Record/ beside the project"
+                      title="Folder for new recordings; leave blank for Record/ beside the project"
+                      onInput={(event) =>
+                        setRecordDir((event.target as HTMLInputElement).value)
+                      }
+                      onBlur={pushRecordSettings}
+                    />
+                  </label>
+                  <label class="record-field">
+                    File name
+                    <input
+                      value={recordName}
+                      placeholder="record"
+                      title="Base name; a date suffix is added"
+                      onInput={(event) =>
+                        setRecordName(
+                          (event.target as HTMLInputElement).value,
+                        )
+                      }
+                      onBlur={pushRecordSettings}
+                    />
+                  </label>
+                  <label class="record-field record-format">
+                    Format
+                    <select
+                      value={recordFormat}
+                      title="Recording format"
+                      onChange={(event) => {
+                        const next = Number(
+                          (event.target as HTMLSelectElement).value,
+                        );
+                        setRecordFormat(next);
+                        void run({
+                          type: "set_record_settings",
+                          name: recordDraftPath(),
+                          format: next,
+                        });
+                      }}
+                    >
+                      <option value={0}>ASC</option>
+                      <option value={1}>BLF</option>
+                    </select>
+                  </label>
+                </div>
+                <div class="task-actions">
                   <button
                     type="button"
-                    class={state?.recording ? "danger" : ""}
-                    onClick={() =>
-                      void run({
-                        type: "record_toggle",
-                        name: state?.recording
-                          ? null
-                          : recordName.trim() || "record",
-                        format: state?.recording ? null : recordFormat,
-                      })
-                    }
-                  >
-                    {state?.recording ? "Stop recording" : "Record"}
-                  </button>
-                  <button
-                    type="button"
-                    disabled={state?.recording || !state?.recordFile}
+                    disabled={recordActive || !state?.recordFile}
                     title={
-                      state?.recording
+                      recordActive
                         ? "Stop recording before downloading"
                         : "Save the last recording through the browser"
                     }
@@ -4987,13 +5043,14 @@ export function App() {
                       );
                     }}
                   >
-                    Download
+                    Download last recording
                   </button>
                 </div>
                 <p class="hint">
-                  Relative names land in Record/ beside the project; an
-                  absolute path is used as typed. Recording while stopped arms
-                  the file for the next Start.
+                  Settings apply to the next file. The toolbar Record button
+                  arms capture (blue); Start turns it green and opens a new
+                  dated file. Relative paths land in Record/ beside the
+                  project.
                 </p>
                 <label class="record-filter">
                   Only ids / FR slots
@@ -5075,10 +5132,15 @@ export function App() {
                     </p>
                   ) : (
                     replayLogs.map((path) => {
-                      const active = state?.log
-                        ? baseName(state.log).toLowerCase() ===
-                          baseName(path).toLowerCase()
-                        : false;
+                      const base = baseName(path).toLowerCase();
+                      const active = Boolean(
+                        state?.log && baseName(state.log).toLowerCase() === base,
+                      );
+                      const recordingThis = Boolean(
+                        recordActive &&
+                        state?.recordFile &&
+                        baseName(state.recordFile).toLowerCase() === base,
+                      );
                       return (
                         <div
                           class={`replay-source-row ${active ? "on" : ""}`}
@@ -5098,6 +5160,12 @@ export function App() {
                             <button
                               type="button"
                               class="mini"
+                              disabled={recordingThis}
+                              title={
+                                recordingThis
+                                  ? "Recording in progress"
+                                  : "Load the log and park it"
+                              }
                               onClick={() => loadLog(path, false)}
                             >
                               Open
@@ -5105,6 +5173,12 @@ export function App() {
                             <button
                               type="button"
                               class="mini"
+                              disabled={recordingThis}
+                              title={
+                                recordingThis
+                                  ? "Recording in progress"
+                                  : "Load the log and start playback"
+                              }
                               onClick={() => loadLog(path, true)}
                             >
                               Play

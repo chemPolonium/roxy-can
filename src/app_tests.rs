@@ -4908,6 +4908,49 @@ fn a_trigger_started_recording_includes_the_pre_buffer() {
     std::fs::remove_file(&app.recorder.last_record).ok();
 }
 
+/// A start-recording trigger arms the same flag the toolbar toggles: while
+/// stopped it leaves the recorder enabled for the next Start instead of
+/// silently doing nothing.
+#[test]
+fn a_start_trigger_arms_recording_while_stopped() {
+    let mut app = quiet_app();
+    app.triggers.push(Trigger::new(
+        TriggerCond::IdPresent { ch: 0, id: 0x777 },
+        TriggerAction::StartRecording,
+    ));
+    app.stop();
+    receive(
+        &mut app,
+        10_000,
+        vec![rx_frame(10_000, 0x777, 8, FrameFlags::NONE)],
+    );
+    assert!(!app.measuring);
+    assert!(
+        app.recorder.recording,
+        "trigger enabled recording for the next start"
+    );
+}
+
+/// A stop-recording trigger disarms the flag while stopped; the post-roll is
+/// a measurement-time grace, not something to carry into the next Start.
+#[test]
+fn a_stop_trigger_disarms_recording_while_stopped() {
+    let mut app = quiet_app();
+    app.triggers.push(Trigger::new(
+        TriggerCond::IdPresent { ch: 0, id: 0x777 },
+        TriggerAction::StopRecording,
+    ));
+    app.recorder.recording = true;
+    app.stop();
+    receive(
+        &mut app,
+        10_000,
+        vec![rx_frame(10_000, 0x777, 8, FrameFlags::NONE)],
+    );
+    assert!(!app.measuring);
+    assert!(!app.recorder.recording, "trigger disarmed the next Start");
+}
+
 /// The post-trigger roll: a trigger stop keeps recording for a bounded
 /// number of frames, so the aftermath of the event stays in the file.
 #[test]
