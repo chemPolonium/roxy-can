@@ -420,8 +420,14 @@ select:disabled {
 }
 
 .top-menu-caret {
+  width: 0;
+  height: 0;
+  border-left: 4px solid transparent;
+  border-right: 4px solid transparent;
+  border-top: 5px solid currentColor;
   color: var(--muted);
-  font-size: 8px;
+  font-size: 0;
+  line-height: 0;
 }
 
 .top-menu-panel {

@@ -91,7 +91,7 @@ npm run dev                 # http://127.0.0.1:5173, proxies /api to :2010
   project format.
 - The toolbar's **Real bus / Simulated bus** menu is the single wire-mode
   control and switches at any time, including while measuring; it shows the
-  attached-adapter count. **Buses…** lists each bus
+  attached-adapter count. **Buses** lists each bus
   with its DBCs and bit rates, probes Kvaser/Vector
   adapters on demand, attaches/detaches a selected channel at the bus's
   configured rates, and reports the toolbar's Simulated/Real bus mode. Buses can be
@@ -109,7 +109,7 @@ npm run dev                 # http://127.0.0.1:5173, proxies /api to :2010
   counts, and maps each to a project bus, as-is, or No replay; choices apply
   immediately and are saved with the project. It uses the same core commands
   as the core node/Buses models.
-- **Generator…** edits the real TxView and FlexRay Tx lists: per-entry On,
+- **Generator** edits the real TxView and FlexRay Tx lists: per-entry On,
   cycle, FD, BRS and hex (CAN), add-from-DBC/remove, a per-bus “Simulate nodes”
   action, and FR slots added by number to a loaded cluster description. The
   Write tab shows the bus Write ring (command results, node errors, trigger

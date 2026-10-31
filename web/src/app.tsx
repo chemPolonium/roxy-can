@@ -2151,7 +2151,7 @@ export function App() {
   const busModeDetail = replaying
     ? "Replay runs from the log; bus mode applies to Simulation"
     : attachedBuses === 0
-      ? "No adapter attached — open Buses… to attach one"
+      ? "No adapter attached — open Buses to attach one"
       : busLive
         ? `${attachedBuses} adapter(s) live on the wire`
         : `${attachedBuses} adapter(s) attached and parked`;
@@ -3306,7 +3306,7 @@ export function App() {
             disabled={!online}
             onClick={openGenerator}
           >
-            Generator…
+            Generator
           </button>
           <button
             type="button"
@@ -3315,7 +3315,7 @@ export function App() {
             title="Attach adapters, bind descriptions and set bit rates"
             onClick={openBuses}
           >
-            Buses…
+            Buses
           </button>
           <div class="top-menu bus-mode-menu">
             <button
@@ -3367,7 +3367,7 @@ export function App() {
                     <strong>Real bus</strong>
                     <small>
                       {attachedBuses === 0
-                        ? "Attach an adapter with Buses… first."
+                        ? "Attach an adapter with Buses first."
                         : "Attached adapters receive and transmit on the wire."}
                     </small>
                   </span>
