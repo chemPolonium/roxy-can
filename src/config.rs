@@ -12,8 +12,6 @@ use crate::app::{
 use crate::observe::SigKey;
 use crate::sim::{SrcKind, ValueSrc};
 
-pub const PROJECT_EXT: &str = "rxproj";
-
 /// Stores a DBC path relative to the project directory when possible, so a
 /// project folder can be moved or shared; paths outside the project are
 /// stored absolute.

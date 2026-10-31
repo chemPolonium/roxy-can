@@ -662,13 +662,11 @@ export type Command =
     }
   | { type: "set_message_expanded"; key: string; on: boolean }
   | { type: "open_project"; path: string }
-  | { type: "pick_project" }
-  | { type: "save_project_as" }
-  | { type: "create_sample_project"; parent?: string | null }
+  | { type: "create_sample_project"; parent: string }
   | { type: "set_run_mode"; mode: "simulation" | "replay" }
   | { type: "open_log"; path: string; play?: boolean }
-  | { type: "add_replay_folder"; path?: string | null }
-  | { type: "add_replay_file"; path?: string | null }
+  | { type: "add_replay_folder"; path: string }
+  | { type: "add_replay_file"; path: string }
   | { type: "remove_replay_source"; path: string; folder: boolean }
   | { type: "refresh_replay_sources" }
   | { type: "save_project"; path: string | null }

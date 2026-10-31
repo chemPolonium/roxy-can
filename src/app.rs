@@ -855,13 +855,13 @@ impl App {
     }
 
     /// Starts measurement in the mode selected by the Simulation/Replay
-    /// dropdown; replay falls back to a file picker when no log is loaded.
+    /// dropdown; replay requires a recording chosen from the Replay list.
     pub fn start_selected(&mut self) {
         match self.snap.run_mode {
             Mode::Virtual => self.start_virtual(),
             Mode::Replay => {
                 if !self.can_replay() {
-                    self.pick_log();
+                    self.status = "choose a recording in Setup → Replay first".to_string();
                 }
                 // Start expressed the intent to run, so begin playback as
                 // soon as a log is actually available.
@@ -933,16 +933,6 @@ impl App {
                 .to_string_lossy()
                 .into_owned(),
             None => name.to_string(),
-        }
-    }
-
-    pub fn pick_log(&mut self) {
-        if let Some(p) = rfd::FileDialog::new()
-            .set_title("Open CAN log")
-            .add_filter("CAN logs", &["asc", "blf"])
-            .pick_file()
-        {
-            self.load_log(&p.to_string_lossy());
         }
     }
 

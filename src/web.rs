@@ -2039,12 +2039,8 @@ enum WebCommand {
         path: String,
     },
     CreateSampleProject {
-        /// Host folder; the R menu leaves it empty so the picker decides.
-        #[serde(default)]
-        parent: Option<String>,
+        parent: String,
     },
-    PickProject,
-    SaveProjectAs,
     SetRunMode {
         mode: String,
     },
@@ -2055,13 +2051,10 @@ enum WebCommand {
         play: bool,
     },
     AddReplayFolder {
-        /// Host folder; the Replay page leaves it empty so the picker decides.
-        #[serde(default)]
-        path: Option<String>,
+        path: String,
     },
     AddReplayFile {
-        #[serde(default)]
-        path: Option<String>,
+        path: String,
     },
     RemoveReplaySource {
         path: String,
@@ -2749,53 +2742,20 @@ fn app_loop(
                     );
                 }
                 WebCommand::CreateSampleProject { parent } => {
-                    let parent = parent.map(std::path::PathBuf::from).or_else(|| {
-                        let _ = std::fs::create_dir_all(web_data_dir("samples"));
-                        rfd::FileDialog::new()
-                            .set_title("Choose a folder for the sample project")
-                            .set_directory(web_data_dir("samples"))
-                            .pick_folder()
-                    });
-                    match parent {
-                        Some(parent) => match write_sample_project(&parent) {
-                            Ok(path) => {
-                                open_project_session(
-                                    &mut app,
-                                    &path,
-                                    &signals,
-                                    &trace,
-                                    &mut series,
-                                    &mut rate_window,
-                                );
-                                app.status = format!("sample project created: {}", path.display());
-                            }
-                            Err(e) => app.status = format!("sample project failed: {e}"),
-                        },
-                        None => app.status = "sample project cancelled".to_string(),
-                    }
-                }
-                WebCommand::PickProject => {
-                    let start = app
-                        .project_path
-                        .as_ref()
-                        .and_then(|path| path.parent())
-                        .map(std::path::Path::to_path_buf)
-                        .unwrap_or_else(|| web_data_dir("samples"));
-                    let picked = rfd::FileDialog::new()
-                        .set_title("Open roxy-can project")
-                        .add_filter("roxy-can project", &["rxproj"])
-                        .set_directory(start)
-                        .pick_file();
-                    match picked {
-                        Some(path) => open_project_session(
-                            &mut app,
-                            &path,
-                            &signals,
-                            &trace,
-                            &mut series,
-                            &mut rate_window,
-                        ),
-                        None => app.status = "project open cancelled".to_string(),
+                    let parent = std::path::PathBuf::from(parent);
+                    match write_sample_project(&parent) {
+                        Ok(path) => {
+                            open_project_session(
+                                &mut app,
+                                &path,
+                                &signals,
+                                &trace,
+                                &mut series,
+                                &mut rate_window,
+                            );
+                            app.status = format!("sample project created: {}", path.display());
+                        }
+                        Err(e) => app.status = format!("sample project failed: {e}"),
                     }
                 }
                 WebCommand::SetRunMode { mode } => {
@@ -2845,37 +2805,20 @@ fn app_loop(
                     }
                 }
                 WebCommand::AddReplayFolder { path } => {
-                    let chosen = path.or_else(|| {
-                        rfd::FileDialog::new()
-                            .set_title("Add replay folder")
-                            .pick_folder()
-                            .map(|p| p.to_string_lossy().into_owned())
-                    });
-                    if let Some(path) = chosen {
-                        app.status = match app.add_replay_folder(path.clone()) {
-                            Ok(count) => {
-                                format!("replay folder added: {path} · {count} recording(s)")
-                            }
-                            Err(e) => e,
-                        };
-                    }
+                    app.status = match app.add_replay_folder(path.clone()) {
+                        Ok(count) => {
+                            format!("replay folder added: {path} · {count} recording(s)")
+                        }
+                        Err(e) => e,
+                    };
                 }
                 WebCommand::AddReplayFile { path } => {
-                    let chosen = path.or_else(|| {
-                        rfd::FileDialog::new()
-                            .set_title("Add replay recording")
-                            .add_filter("CAN logs", &["asc", "blf"])
-                            .pick_file()
-                            .map(|p| p.to_string_lossy().into_owned())
-                    });
-                    if let Some(path) = chosen {
-                        app.status = match app.add_replay_file(path.clone()) {
-                            Ok(count) => {
-                                format!("replay file added: {path} · {count} recording(s)")
-                            }
-                            Err(e) => e,
-                        };
-                    }
+                    app.status = match app.add_replay_file(path.clone()) {
+                        Ok(count) => {
+                            format!("replay file added: {path} · {count} recording(s)")
+                        }
+                        Err(e) => e,
+                    };
                 }
                 WebCommand::RemoveReplaySource { path, folder } => {
                     app.remove_replay_source(&path, folder);
@@ -3168,27 +3111,6 @@ fn app_loop(
                         None => {
                             app.status = "save needs a project path".to_string();
                         }
-                    }
-                }
-                WebCommand::SaveProjectAs => {
-                    let start = app
-                        .project_path
-                        .as_ref()
-                        .and_then(|path| path.parent())
-                        .map(std::path::Path::to_path_buf)
-                        .unwrap_or_else(|| web_data_dir("samples"));
-                    let _ = std::fs::create_dir_all(&start);
-                    let picked = rfd::FileDialog::new()
-                        .set_title("Save roxy-can project")
-                        .add_filter("roxy-can project", &["rxproj"])
-                        .set_directory(start)
-                        .set_file_name(format!("{}.rxproj", app.project_name()))
-                        .save_file();
-                    match picked {
-                        Some(path) => {
-                            app.save_project(Some(path));
-                        }
-                        None => app.status = "project save cancelled".to_string(),
                     }
                 }
                 WebCommand::AddScript {
@@ -6970,31 +6892,13 @@ mod tests {
         assert!(matches!(bus, WebCommand::AddBus { ref kind } if kind == "ethernet"));
         let sample: WebCommand = serde_json::from_value(serde_json::json!({
             "type": "create_sample_project",
-        }))
-        .expect("sample project command");
-        assert!(matches!(
-            sample,
-            WebCommand::CreateSampleProject { parent: None }
-        ));
-        let sample: WebCommand = serde_json::from_value(serde_json::json!({
-            "type": "create_sample_project",
             "parent": "C:/tmp",
         }))
         .expect("sample project command with a parent");
         assert!(matches!(
             sample,
-            WebCommand::CreateSampleProject { parent: Some(ref p) } if p == "C:/tmp"
+            WebCommand::CreateSampleProject { ref parent } if parent == "C:/tmp"
         ));
-        let pick: WebCommand = serde_json::from_value(serde_json::json!({
-            "type": "pick_project",
-        }))
-        .expect("pick project command");
-        assert!(matches!(pick, WebCommand::PickProject));
-        let save_as: WebCommand = serde_json::from_value(serde_json::json!({
-            "type": "save_project_as",
-        }))
-        .expect("save project as command");
-        assert!(matches!(save_as, WebCommand::SaveProjectAs));
         let set_mode: WebCommand = serde_json::from_value(serde_json::json!({
             "type": "set_run_mode",
             "mode": "replay",
@@ -7038,15 +6942,16 @@ mod tests {
         .expect("replay folder command");
         assert!(matches!(
             replay_folder,
-            WebCommand::AddReplayFolder { path: Some(ref p) } if p == "C:/logs"
+            WebCommand::AddReplayFolder { ref path } if path == "C:/logs"
         ));
         let replay_file: WebCommand = serde_json::from_value(serde_json::json!({
             "type": "add_replay_file",
+            "path": "C:/logs/drive.asc",
         }))
         .expect("replay file command");
         assert!(matches!(
             replay_file,
-            WebCommand::AddReplayFile { path: None }
+            WebCommand::AddReplayFile { ref path } if path == "C:/logs/drive.asc"
         ));
         let remove_replay: WebCommand = serde_json::from_value(serde_json::json!({
             "type": "remove_replay_source",

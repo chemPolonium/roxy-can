@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use crate::app::App;
-use crate::config::{PROJECT_EXT, ProjectSettings};
+use crate::config::ProjectSettings;
 use crate::model::{
     CanCfg, ClusterCfg, ClusterKind, ClusterSource, EtherCfg, FlexRayCfg, GeneratorCfg, ProjectV2,
     TriggerCfgV2,
@@ -775,15 +775,6 @@ impl App {
         self.workspace_rev = workspace_rev;
     }
 
-    /// Display name of the current project: the file stem, or "Untitled".
-    pub fn project_name(&self) -> String {
-        self.project_path
-            .as_ref()
-            .and_then(|p| p.file_stem())
-            .map(|s| s.to_string_lossy().to_string())
-            .unwrap_or_else(|| "Untitled".to_string())
-    }
-
     pub fn push_recent_project(&mut self, path: String) {
         push_recent(&mut self.recent_projects, path);
     }
@@ -807,21 +798,15 @@ impl App {
         self.baseline = self.config_snapshot();
     }
 
-    /// Saves the workspace as a .rxproj file. `None` opens a picker.
+    /// Saves the workspace as a .rxproj file. `None` is refused because the
+    /// host file browser supplies the target path.
     /// Returns true when a file was written.
     pub fn save_project(&mut self, path: Option<PathBuf>) -> bool {
         let path = match path {
             Some(p) => p,
             None => {
-                let mut dlg = rfd::FileDialog::new().add_filter("roxy-can project", &[PROJECT_EXT]);
-                if let Some(dir) = self.project_path.as_ref().and_then(|p| p.parent()) {
-                    dlg = dlg.set_directory(dir);
-                }
-                dlg = dlg.set_file_name(format!("{}.rxproj", self.project_name()));
-                match dlg.save_file() {
-                    Some(p) => p,
-                    None => return false,
-                }
+                self.status = "save needs a project path".to_string();
+                return false;
             }
         };
         let base = path.parent().map(|d| d.to_path_buf());

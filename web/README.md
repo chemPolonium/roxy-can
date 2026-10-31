@@ -92,7 +92,7 @@ npm run dev                 # http://127.0.0.1:5173, proxies /api to :2010
   matches the address column (`0x100`, `slot 13`, EtherType). Click a column
   header to sort ascending, again for descending, and a third time to restore
   the live newest-first order.
-- A project opens from the R menu (host picker or recent) and a replay log
+- A project opens from the R menu (in-app browser or recent) and a replay log
   from Setup → Replay…. The header, mode chip and status bar carry the session
   name and replay playhead; switching sessions resets the trace and curve
   buffers. A loaded project starts clean, plain **Save project** rewrites it
