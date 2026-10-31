@@ -524,7 +524,16 @@ impl App {
     /// thread, and `send`/`tick` crank its loop by hand. Deterministic
     /// clocks, synchronous commands -- what tests and a headless CLI want.
     pub fn headless() -> Self {
-        let core = Self::build_core();
+        Self::headless_with(Self::build_core())
+    }
+
+    /// A manual drive with no buses at all. The web shell starts here until
+    /// the user opens a project or generates the file-based sample.
+    pub fn blank() -> Self {
+        Self::headless_with(crate::bus::BusCore::new(Vec::new()))
+    }
+
+    fn headless_with(core: crate::bus::BusCore) -> Self {
         let (inbox_tx, inbox_rx) = std::sync::mpsc::channel();
         let mail = crate::bus::new_mailbox();
         let knobs = std::sync::Arc::new(crate::core_loop::BusKnobs::default());

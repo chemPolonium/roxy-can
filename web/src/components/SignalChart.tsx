@@ -738,7 +738,7 @@ export function SignalChart({
         ctx.fillStyle = colors.signalHint;
         ctx.font = "9px 'Segoe UI', sans-serif";
         ctx.fillText(
-          "The demo session wires eight DBC signals",
+          "Open a project or add signals with + Signals",
           width / 2,
           height / 2 + 14,
         );

@@ -3917,6 +3917,15 @@ fn jump_to_live_resets_plot_offsets() {
 }
 
 #[test]
+fn the_blank_shell_starts_without_buses() {
+    let app = App::blank();
+    assert_eq!(app.snap.channel_count, 0);
+    assert!(app.snap.channels.is_empty());
+    assert!(!app.snap.measuring, "the empty shell does not auto-start");
+    assert!(app.project_path.is_none());
+}
+
+#[test]
 fn reset_restores_the_default_workspace() {
     let mut app = App::headless();
     app.new_trace_window();

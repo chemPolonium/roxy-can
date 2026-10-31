@@ -2001,6 +2001,7 @@ export function App() {
   const canControl = Boolean(state) && online && !busy;
   const measuring = state?.measuring ?? false;
   const needsLog = state?.runMode === "Replay" && !state?.log;
+  const noBuses = state ? state.buses.length === 0 : false;
   const latest = state?.series.length
     ? state.series[state.series.length - 1]
     : undefined;
@@ -2898,6 +2899,21 @@ export function App() {
                 <button
                   type="button"
                   role="menuitem"
+                  title="Write a file-based sample project to a folder and open it"
+                  onClick={() => {
+                    setMenuOpen(false);
+                    run({ type: "create_sample_project" });
+                  }}
+                >
+                  <svg viewBox="0 0 16 16" aria-hidden="true">
+                    <path d="M1.5 4.5h4l1.5 2h7v6.5h-12.5z" />
+                    <path d="M8 8v4M6 10h4" />
+                  </svg>
+                  <span>Sample project</span>
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
                   onClick={() => {
                     setHelpOpen(true);
                     setMenuOpen(false);
@@ -2940,8 +2956,10 @@ export function App() {
             </h1>
             <p>
               {state
-                ? session ||
-                  `${state.channels.length} buses · ${state.channels.map((c) => c.name).join(", ")}`
+                ? state.buses.length === 0
+                  ? "no buses · open a project or create a sample"
+                  : session ||
+                    `${state.channels.length} buses · ${state.channels.map((c) => c.name).join(", ")}`
                 : "connecting to the bus core"}
             </p>
           </div>
@@ -2993,15 +3011,17 @@ export function App() {
           <button
             type="button"
             class="primary"
-            disabled={!canControl || measuring || needsLog}
+            disabled={!canControl || measuring || needsLog || noBuses}
             title={
               !online
                 ? "Waiting for the bus core"
-                : needsLog
-                  ? "Load a replay log first"
-                  : measuring
-                    ? "Measurement is already running"
-                    : "Start measurement"
+                : noBuses
+                  ? "Add a bus or create a sample project first"
+                  : needsLog
+                    ? "Load a replay log first"
+                    : measuring
+                      ? "Measurement is already running"
+                      : "Start measurement"
             }
             onClick={() => void run({ type: "start" })}
           >
@@ -3947,7 +3967,9 @@ export function App() {
             (measuring
               ? state?.log
                 ? `${state.runMode} · ${state.log}`
-                : "auto demo traffic · generated from the loaded DBCs"
+                : state?.project
+                  ? `${state.runMode} · ${state.project}`
+                  : "simulated traffic · no project"
               : state?.status || "waiting for core")}
         </span>
         <span class="spacer" />
@@ -4474,15 +4496,17 @@ export function App() {
                     <button
                       type="button"
                       class="primary"
-                      disabled={!canControl || measuring || needsLog}
+                      disabled={!canControl || measuring || needsLog || noBuses}
                       title={
                         !online
                           ? "Waiting for the bus core"
-                          : needsLog
-                            ? "Load a replay log first"
-                            : measuring
-                              ? "Measurement is already running"
-                              : "Start measurement"
+                          : noBuses
+                            ? "Add a bus or create a sample project first"
+                            : needsLog
+                              ? "Load a replay log first"
+                              : measuring
+                                ? "Measurement is already running"
+                                : "Start measurement"
                       }
                       onClick={() => {
                         void run({ type: "start" });

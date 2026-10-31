@@ -348,6 +348,43 @@ fn reset_visual_stores(
     rate_window.clear();
 }
 
+/// Replaces the live session with a project file and rebuilds every derived
+/// view (trace, chart selection, log state) the same way for the session
+/// picker and the generated sample.
+fn open_project_session(
+    app: &mut App,
+    path: &std::path::Path,
+    signals: &Arc<Mutex<SignalStore>>,
+    trace: &Arc<Mutex<TraceStore>>,
+    series: &mut VecDeque<WebSeriesPoint>,
+    rate_window: &mut VecDeque<(Instant, u64)>,
+) {
+    if app.snap.measuring {
+        app.stop();
+    }
+    let keys = signals.lock().map(|store| store.keys()).unwrap_or_default();
+    for key in keys {
+        app.send(BusCommand::Unsubscribe { key });
+    }
+    if let Ok(mut store) = signals.lock() {
+        store.clear_selection();
+    }
+    app.send(BusCommand::ClearTrace);
+    app.send(BusCommand::ClearAggregates);
+    app.clear_message_expanded();
+    app.open_project_path(path);
+    // Same as the bootstrap load: applying the live layout is part of
+    // opening the project, not an unsaved edit.
+    app.mark_clean();
+    if let Ok(mut store) = signals.lock() {
+        seed_chart_selection(app, &mut store);
+    }
+    app.log_path.clear();
+    app.log_info = None;
+    app.send(BusCommand::SetRunMode(Mode::Virtual));
+    reset_visual_stores(trace, series, rate_window);
+}
+
 /// Validates a system-variable definition coming from the web form. The core
 /// applies the same rules; the host is the boundary, so the web path checks
 /// them again instead of trusting the page.
@@ -1199,9 +1236,9 @@ fn flag_value(args: &[String], flag: &str) -> Option<String> {
         .cloned()
 }
 
-/// Bring up the requested session: a saved project, a replay log, or the
-/// generator demo. A project without a log opens stopped; a log starts
-/// playback; no flags keeps the old demo behavior.
+/// Bring up the requested session: a saved project, a replay log, or an
+/// empty workspace. A project without a log opens stopped; a log starts
+/// playback; no flags starts with no buses and no measurement.
 fn prepare_session(app: &mut App, project: Option<&str>, replay: Option<&str>) {
     if let Some(path) = project {
         app.open_project_path(std::path::Path::new(path));
@@ -1217,9 +1254,7 @@ fn prepare_session(app: &mut App, project: Option<&str>, replay: Option<&str>) {
         }
         return;
     }
-    if project.is_none() {
-        seed_demo(app);
-    } else {
+    if project.is_some() {
         // Loading applies the project's live layout, so a fresh open has
         // nothing unsaved.
         app.mark_clean();
@@ -1718,6 +1753,11 @@ enum WebCommand {
     OpenProject {
         path: String,
     },
+    CreateSampleProject {
+        /// Host folder; the R menu leaves it empty so the picker decides.
+        #[serde(default)]
+        parent: Option<String>,
+    },
     OpenLog {
         path: String,
     },
@@ -2181,7 +2221,11 @@ fn app_loop(
         catalog,
         scripts,
     } = stores;
-    let mut app = App::headless();
+    let mut app = if project.is_none() && replay.is_none() {
+        App::blank()
+    } else {
+        App::headless()
+    };
     prepare_session(&mut app, project.as_deref(), replay.as_deref());
     if let (Some(project), Some(profile)) = (&project, &profile) {
         let dir = std::path::Path::new(project)
@@ -2198,14 +2242,6 @@ fn app_loop(
     // The web plot is independent of observer zoom. Ask the core for the
     // 5 ms stress stride directly instead of mutating project config.
     app.plot_stride_us = Some(5_000);
-    if project.is_none()
-        && replay.is_none()
-        && let Ok(mut store) = signals.lock()
-    {
-        for spec in &SIGNALS {
-            store.select(&app, spec.ch, spec.id, false, spec.name);
-        }
-    }
     let mut catalog_sig = String::new();
     refresh_catalog(&app, &catalog, &mut catalog_sig);
     let mut series: VecDeque<WebSeriesPoint> = VecDeque::with_capacity(SERIES_POINTS);
@@ -2391,30 +2427,40 @@ fn app_loop(
                     });
                 }
                 WebCommand::OpenProject { path } => {
-                    if app.snap.measuring {
-                        app.stop();
+                    open_project_session(
+                        &mut app,
+                        std::path::Path::new(&path),
+                        &signals,
+                        &trace,
+                        &mut series,
+                        &mut rate_window,
+                    );
+                }
+                WebCommand::CreateSampleProject { parent } => {
+                    let parent = parent.map(std::path::PathBuf::from).or_else(|| {
+                        let _ = std::fs::create_dir_all(web_data_dir("samples"));
+                        rfd::FileDialog::new()
+                            .set_title("Choose a folder for the sample project")
+                            .set_directory(web_data_dir("samples"))
+                            .pick_folder()
+                    });
+                    match parent {
+                        Some(parent) => match write_sample_project(&parent) {
+                            Ok(path) => {
+                                open_project_session(
+                                    &mut app,
+                                    &path,
+                                    &signals,
+                                    &trace,
+                                    &mut series,
+                                    &mut rate_window,
+                                );
+                                app.status = format!("sample project created: {}", path.display());
+                            }
+                            Err(e) => app.status = format!("sample project failed: {e}"),
+                        },
+                        None => app.status = "sample project cancelled".to_string(),
                     }
-                    let keys = signals.lock().map(|store| store.keys()).unwrap_or_default();
-                    for key in keys {
-                        app.send(BusCommand::Unsubscribe { key });
-                    }
-                    if let Ok(mut store) = signals.lock() {
-                        store.clear_selection();
-                    }
-                    app.send(BusCommand::ClearTrace);
-                    app.send(BusCommand::ClearAggregates);
-                    app.clear_message_expanded();
-                    app.open_project_path(std::path::Path::new(&path));
-                    // Same as the bootstrap load: applying the live layout
-                    // is part of opening the project, not an unsaved edit.
-                    app.mark_clean();
-                    if let Ok(mut store) = signals.lock() {
-                        seed_chart_selection(&mut app, &mut store);
-                    }
-                    app.log_path.clear();
-                    app.log_info = None;
-                    app.send(BusCommand::SetRunMode(Mode::Virtual));
-                    reset_visual_stores(&trace, &mut series, &mut rate_window);
                 }
                 WebCommand::OpenLog { path } => {
                     if app.snap.measuring {
@@ -3405,9 +3451,15 @@ fn app_loop(
 }
 
 /// A demo simulation without a project file: open every DBC node's gate,
-/// switch every generator entry on, and run it at 20 Hz so the tables move
-/// on first paint.
+/// switch every generator entry on, and drive the curves from the sample
+/// databases. Tests use this to stand in for a live file-based project.
+#[cfg(test)]
 fn seed_demo(app: &mut App) {
+    seed_demo_entries(app);
+    app.start_virtual();
+}
+
+fn seed_demo_entries(app: &mut App) {
     let bus_count = app.snap.channel_count;
     for ch in 0..bus_count {
         let nodes: Vec<String> = app
@@ -3451,7 +3503,69 @@ fn seed_demo(app: &mut App) {
         });
         app.subscribe(app.can_key(spec.ch, spec.id, false, spec.name.to_string()));
     }
-    app.start_virtual();
+}
+
+const SAMPLE_PROJECT_FILE: &str = "roxy-can-sample.rxproj";
+
+/// Writes the built-in starter databases next to a fresh project file, so
+/// the sample behaves like any other file-based project. Picking a folder
+/// that already holds this sample only opens it again.
+fn write_sample_project(parent: &std::path::Path) -> Result<std::path::PathBuf, String> {
+    let dir = sample_project_dir(parent)?;
+    let project_path = dir.join(SAMPLE_PROJECT_FILE);
+    if project_path.exists() {
+        return Ok(project_path);
+    }
+    std::fs::create_dir_all(&dir).map_err(|e| format!("sample folder {}: {e}", dir.display()))?;
+    let sample_dbc = dir.join("sample.dbc");
+    let motbus_dbc = dir.join("motbus.dbc");
+    std::fs::write(&sample_dbc, crate::sample_data::SAMPLE_DBC)
+        .map_err(|e| format!("sample.dbc: {e}"))?;
+    std::fs::write(&motbus_dbc, crate::sample_data::MOTBUS_DBC)
+        .map_err(|e| format!("motbus.dbc: {e}"))?;
+
+    let mut app = App::headless();
+    replace_can_dbc(&mut app, 0, "builtin:sample.dbc", &sample_dbc);
+    replace_can_dbc(&mut app, 1, "builtin:motbus.dbc", &motbus_dbc);
+    seed_demo_entries(&mut app);
+    for spec in &SIGNALS {
+        let key = app.can_key(spec.ch, spec.id, false, spec.name.to_string());
+        chart_select_key(&mut app, key);
+    }
+    if !app.save_project(Some(project_path.clone())) {
+        return Err(app.status.clone());
+    }
+    Ok(project_path)
+}
+
+fn replace_can_dbc(app: &mut App, bus: u8, builtin: &str, path: &std::path::Path) {
+    app.remove_can_dbc(bus, builtin);
+    app.add_can_dbc(bus, &path.to_string_lossy());
+}
+
+/// A dedicated `roxy-can-sample` folder under the chosen parent; an existing
+/// sample is reused, while unrelated non-empty folders get the next suffix.
+fn sample_project_dir(parent: &std::path::Path) -> Result<std::path::PathBuf, String> {
+    for index in 0..100 {
+        let dir = if index == 0 {
+            parent.join("roxy-can-sample")
+        } else {
+            parent.join(format!("roxy-can-sample-{index}"))
+        };
+        if !dir.exists() {
+            return Ok(dir);
+        }
+        if dir.join(SAMPLE_PROJECT_FILE).exists() {
+            return Ok(dir);
+        }
+        let empty = std::fs::read_dir(&dir)
+            .map(|mut entries| entries.next().is_none())
+            .unwrap_or(false);
+        if empty {
+            return Ok(dir);
+        }
+    }
+    Err("no free roxy-can-sample folder name in the selected directory".to_string())
 }
 
 /// Chronological trace buffer owned by the app thread. The API sends a seed
@@ -3758,6 +3872,7 @@ impl SignalStore {
 
     /// Adds a selection without subscribing; the command handler owns the
     /// bus subscription so this stays a pure cache operation.
+    #[cfg(test)]
     fn select(&mut self, app: &App, ch: u8, id: u32, ext: bool, name: &str) {
         self.select_key(app, app.can_key(ch, id, ext, name.to_string()));
     }
@@ -6398,6 +6513,23 @@ mod tests {
         }))
         .expect("add bus command");
         assert!(matches!(bus, WebCommand::AddBus { ref kind } if kind == "ethernet"));
+        let sample: WebCommand = serde_json::from_value(serde_json::json!({
+            "type": "create_sample_project",
+        }))
+        .expect("sample project command");
+        assert!(matches!(
+            sample,
+            WebCommand::CreateSampleProject { parent: None }
+        ));
+        let sample: WebCommand = serde_json::from_value(serde_json::json!({
+            "type": "create_sample_project",
+            "parent": "C:/tmp",
+        }))
+        .expect("sample project command with a parent");
+        assert!(matches!(
+            sample,
+            WebCommand::CreateSampleProject { parent: Some(ref p) } if p == "C:/tmp"
+        ));
     }
 
     #[test]
@@ -6521,6 +6653,57 @@ mod tests {
             !trace.after(before).is_empty(),
             "the client only needs the delta"
         );
+    }
+
+    /// The sample project is a normal file-based project: the DBCs sit next
+    /// to the .rxproj, reopen through relative paths, and start on demand.
+    #[test]
+    fn the_sample_project_is_file_based_and_reopenable() {
+        let dir =
+            std::env::temp_dir().join(format!("roxy_can_sample_project_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let project = write_sample_project(&dir).expect("sample project written");
+        assert!(project.ends_with("roxy-can-sample/roxy-can-sample.rxproj"));
+        assert!(project.with_file_name("sample.dbc").exists());
+        assert!(project.with_file_name("motbus.dbc").exists());
+        let json = std::fs::read_to_string(&project).expect("project json");
+        assert!(json.contains("\"sample.dbc\""), "relative DBC path");
+        assert!(json.contains("\"motbus.dbc\""), "relative DBC path");
+        assert!(
+            !json.contains("builtin:"),
+            "no internal source in the project"
+        );
+
+        let mut app = App::blank();
+        app.open_project_path(&project);
+        assert_eq!(app.snap.channel_count, 2);
+        assert!(
+            app.can_paths(0)
+                .iter()
+                .all(|path| !path.starts_with("builtin:")),
+            "the loaded buses point at files"
+        );
+        assert_eq!(app.graphics[0].signals.len(), 8, "sample lanes carry over");
+        assert!(
+            app.snap.tx.iter().any(|entry| entry.active),
+            "generators stay armed for the Start button"
+        );
+        assert!(
+            !app.snap.measuring,
+            "opening the sample does not auto-start"
+        );
+
+        app.start_virtual();
+        for now in [50_000, 100_000, 150_000, 200_000] {
+            app.advance_clock(now);
+            app.tick(now);
+        }
+        assert!(!app.snap.trace.is_empty(), "the sample produces frames");
+
+        let reopened = write_sample_project(&dir).expect("existing sample reopens");
+        assert_eq!(reopened, project, "the same sample is reused");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// Loading a project through the web leaves the workspace clean: the
