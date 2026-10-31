@@ -4592,7 +4592,7 @@ export function App() {
                 >
                   <input
                     value={projectPath}
-                    placeholder="C:\projects\demo.rxproj"
+                    placeholder="C:\projects\sample.rxproj"
                     onInput={(event) =>
                       setProjectPath((event.target as HTMLInputElement).value)
                     }

@@ -41,7 +41,7 @@ export function RateChart({
         loadPeak = Math.max(loadPeak, ...point.busLoads);
       }
       const max = peak * 1.15;
-      // An idle two-bus demo sits around 1–2 % load; a fixed 0–100 % axis
+      // An idle two-bus session sits around 1–2 % load; a fixed 0–100 % axis
       // would pin both dashed lines to the floor. Keep a 5 % minimum so the
       // shape stays readable without misstating the unit.
       const loadMax = Math.min(100, Math.max(5, loadPeak * 1.15));

@@ -204,7 +204,7 @@ pub struct App {
     /// core samples the curves; the web modal reads it back from the snapshot.
     pub derived_defs: Vec<crate::derived::DerivedDef>,
     /// Chart lanes the web shell keeps subscribed even though they are not in
-    /// the first Graphics window (the demo session's eight lanes). Refreshed
+    /// the first Graphics window (session-only Signals picks). Refreshed
     /// from the session selection just before an observer drops a row, so a
     /// Data/Monitor/State clear never unmounts a live chart lane. Session
     /// state: the project's Graphics rows are what persist real picks.

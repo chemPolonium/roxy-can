@@ -37,14 +37,14 @@ const TRACE_LOG_CAP: usize = 50_000;
 /// Samples kept per plotted signal. At the 5 ms stress stride this is a
 /// one-minute window; the renderer decimates to pixels.
 const SIGNAL_CAP: usize = 12_000;
-/// Demo generator period; `ROXY_WEB_CYCLE_US` can shorten it for stress runs.
-const DEMO_CYCLE_US: u64 = 50_000;
+/// Sample generator period; `ROXY_WEB_CYCLE_US` can shorten it for stress runs.
+const SAMPLE_CYCLE_US: u64 = 50_000;
 /// Browser uploads are buffered in memory before landing in the temp folder.
 /// This covers DBC/ARXML/project files and ordinary logs; bigger recordings
 /// still go through a typed host path.
 const UPLOAD_LIMIT: usize = 256 * 1024 * 1024;
 
-/// Demo curves: real DBC signals, driven by the generator's own value
+/// Sample curves: real DBC signals, driven by the generator's own value
 /// sources. `color` indexes the frontend palette; ranges stay inside the
 /// DBC declarations so the encoder never clamps the shape.
 struct SignalSpec {
@@ -60,7 +60,7 @@ struct SignalSpec {
     redraw_us: u64,
 }
 
-const SIGNALS: [SignalSpec; 8] = [
+const SAMPLE_SIGNALS: [SignalSpec; 8] = [
     SignalSpec {
         ch: 0,
         id: 0x100,
@@ -800,8 +800,8 @@ fn chart_select(app: &mut App, ch: u8, id: u32, ext: bool, name: &str) {
 
 /// Refreshes the core's chart-keep set from the session selection. Called
 /// just before an observer drops a row: the chart owns that subscription even
-/// when the lane never entered the project's Graphics window (the demo's
-/// eight lanes), so pruning must not unmount it.
+/// when the lane never entered the project's Graphics window (a session-only
+/// web pick), so pruning must not unmount it.
 fn sync_chart_keep(app: &mut App, signals: &std::sync::Mutex<SignalStore>) {
     if let Ok(store) = signals.lock() {
         app.set_session_chart_keep(store.keys());
@@ -826,8 +826,9 @@ fn chart_unselect(app: &mut App, key: &SigKey) {
         key.clone(),
         false,
     );
-    // Demo lanes never lived in a Graphics window; prune still drops the
-    // subscription unless another observer (Monitor/Data/State) uses it.
+    // Session-only web lanes may not live in a Graphics window; prune still
+    // drops the subscription unless another observer (Monitor/Data/State) uses
+    // it.
     app.prune_signal(key);
 }
 
@@ -3450,16 +3451,16 @@ fn app_loop(
     }
 }
 
-/// A demo simulation without a project file: open every DBC node's gate,
+/// A seeded session without a project file: open every DBC node's gate,
 /// switch every generator entry on, and drive the curves from the sample
 /// databases. Tests use this to stand in for a live file-based project.
 #[cfg(test)]
-fn seed_demo(app: &mut App) {
-    seed_demo_entries(app);
+fn seed_test_session(app: &mut App) {
+    seed_sample_entries(app);
     app.start_virtual();
 }
 
-fn seed_demo_entries(app: &mut App) {
+fn seed_sample_entries(app: &mut App) {
     let bus_count = app.snap.channel_count;
     for ch in 0..bus_count {
         let nodes: Vec<String> = app
@@ -3477,7 +3478,7 @@ fn seed_demo_entries(app: &mut App) {
         .ok()
         .and_then(|value| value.parse::<u64>().ok())
         .filter(|value| *value >= 1_000)
-        .unwrap_or(DEMO_CYCLE_US);
+        .unwrap_or(SAMPLE_CYCLE_US);
     let entries: Vec<(u8, u32)> = app
         .snap
         .tx
@@ -3488,7 +3489,7 @@ fn seed_demo_entries(app: &mut App) {
         app.send(BusCommand::SetEntryActive { ch, id, on: true });
         app.send(BusCommand::SetEntryCycle { ch, id, cycle_us });
     }
-    for spec in &SIGNALS {
+    for spec in &SAMPLE_SIGNALS {
         let mut src = ValueSrc::new(spec.name, spec.kind, spec.lo, spec.hi);
         src.period_us = spec.period_us;
         src.phase_us = spec.phase_us;
@@ -3527,8 +3528,8 @@ fn write_sample_project(parent: &std::path::Path) -> Result<std::path::PathBuf, 
     let mut app = App::headless();
     replace_can_dbc(&mut app, 0, "builtin:sample.dbc", &sample_dbc);
     replace_can_dbc(&mut app, 1, "builtin:motbus.dbc", &motbus_dbc);
-    seed_demo_entries(&mut app);
-    for spec in &SIGNALS {
+    seed_sample_entries(&mut app);
+    for spec in &SAMPLE_SIGNALS {
         let key = app.can_key(spec.ch, spec.id, false, spec.name.to_string());
         chart_select_key(&mut app, key);
     }
@@ -3827,9 +3828,9 @@ struct SelectedSignal {
 const SIGNAL_PALETTE: usize = 8;
 
 /// Incremental cache of the chosen signals. Unlike a Graphics window this is
-/// a session-level selection: real projects start empty and the demo selects
-/// its eight DBC signals once. The frontend asks for a seed and then only
-/// for samples newer than its last timestamp.
+/// a session-level selection: a project load starts from its Graphics rows
+/// and the Signals panel adds session-only picks. The frontend asks for a seed
+/// and then only for samples newer than its last timestamp.
 #[derive(Default)]
 struct SignalStore {
     epoch: u64,
@@ -6549,7 +6550,7 @@ mod tests {
         }
     }
 
-    /// The demo path must produce real frames through the headless App; a
+    /// The seeded session must produce real frames through the headless App; a
     /// broken seed would otherwise leave the web UI looking connected but
     /// permanently empty.
     #[test]
@@ -6583,7 +6584,7 @@ mod tests {
     #[test]
     fn expanded_messages_carry_decoded_signal_children() {
         let mut app = App::headless();
-        seed_demo(&mut app);
+        seed_test_session(&mut app);
         for _ in 0..40 {
             std::thread::sleep(Duration::from_millis(5));
             app.update();
@@ -6620,9 +6621,9 @@ mod tests {
     }
 
     #[test]
-    fn the_demo_seeds_and_publishes_real_traffic() {
+    fn a_seeded_session_publishes_real_traffic() {
         let mut app = App::headless();
-        seed_demo(&mut app);
+        seed_test_session(&mut app);
         for _ in 0..40 {
             std::thread::sleep(Duration::from_millis(5));
             app.update();
@@ -6874,12 +6875,12 @@ mod tests {
         assert!(state.data.is_empty());
     }
 
-    /// The demo's generator sources reach the web with their shape and
+    /// The seeded session's generator sources reach the web with their shape and
     /// timing, not just a count, so the editor can round-trip them.
     #[test]
     fn the_state_lists_generator_sources() {
         let mut app = App::headless();
-        seed_demo(&mut app);
+        seed_test_session(&mut app);
         for _ in 0..20 {
             app.update();
         }
@@ -6889,7 +6890,7 @@ mod tests {
             .iter()
             .flat_map(|entry| &entry.srcs)
             .find(|src| src.name == "EngineSpeed")
-            .expect("the demo drives EngineSpeed");
+            .expect("the seeded session drives EngineSpeed");
         assert_eq!(src.kind, "Sine");
         assert!(src.period_us > 0);
         assert!(src.hi > src.lo);
@@ -7035,7 +7036,7 @@ mod tests {
     #[test]
     fn web_exports_write_standard_formats() {
         let mut app = App::headless();
-        seed_demo(&mut app);
+        seed_test_session(&mut app);
         for _ in 0..20 {
             app.update();
         }
@@ -7203,7 +7204,7 @@ mod tests {
     #[test]
     fn the_state_lists_bus_load_statistics() {
         let mut app = App::headless();
-        seed_demo(&mut app);
+        seed_test_session(&mut app);
         for _ in 0..30 {
             app.update();
         }
@@ -7229,7 +7230,7 @@ mod tests {
     #[test]
     fn the_state_lists_specification_controls() {
         let mut app = App::headless();
-        seed_demo(&mut app);
+        seed_test_session(&mut app);
         for _ in 0..20 {
             app.update();
         }
@@ -7237,7 +7238,10 @@ mod tests {
         assert!(state.spec_periodic > 0, "the DBC declares periodic frames");
         assert_eq!(state.spec_tolerance, app.spec_tol_pct);
         assert_eq!(state.spec_grace, app.spec_grace);
-        assert!(state.spec_rows.is_empty(), "a clean demo has no verdicts");
+        assert!(
+            state.spec_rows.is_empty(),
+            "a clean session has no verdicts"
+        );
     }
 
     /// Custom cuts replace the quantized value with a band index and use the
@@ -7811,23 +7815,23 @@ mod tests {
         );
     }
 
-    /// The demo must actually drive and sample the plotted signals; an empty
+    /// The seeded session must actually drive and sample the plotted signals; an empty
     /// SignalStore would draw eight empty lanes forever.
     #[test]
-    fn the_demo_samples_the_plotted_signals() {
+    fn the_seeded_session_samples_the_plotted_signals() {
         let mut app = App::headless();
-        seed_demo(&mut app);
+        seed_test_session(&mut app);
         for _ in 0..40 {
             std::thread::sleep(Duration::from_millis(5));
             app.update();
         }
         let mut signals = SignalStore::default();
-        for spec in &SIGNALS {
+        for spec in &SAMPLE_SIGNALS {
             signals.select(&app, spec.ch, spec.id, false, spec.name);
         }
         signals.sync(&app);
         let seeded = signals.seed();
-        assert_eq!(seeded.len(), SIGNALS.len());
+        assert_eq!(seeded.len(), SAMPLE_SIGNALS.len());
         assert!(
             seeded.iter().any(|series| !series.points.is_empty()),
             "the subscriptions received samples"
@@ -7847,7 +7851,7 @@ mod tests {
     #[test]
     fn a_derived_channel_reaches_the_chart_and_the_state_observer() {
         let mut app = App::headless();
-        seed_demo(&mut app);
+        seed_test_session(&mut app);
         for _ in 0..30 {
             std::thread::sleep(Duration::from_millis(5));
             app.update();
@@ -7870,7 +7874,7 @@ mod tests {
         app.set_win_signal(crate::workspace::PopupTarget::Monitor, key.clone(), true);
 
         let mut signals = SignalStore::default();
-        for spec in &SIGNALS {
+        for spec in &SAMPLE_SIGNALS {
             signals.select(&app, spec.ch, spec.id, false, spec.name);
         }
         signals.sync(&app);
