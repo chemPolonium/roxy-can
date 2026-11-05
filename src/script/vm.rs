@@ -85,6 +85,10 @@ pub struct Vm {
     pub someip_tcp_outbox: Vec<super::SomeIpTcpSend>,
     /// SD offers queued by `someip_offer`.
     pub someip_offer_outbox: Vec<super::SomeIpOffer>,
+    /// Auto-reply payloads queued by `someip_reply`.
+    pub someip_reply_outbox: Vec<super::SomeIpReply>,
+    /// NM timing override queued by `nm_timing`.
+    pub nm_timing_outbox: Vec<super::NmTiming>,
     /// Signal writes queued by `set_fr_sig(路, 槽, "Name", 值)`. The host holds
     /// the cluster description that says where the signal sits, so the encoding
     /// happens there, not in the kernel.
@@ -179,6 +183,8 @@ impl Vm {
             someip_outbox: Vec::new(),
             someip_tcp_outbox: Vec::new(),
             someip_offer_outbox: Vec::new(),
+            someip_reply_outbox: Vec::new(),
+            nm_timing_outbox: Vec::new(),
             fr_sig_sets: Vec::new(),
             emitted: Vec::new(),
             sys_sets: Vec::new(),
@@ -1103,6 +1109,69 @@ impl Vm {
                     client,
                     session,
                     message_type,
+                    payload,
+                });
+            }
+            "nm_timing" => {
+                let mut values = Vec::new();
+                for index in 0..4 {
+                    match &args[index] {
+                        Value::Int(value) if *value >= 0 => values.push(*value as u64),
+                        other => {
+                            return Err(VmError(format!(
+                                "nm_timing: expected non-negative int, got {}",
+                                kind(other)
+                            )));
+                        }
+                    }
+                }
+                self.nm_timing_outbox.push(super::NmTiming {
+                    repeat_ms: values[0],
+                    ready_sleep_ms: values[1],
+                    prepare_sleep_ms: values[2],
+                    timeout_ms: values[3],
+                });
+            }
+            "someip_reply" => {
+                let ints: Vec<i64> = args[..3]
+                    .iter()
+                    .map(|arg| match arg {
+                        Value::Int(value) => Ok(*value),
+                        other => Err(VmError(format!(
+                            "someip_reply: expected int, got {}",
+                            kind(other)
+                        ))),
+                    })
+                    .collect::<Result<_, _>>()?;
+                let payload = match &args[3] {
+                    Value::Bytes(bytes) => bytes.lock().expect("buffer poisoned").clone(),
+                    Value::Array(values) => values
+                        .lock()
+                        .expect("array poisoned")
+                        .iter()
+                        .map(|value| match value {
+                            Value::Int(n) => Ok(*n as u8),
+                            Value::Float(f) if f.is_finite() => Ok(f.trunc() as u8),
+                            other => Err(VmError(format!(
+                                "someip_reply: payload element must be a byte, got {}",
+                                kind(other)
+                            ))),
+                        })
+                        .collect::<Result<Vec<u8>, _>>()?,
+                    other => {
+                        return Err(VmError(format!(
+                            "someip_reply: payload must be bytes() or array(), got {}",
+                            kind(other)
+                        )));
+                    }
+                };
+                self.someip_reply_outbox.push(super::SomeIpReply {
+                    service: u16::try_from(ints[0])
+                        .map_err(|_| VmError("someip_reply: service out of range".into()))?,
+                    method: u16::try_from(ints[1])
+                        .map_err(|_| VmError("someip_reply: method out of range".into()))?,
+                    return_code: u8::try_from(ints[2])
+                        .map_err(|_| VmError("someip_reply: return code out of range".into()))?,
                     payload,
                 });
             }
@@ -2508,6 +2577,32 @@ mod tests {
         vm.someip_payload = vec![0xAA];
         vm.run_handler(1).unwrap();
         assert_eq!(vm.output, ["7 3 1 170"]);
+    }
+
+    #[test]
+    fn nm_timing_queues_the_cp_timers() {
+        let mut vm = Vm::new(compile("nm_timing(1000, 2000, 3000, 4000);").unwrap());
+        vm.run().unwrap();
+        let timing = vm.nm_timing_outbox[0];
+        assert_eq!(timing.repeat_ms, 1000);
+        assert_eq!(timing.ready_sleep_ms, 2000);
+        assert_eq!(timing.prepare_sleep_ms, 3000);
+        assert_eq!(timing.timeout_ms, 4000);
+    }
+
+    #[test]
+    fn someip_reply_queues_the_auto_reply_payload() {
+        let mut vm = Vm::new(
+            compile(
+                "let b = bytes(2); b[0] = 0x11; b[1] = 0x22; \
+             someip_reply(0x1234, 0x8001, 0, b);",
+            )
+            .unwrap(),
+        );
+        vm.run().unwrap();
+        let reply = &vm.someip_reply_outbox[0];
+        assert_eq!((reply.service, reply.method), (0x1234, 0x8001));
+        assert_eq!(reply.payload, [0x11, 0x22]);
     }
 
     #[test]

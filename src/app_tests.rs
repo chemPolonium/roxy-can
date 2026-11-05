@@ -7749,6 +7749,8 @@ fn e2e_counter_continuity_is_published_per_message() {
             payload: None,
             counter_offset: None,
             counter_length: None,
+            crc_offset: None,
+            crc_length: None,
         },
     );
     comm.frame_pdu_mappings.insert(

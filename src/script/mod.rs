@@ -123,7 +123,26 @@ pub struct SomeIpTcpSend {
     pub payload: Vec<u8>,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+/// CP Ethernet NM timing override, set from a script.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct NmTiming {
+    pub repeat_ms: u64,
+    pub ready_sleep_ms: u64,
+    pub prepare_sleep_ms: u64,
+    pub timeout_ms: u64,
+}
+
+/// Auto-reply payload for one service/method, set from a script. The core
+/// uses it instead of zero-filled ARXML output fields when a method request
+/// arrives for a locally offered service.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SomeIpReply {
+    pub service: u16,
+    pub method: u16,
+    pub return_code: u8,
+    pub payload: Vec<u8>,
+}
+
 pub struct SomeIpOffer {
     pub bus: u8,
     pub service: u16,
@@ -498,6 +517,8 @@ pub const HOST_FNS: &[(&str, usize, usize)] = &[
     ("someip_send", 7, 7),
     ("someip_tcp_send", 8, 8),
     ("someip_offer", 6, 6),
+    ("someip_reply", 4, 4),
+    ("nm_timing", 4, 4),
     ("emit_value", 2, 2),
     ("sys_get", 1, 1),
     ("sys_set", 2, 2),
@@ -585,6 +606,14 @@ pub const SCRIPT_HELP: &[(&str, &str)] = &[
     (
         "someip_offer",
         "someip_offer(bus, service, instance, ttl, major, minor)",
+    ),
+    (
+        "someip_reply",
+        "someip_reply(service, method, return_code, payload)",
+    ),
+    (
+        "nm_timing",
+        "nm_timing(repeat_ms, ready_sleep_ms, prepare_sleep_ms, timeout_ms)",
     ),
     ("frame", "frame(Bus.Frame)"),
     ("send_ext", "send_ext(id, byte, …)"),

@@ -927,13 +927,25 @@ pub fn build_message(
     message_type: u8,
     payload: &[u8],
 ) -> Vec<u8> {
+    build_message_rc(service, method, client, session, message_type, 0, payload)
+}
+
+pub fn build_message_rc(
+    service: u16,
+    method: u16,
+    client: u16,
+    session: u16,
+    message_type: u8,
+    return_code: u8,
+    payload: &[u8],
+) -> Vec<u8> {
     let mut someip = Vec::with_capacity(16 + payload.len());
     someip.extend_from_slice(&service.to_be_bytes());
     someip.extend_from_slice(&method.to_be_bytes());
     someip.extend_from_slice(&((8 + payload.len()) as u32).to_be_bytes());
     someip.extend_from_slice(&client.to_be_bytes());
     someip.extend_from_slice(&session.to_be_bytes());
-    someip.extend_from_slice(&[1, 1, message_type, 0]);
+    someip.extend_from_slice(&[1, 1, message_type, return_code]);
     someip.extend_from_slice(payload);
     someip
 }
@@ -1017,6 +1029,47 @@ pub fn build_udp_frame_to(
         seq: 0,
         truncated: false,
     }
+}
+
+/// Build one SOME/IP UDP datagram with an explicit return code. The header
+/// byte is patched after the regular builder, keeping the common path small.
+#[allow(clippy::too_many_arguments)]
+pub fn build_udp_frame_to_rc(
+    t_us: u64,
+    bus: u8,
+    src_ip: [u8; 4],
+    dst_ip: [u8; 4],
+    src_port: u16,
+    dst_port: u16,
+    service: u16,
+    method: u16,
+    client: u16,
+    session: u16,
+    message_type: u8,
+    return_code: u8,
+    payload: &[u8],
+) -> EthFrame {
+    let mut frame = build_udp_frame_to(
+        t_us,
+        bus,
+        src_ip,
+        dst_ip,
+        src_port,
+        dst_port,
+        service,
+        method,
+        client,
+        session,
+        message_type,
+        payload,
+    );
+    let offset = 20 + 8 + 15;
+    let mut bytes = frame.payload.to_vec();
+    if bytes.len() > offset {
+        bytes[offset] = return_code;
+        frame.payload = Arc::from(bytes);
+    }
+    frame
 }
 
 /// One SD OfferService or StopOfferService frame. `ttl=0` is StopOffer.
@@ -1247,6 +1300,26 @@ mod tests {
         assert_eq!(entries[0].kind, 0x07);
         assert_eq!(entries[0].eventgroup, Some(5));
         assert_eq!(entries[0].ttl, 3);
+    }
+
+    #[test]
+    fn udp_builder_patches_the_return_code() {
+        let frame = build_udp_frame_to_rc(
+            1,
+            0,
+            [10, 0, 0, 1],
+            [10, 0, 0, 2],
+            30501,
+            30490,
+            0x1234,
+            0x8001,
+            1,
+            2,
+            0x80,
+            7,
+            &[0xAA],
+        );
+        assert_eq!(frame.payload[20 + 8 + 15], 7);
     }
 
     #[test]

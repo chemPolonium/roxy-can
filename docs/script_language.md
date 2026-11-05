@@ -473,6 +473,54 @@ on timer 1000 {
 - 本地 Offer 存在时，收到同 service/instance 的 Subscribe 会自动回 SubscribeAck（eventgroup 原样带回，TTL=3）；`ttl=0` 后不再应答。
 - 订阅表按 service/instance/eventgroup 保存远端 endpoint；脚本发 `type=0x02` 的 event 时，会向匹配订阅者的 IP:port 逐个转发。
 
+### someip_reply(service, method, return_code, payload)
+
+配置本地 IL 对 method request 的自动应答内容：
+
+```c
+on start {
+    let b = bytes(2);
+    b[0] = 0x01;
+    b[1] = 0x02;
+    someip_reply(0x1234, 0x8001, 0, b);
+}
+```
+
+- 只影响本地 Offer 的 service/method；
+- 不配置时仍按 ARXML output 字段填 0；
+- 返回码写入 SOME/IP 响应头；
+- 建议在 `on start` 或服务启动的 timer 里配置。
+
+### nm_timing(repeat_ms, ready_sleep_ms, prepare_sleep_ms, timeout_ms)
+
+覆盖 CP Ethernet NM 状态机的固定计时，单位毫秒：
+
+```c
+on start {
+    nm_timing(3000, 3000, 2000, 5000);
+}
+```
+
+- `ready_sleep_ms`：ReadySleep → PrepareBusSleep；
+- `prepare_sleep_ms`：PrepareBusSleep → BusSleep；
+- `timeout_ms`：无 NM 帧 → BusSleep；
+- 不调用时用默认 3000 / 3000 / 2000 / 5000。
+
+
+### nm_timing(repeat_ms, ready_sleep_ms, prepare_sleep_ms, timeout_ms)
+
+覆盖 CP Ethernet NM 状态机的固定计时，单位毫秒：
+
+```c
+on start {
+    nm_timing(3000, 3000, 2000, 5000);
+}
+```
+
+- `ready_sleep_ms`：ReadySleep → PrepareBusSleep；
+- `prepare_sleep_ms`：PrepareBusSleep → BusSleep；
+- `timeout_ms`：无 NM 帧 → BusSleep；
+- 不调用时用默认 3000 / 3000 / 2000 / 5000。
 
 ### sig(id, "Name")
 
@@ -740,3 +788,5 @@ Scripts 编辑器内置行级调试器，由 Web 主机直接驱动：
 - 编译错误在 Apply 时报出，格式 `line N: 消息` 或 `line N:M: 消息`（N:M 为行:列）
 - 运行时错误终止当前回调，格式 `line N: 消息`，节点进入错误状态
 - 节点错误状态通过重新 Apply 或重启测量清除
+
+

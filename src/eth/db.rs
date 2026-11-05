@@ -54,11 +54,21 @@ pub struct EthSignal {
 pub struct EthDb {
     pub clusters: Vec<EthCluster>,
     pub frames: Vec<EthFrameDef>,
+    /// NM timing when the document states it (milliseconds).
+    pub nm_timing: Option<EthNmTiming>,
     /// PDUs referenced by `PDU-TRIGGERING` even when no frame maps them
     /// (Ethernet NM and PDU-only deployments).
     pub pdus: Vec<EthPdu>,
     /// Socket addresses / application endpoints from the same document.
     pub endpoints: Vec<EthEndpoint>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct EthNmTiming {
+    pub repeat_ms: u64,
+    pub ready_sleep_ms: u64,
+    pub prepare_sleep_ms: u64,
+    pub timeout_ms: u64,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -148,6 +158,9 @@ impl EthDb {
             } else {
                 self.pdus.push(pdu);
             }
+        }
+        if self.nm_timing.is_none() {
+            self.nm_timing = other.nm_timing;
         }
         for endpoint in other.endpoints {
             if self
@@ -255,7 +268,34 @@ impl EthDb {
             });
         }
 
-        // PDU-only deployments: an Ethernet cluster can carry NM or signal
+        // Optional NM timing: CP documents name these in milliseconds.
+        let mut timing = EthNmTiming::default();
+        for (tag, slot) in [
+            ("NM-REPEAT-MESSAGE-TIME", 0),
+            ("NM-READY-SLEEP-TIME", 1),
+            ("NM-PREPARE-BUS-SLEEP-TIME", 2),
+            ("NM-TIMEOUT-TIME", 3),
+        ] {
+            if let Some(value) = root
+                .descendants()
+                .find(|n| n.has_tag_name(tag))
+                .and_then(|n| n.text())
+                .and_then(|text| text.trim().parse::<u64>().ok())
+            {
+                match slot {
+                    0 => timing.repeat_ms = value,
+                    1 => timing.ready_sleep_ms = value,
+                    2 => timing.prepare_sleep_ms = value,
+                    _ => timing.timeout_ms = value,
+                }
+            }
+        }
+        if timing.repeat_ms + timing.ready_sleep_ms + timing.prepare_sleep_ms + timing.timeout_ms
+            > 0
+        {
+            db.nm_timing = Some(timing);
+        }
+
         // PDUs without ever declaring an Ethernet frame. Those PDUs are still
         // useful database objects, so keep them separately from frame PDUs.
         let pdu_nodes: HashMap<String, Node> = root
@@ -1086,6 +1126,10 @@ mod multi_cluster_tests {
 <AUTOSAR xmlns="http://autosar.org/schema/r4.0">
  <AR-PACKAGES><AR-PACKAGE><SHORT-NAME>P</SHORT-NAME><ELEMENTS>
   <ETHERNET-CLUSTER><SHORT-NAME>EthA</SHORT-NAME>
+   <NM-REPEAT-MESSAGE-TIME>1000</NM-REPEAT-MESSAGE-TIME>
+   <NM-READY-SLEEP-TIME>2000</NM-READY-SLEEP-TIME>
+   <NM-PREPARE-BUS-SLEEP-TIME>3000</NM-PREPARE-BUS-SLEEP-TIME>
+   <NM-TIMEOUT-TIME>4000</NM-TIMEOUT-TIME>
    <PDU-TRIGGERINGS>
     <PDU-TRIGGERING><SHORT-NAME>trig</SHORT-NAME>
      <I-PDU-REF>/P/Nm</I-PDU-REF>
@@ -1121,6 +1165,15 @@ mod multi_cluster_tests {
         assert_eq!(db.frames.len(), 0);
         assert_eq!(db.clusters[0].name, "EthA");
         assert_eq!(db.pdus[0].name, "Nm");
+        assert_eq!(
+            db.nm_timing,
+            Some(EthNmTiming {
+                repeat_ms: 1000,
+                ready_sleep_ms: 2000,
+                prepare_sleep_ms: 3000,
+                timeout_ms: 4000,
+            })
+        );
         assert_eq!(db.pdus[0].signals[0].name, "Repeat");
         assert_eq!(db.endpoints[0].name, "Sock");
         assert_eq!(db.endpoints[0].ip, "192.168.1.10");

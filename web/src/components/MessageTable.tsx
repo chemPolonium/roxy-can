@@ -102,7 +102,8 @@ export function MessageTable({
                     {message.e2e && (
                       <span
                         class={`e2e-tag ${
-                          message.e2e.repeats + message.e2e.jumps > 0
+                          message.e2e.repeats + message.e2e.jumps > 0 ||
+                          message.e2e.crcFail > 0
                             ? "bad"
                             : ""
                         }`}
@@ -113,10 +114,15 @@ export function MessageTable({
                               : ""
                           }`,
                           `Counter ${message.e2e.counter ?? "—"} · repeats ${message.e2e.repeats} · gaps ${message.e2e.gaps} · jumps ${message.e2e.jumps}`,
-                          "Counter continuity only; authentication stays unverified (no CRC key).",
+                          message.e2e.crcChecked > 0
+                            ? `CRC ${message.e2e.crcOk ? "OK" : "FAIL"} · ${message.e2e.crcFail}/${message.e2e.crcChecked} failed`
+                            : "CRC position/profile not configured",
+                          "Counter continuity and CRC check; authentication keys are not used.",
                         ].join("\n")}
                       >
                         E2E P{message.e2e.profile}
+                        {message.e2e.crcChecked > 0 &&
+                          (message.e2e.crcOk ? " ✓" : " ✗")}
                       </span>
                     )}
                   </td>

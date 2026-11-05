@@ -3578,13 +3578,6 @@ export function App() {
           </div>
           <button
             type="button"
-            disabled={!online}
-            onClick={openGenerator}
-          >
-            Generator
-          </button>
-          <button
-            type="button"
             class="buses-button"
             disabled={!online}
             title="Attach adapters, bind descriptions and set bit rates"
@@ -3701,6 +3694,16 @@ export function App() {
                   role="menuitem"
                   onClick={() => {
                     close();
+                    openGenerator();
+                  }}
+                >
+                  Generator
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    close();
                     openTriggers();
                   }}
                 >
@@ -3751,7 +3754,7 @@ export function App() {
           </MenuButton>
           <button
             type="button"
-            class="primary"
+            class="primary transport-button"
             disabled={
               !canControl || measuring || needsLog || (!replaying && noBuses)
             }
@@ -3772,6 +3775,7 @@ export function App() {
           </button>
           <button
             type="button"
+            class="transport-button"
             disabled={!canControl || !measuring}
             title={measuring ? "Stop measurement" : "Measurement is not running"}
             onClick={() => void run({ type: "stop" })}
@@ -3780,6 +3784,7 @@ export function App() {
           </button>
           <button
             type="button"
+            class="transport-button pause-button"
             disabled={!canControl || !measuring}
             title={
               measuring

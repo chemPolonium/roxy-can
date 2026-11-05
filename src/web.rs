@@ -6206,6 +6206,12 @@ struct WebE2e {
     data_id: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     counter: Option<u8>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    crc: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    crc_ok: Option<bool>,
+    crc_checked: u64,
+    crc_fail: u64,
     frames: u64,
     repeats: u64,
     gaps: u64,
@@ -6217,6 +6223,10 @@ fn e2e_dto(track: &crate::bus::E2eView) -> WebE2e {
         profile: track.profile,
         data_id: track.data_id,
         counter: track.counter,
+        crc: track.crc,
+        crc_ok: track.crc_ok,
+        crc_checked: track.crc_checked,
+        crc_fail: track.crc_fail,
         frames: track.frames,
         repeats: track.repeats,
         gaps: track.gaps,

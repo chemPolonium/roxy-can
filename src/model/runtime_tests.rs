@@ -631,6 +631,8 @@ fn perf_advanced_feature_paths() {
         counter_bit_offset: 0,
         counter_bits: 4,
         data_id: Some(291),
+        crc_bit_offset: Some(8),
+        crc_bits: Some(8),
     });
     measure("E2E counter read", FRAMES, || {
         std::hint::black_box(decode_e2e(&e2e_plan, &plain_payload));

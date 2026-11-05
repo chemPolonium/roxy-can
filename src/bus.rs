@@ -797,17 +797,6 @@ pub struct NodeView {
     pub log: Vec<String>,
 }
 
-fn build_someip_tcp_message(
-    service: u16,
-    method: u16,
-    client: u16,
-    session: u16,
-    message_type: u8,
-    payload: &[u8],
-) -> Vec<u8> {
-    crate::eth::someip::build_message(service, method, client, session, message_type, payload)
-}
-
 #[allow(clippy::too_many_arguments)]
 fn send_someip_tcp(
     host: &str,
@@ -819,18 +808,44 @@ fn send_someip_tcp(
     message_type: u8,
     payload: &[u8],
 ) -> Result<(), String> {
+    send_someip_tcp_rc(
+        host,
+        port,
+        service,
+        method,
+        client,
+        session,
+        message_type,
+        0,
+        payload,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn send_someip_tcp_rc(
+    host: &str,
+    port: u16,
+    service: u16,
+    method: u16,
+    client: u16,
+    session: u16,
+    message_type: u8,
+    return_code: u8,
+    payload: &[u8],
+) -> Result<(), String> {
     use std::io::Write;
     let address = format!("{host}:{port}");
     let mut stream = std::net::TcpStream::connect(&address)
         .map_err(|error| format!("SOME/IP TCP {address}: {error}"))?;
     let _ = stream.set_write_timeout(Some(std::time::Duration::from_millis(500)));
     stream
-        .write_all(&build_someip_tcp_message(
+        .write_all(&crate::eth::someip::build_message_rc(
             service,
             method,
             client,
             session,
             message_type,
+            return_code,
             payload,
         ))
         .map_err(|error| format!("SOME/IP TCP {address}: {error}"))
@@ -1050,6 +1065,10 @@ pub struct E2eView {
     pub profile: u32,
     pub data_id: Option<u32>,
     pub counter: Option<u8>,
+    pub crc: Option<u64>,
+    pub crc_ok: Option<bool>,
+    pub crc_checked: u64,
+    pub crc_fail: u64,
     pub frames: u64,
     pub repeats: u64,
     pub gaps: u64,
@@ -1068,6 +1087,14 @@ enum E2eChange {
 fn note_e2e(entry: &mut E2eView, reading: crate::model::E2eReading) -> E2eChange {
     entry.profile = reading.profile;
     entry.data_id = reading.data_id;
+    if let Some(crc) = reading.crc {
+        entry.crc = Some(crc);
+        entry.crc_checked += 1;
+        entry.crc_ok = reading.crc_ok;
+        if reading.crc_ok == Some(false) {
+            entry.crc_fail += 1;
+        }
+    }
     entry.frames += 1;
     let change = if let Some(last) = entry.counter {
         let delta = (reading.counter + 16 - last) % 16;
@@ -1539,6 +1566,8 @@ pub struct BusCore {
     /// for these are acknowledged automatically.
     someip_offers: std::collections::BTreeMap<(u8, u16, u16), u32>,
     someip_subscriptions: Vec<SomeIpSubscription>,
+    someip_replies: std::collections::BTreeMap<(u16, u16), (u8, Vec<u8>)>,
+    nm_timing: Option<crate::script::NmTiming>,
     /// Last decoded NM signal summary per (bus, PDU); suppresses repeated
     /// identical Write lines when a cyclic NM frame does not change.
     nm_last: std::collections::BTreeMap<String, String>,
@@ -1912,6 +1941,8 @@ impl BusCore {
             someip_pending: Vec::new(),
             someip_offers: Default::default(),
             someip_subscriptions: Vec::new(),
+            someip_replies: Default::default(),
+            nm_timing: None,
             nm_last: Default::default(),
             nm_states: Default::default(),
             someip_send_guard: false,
@@ -2521,6 +2552,16 @@ impl BusCore {
                 }
             }
             BusCommand::SetEthDbs { dbs, sources } => {
+                if self.nm_timing.is_none()
+                    && let Some(timing) = dbs.values().find_map(|db| db.nm_timing)
+                {
+                    self.nm_timing = Some(crate::script::NmTiming {
+                        repeat_ms: timing.repeat_ms,
+                        ready_sleep_ms: timing.ready_sleep_ms,
+                        prepare_sleep_ms: timing.prepare_sleep_ms,
+                        timeout_ms: timing.timeout_ms,
+                    });
+                }
                 self.eth_dbs = dbs;
                 self.eth_sources = sources;
                 self.rebuild_eth_models();
@@ -2991,16 +3032,26 @@ impl BusCore {
     /// frames (and on resets); the copy is one sealed tail plus chunk
     /// refcounts -- the ring itself is shared, never deep-copied.
     fn expire_nm_states(&mut self, now_us: u64) {
+        let timing = self.nm_timing.unwrap_or(crate::script::NmTiming {
+            repeat_ms: 3_000,
+            ready_sleep_ms: 3_000,
+            prepare_sleep_ms: 2_000,
+            timeout_ms: 5_000,
+        });
         let mut transitions = Vec::new();
         for (key, track) in &mut self.nm_states {
-            let next = if now_us.saturating_sub(track.last_seen_us) > 5_000_000 {
+            let next = if now_us.saturating_sub(track.last_seen_us)
+                > timing.timeout_ms.saturating_mul(1_000)
+            {
                 NmState::BusSleep
             } else if track.state == NmState::ReadySleep
-                && now_us.saturating_sub(track.since_us) > 3_000_000
+                && now_us.saturating_sub(track.since_us)
+                    > timing.ready_sleep_ms.saturating_mul(1_000)
             {
                 NmState::PrepareBusSleep
             } else if track.state == NmState::PrepareBusSleep
-                && now_us.saturating_sub(track.since_us) > 2_000_000
+                && now_us.saturating_sub(track.since_us)
+                    > timing.prepare_sleep_ms.saturating_mul(1_000)
             {
                 NmState::BusSleep
             } else {
@@ -3355,6 +3406,8 @@ impl BusCore {
         let mut node_lines: Vec<(String, String)> = Vec::new();
         let mut node_frames: Vec<(u64, u8, bool, crate::script::FrameInstance)> = Vec::new();
         let mut someip_sends: Vec<crate::script::SomeIpSend> = Vec::new();
+        let mut someip_replies: Vec<crate::script::SomeIpReply> = Vec::new();
+        let mut nm_timings: Vec<crate::script::NmTiming> = Vec::new();
         let mut someip_tcp_sends: Vec<crate::script::SomeIpTcpSend> = Vec::new();
         let mut someip_offers: Vec<crate::script::SomeIpOffer> = Vec::new();
         for node in &mut self.nodes {
@@ -3384,6 +3437,8 @@ impl BusCore {
                     .map(|frame| (node.id, node.channel, script_allowed, frame)),
             );
             someip_sends.extend(node.take_someip());
+            someip_replies.extend(node.take_someip_reply());
+            nm_timings.extend(node.take_nm_timing());
             someip_tcp_sends.extend(node.take_someip_tcp());
             someip_offers.extend(node.take_someip_offer());
             for (name, v) in node.take_emitted() {
@@ -3401,6 +3456,10 @@ impl BusCore {
             }
         }
         self.apply_script_someip(someip_sends);
+        self.apply_someip_replies(someip_replies);
+        if let Some(timing) = nm_timings.last().copied() {
+            self.nm_timing = Some(timing);
+        }
         self.apply_script_someip_tcp(someip_tcp_sends);
         self.apply_script_someip_offers(someip_offers);
         for (ch, node_id, node_name, name, v) in derived {
@@ -3519,6 +3578,8 @@ impl BusCore {
         let mut fr_sig_writes: Vec<(u64, u8, u16, String, f64)> = Vec::new();
         let mut node_frames: Vec<(u64, u8, bool, crate::script::FrameInstance)> = Vec::new();
         let mut someip_sends: Vec<crate::script::SomeIpSend> = Vec::new();
+        let mut someip_replies: Vec<crate::script::SomeIpReply> = Vec::new();
+        let mut nm_timings: Vec<crate::script::NmTiming> = Vec::new();
         let mut someip_tcp_sends: Vec<crate::script::SomeIpTcpSend> = Vec::new();
         let mut someip_offers: Vec<crate::script::SomeIpOffer> = Vec::new();
         let data = &f.data[..f.len as usize];
@@ -3550,6 +3611,8 @@ impl BusCore {
                     .map(|frame| (node.id, node.channel, script_allowed, frame)),
             );
             someip_sends.extend(node.take_someip());
+            someip_replies.extend(node.take_someip_reply());
+            nm_timings.extend(node.take_nm_timing());
             someip_tcp_sends.extend(node.take_someip_tcp());
             someip_offers.extend(node.take_someip_offer());
             for (name, v) in node.take_emitted() {
@@ -3567,6 +3630,10 @@ impl BusCore {
             }
         }
         self.apply_script_someip(someip_sends);
+        self.apply_someip_replies(someip_replies);
+        if let Some(timing) = nm_timings.last().copied() {
+            self.nm_timing = Some(timing);
+        }
         self.apply_script_someip_tcp(someip_tcp_sends);
         self.apply_script_someip_offers(someip_offers);
         for (ch, node_id, node_name, name, v) in derived {
@@ -4057,6 +4124,8 @@ impl BusCore {
         let inputs = self.build_node_inputs(self.sim_t_us);
         let mut node_frames = Vec::new();
         let mut someip_sends = Vec::new();
+        let mut someip_replies: Vec<crate::script::SomeIpReply> = Vec::new();
+        let mut nm_timings: Vec<crate::script::NmTiming> = Vec::new();
         let mut someip_tcp_sends: Vec<crate::script::SomeIpTcpSend> = Vec::new();
         let mut someip_offers: Vec<crate::script::SomeIpOffer> = Vec::new();
         let mut derived = Vec::new();
@@ -4082,6 +4151,8 @@ impl BusCore {
                     .map(|frame| (node.id, node.channel, true, frame)),
             );
             someip_sends.extend(node.take_someip());
+            someip_replies.extend(node.take_someip_reply());
+            nm_timings.extend(node.take_nm_timing());
             someip_tcp_sends.extend(node.take_someip_tcp());
             someip_offers.extend(node.take_someip_offer());
             for (name, value) in node.take_emitted() {
@@ -4097,6 +4168,10 @@ impl BusCore {
         }
         self.send_node_frames(node_frames);
         self.apply_script_someip(someip_sends);
+        self.apply_someip_replies(someip_replies);
+        if let Some(timing) = nm_timings.last().copied() {
+            self.nm_timing = Some(timing);
+        }
         self.apply_script_someip_tcp(someip_tcp_sends);
         self.apply_script_someip_offers(someip_offers);
         self.apply_sys_writes(sys_writes);
@@ -7690,6 +7765,7 @@ impl BusCore {
         self.someip_pending.clear();
         self.someip_offers.clear();
         self.someip_subscriptions.clear();
+        self.someip_replies.clear();
         self.nm_last.clear();
         self.nm_states.clear();
         self.publish_trace();
@@ -7888,6 +7964,7 @@ impl BusCore {
         self.someip_pending.clear();
         self.someip_offers.clear();
         self.someip_subscriptions.clear();
+        self.someip_replies.clear();
         self.nm_last.clear();
         self.nm_states.clear();
         self.publish_trace();
@@ -9096,7 +9173,7 @@ impl BusCore {
     }
 
     fn auto_reply_someip_method(&mut self, event: &crate::eth::someip::SomeIpEvent) {
-        if event.message_type != 0x00 || event.transport != "UDP" {
+        if event.message_type != 0x00 {
             return;
         }
         if !self
@@ -9106,27 +9183,63 @@ impl BusCore {
         {
             return;
         }
-        let Some(service) = self.someip_services.service(event.service) else {
-            return;
-        };
-        let Some(method) = service
-            .methods
-            .iter()
-            .find(|method| method.id == event.method)
-        else {
-            return;
-        };
-        let Ok(payload) =
-            crate::eth::arxml_service::encode_values(&method.output, &Default::default())
-        else {
-            return;
+        let configured = self
+            .someip_replies
+            .get(&(event.service, event.method))
+            .cloned();
+        let (configured_return, payload) = if let Some((return_code, payload)) = configured {
+            (return_code, payload)
+        } else {
+            let Some(service) = self.someip_services.service(event.service) else {
+                return;
+            };
+            let Some(method) = service
+                .methods
+                .iter()
+                .find(|method| method.id == event.method)
+            else {
+                return;
+            };
+            let Ok(payload) =
+                crate::eth::arxml_service::encode_values(&method.output, &Default::default())
+            else {
+                return;
+            };
+            (0, payload)
         };
         let dst = event
             .src
             .parse::<std::net::Ipv4Addr>()
             .map(|ip| ip.octets())
             .unwrap_or([10, 0, 0, 2]);
-        let frame = crate::eth::someip::build_udp_frame_to(
+        if event.transport == "TCP" {
+            if let Err(error) = send_someip_tcp_rc(
+                &event.src,
+                event.src_port.max(1),
+                event.service,
+                event.method,
+                event.client,
+                event.session,
+                0x80,
+                configured_return,
+                &payload,
+            ) {
+                self.write_push(
+                    WriteKind::Warning,
+                    format!("SOME/IP TCP auto reply: {error}"),
+                );
+            } else {
+                self.write_push(
+                    WriteKind::Info,
+                    format!(
+                        "SOME/IP TCP auto reply 0x{:04X}.0x{:04X} session {}",
+                        event.service, event.method, event.session
+                    ),
+                );
+            }
+            return;
+        }
+        let frame = crate::eth::someip::build_udp_frame_to_rc(
             self.sim_t_us,
             event.bus,
             [10, 0, 0, 1],
@@ -9138,6 +9251,7 @@ impl BusCore {
             event.client,
             event.session,
             0x80,
+            configured_return,
             &payload,
         );
         self.someip_send_guard = true;
@@ -9997,6 +10111,15 @@ impl BusCore {
     /// length, bytes are the payload.
     /// Delivers one locally built Ethernet frame: wire first when a live port
     /// is attached, otherwise session-only injection.
+    fn apply_someip_replies(&mut self, replies: Vec<crate::script::SomeIpReply>) {
+        for reply in replies {
+            self.someip_replies.insert(
+                (reply.service, reply.method),
+                (reply.return_code, reply.payload),
+            );
+        }
+    }
+
     fn apply_script_someip_offers(&mut self, offers: Vec<crate::script::SomeIpOffer>) {
         for offer in offers {
             let key = (offer.bus, offer.service, offer.instance);
@@ -11640,6 +11763,8 @@ BA_ "GenSigStartValue" SG_ 512 Temp 80;
                     profile: 1,
                     counter,
                     data_id: Some(7),
+                    crc: None,
+                    crc_ok: None,
                 },
             );
         }
@@ -11736,6 +11861,8 @@ BA_ "GenSigStartValue" SG_ 512 Temp 80;
                 payload: None,
                 counter_offset: None,
                 counter_length: None,
+                crc_offset: None,
+                crc_length: None,
             },
         );
         comm.frame_pdu_mappings.insert(

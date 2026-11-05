@@ -305,6 +305,26 @@ select:disabled {
   flex: 0 0 auto;
 }
 
+/* Keep the toolbar from reflowing when a label changes (Start/Stop, Pause/
+   Resume, Simulation/Replay). */
+.run-mode-menu > button {
+  min-width: 112px;
+  justify-content: space-between;
+}
+
+.record-button {
+  min-width: 86px;
+  justify-content: center;
+}
+
+.transport-button {
+  min-width: 58px;
+}
+
+.pause-button {
+  min-width: 68px;
+}
+
 .view-switch {
   display: flex;
   gap: 2px;
@@ -344,6 +364,8 @@ select:disabled {
   display: inline-flex;
   align-items: center;
   gap: 6px;
+  min-width: 86px;
+  justify-content: center;
 }
 
 .record-dot {

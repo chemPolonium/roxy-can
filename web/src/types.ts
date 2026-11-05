@@ -722,6 +722,10 @@ export interface MessageE2e {
   profile: number;
   dataId?: number | null;
   counter?: number | null;
+  crc?: number | null;
+  crcOk?: boolean | null;
+  crcChecked: number;
+  crcFail: number;
   frames: number;
   repeats: number;
   gaps: number;

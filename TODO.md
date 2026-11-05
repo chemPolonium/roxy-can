@@ -6,8 +6,8 @@
 
 - **Ethernet 实时口台架验证**：Npcap 收发已接；多口/时序、VLAN offload、驱动缺失与断线恢复仍需台架验证。
 - **FlexRay 硬件发送**（`xlFrTransmit`）：脚本与生成器发的帧只进入本会话，被监听的端口仅接收。发送对象布局按台架实测。
-- **SOME/IP 服务模拟**：Offer/StopOffer、SubscribeAck、订阅表、event 转发、method 自动应答、Trigger TCP 已做。
-- **PDU-only ARXML、UDP NM 信号与 NM 状态机**已接；更细的 CP NM 计时配置仍可扩展。
+- **SOME/IP 服务模拟**：Offer/StopOffer、SubscribeAck、订阅表、event 转发、method 自动应答（UDP/TCP，`someip_reply`）、Trigger TCP 已做。
+- **PDU-only ARXML、UDP NM 信号与 NM 状态机**已接；CP NM 计时可用脚本 `nm_timing` 覆盖，也会读 ARXML 的 `NM-*-TIME`。
 - **真实语料回归**：仍缺真实 CANoe 的以太网 BLF/PCAP 与 SOME/IP ARXML 语料；现有 BLF Ethernet 布局按 `vector_blf` 参考实现并用合成对象验证。
 - **ARXML XSD 校验**：`scripts/validate-arxml.ps1` 已用 `target/refs` 的 R23-11 schema；CP 4.2.2 精确 schema 仍待补。
 - **测试单元进 CI**：`--test --test-json` 已能输出 JSON/退出码；CI 尚未接。
@@ -41,3 +41,7 @@
 ## CI 的规矩
 
 计时类测试一律同机对照，不退回绝对阈值；缺测试数据必须失败、不许跳过。详见 `.github/workflows/ci.yml` 顶部。
+
+
+
+

@@ -335,6 +335,16 @@ impl<'a> Importer<'a> {
                 .find(|n| n.has_tag_name("COUNTER-LENGTH"))
                 .and_then(|n| n.text())
                 .and_then(|text| text.trim().parse::<u32>().ok());
+            let crc_offset = node
+                .descendants()
+                .find(|n| n.has_tag_name("CRC-OFFSET"))
+                .and_then(|n| n.text())
+                .and_then(|text| text.trim().parse::<u32>().ok());
+            let crc_length = node
+                .descendants()
+                .find(|n| n.has_tag_name("CRC-LENGTH"))
+                .and_then(|n| n.text())
+                .and_then(|text| text.trim().parse::<u32>().ok());
             let protection = E2eProtection {
                 id,
                 name: name.clone(),
@@ -345,6 +355,8 @@ impl<'a> Importer<'a> {
                 payload: None,
                 counter_offset,
                 counter_length,
+                crc_offset,
+                crc_length,
             };
             self.e2e_ids.insert(name, id);
             self.e2e_ids.insert(path, id);

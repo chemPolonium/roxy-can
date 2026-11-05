@@ -7,13 +7,15 @@
 use super::*;
 use crate::decode::{extract_raw, from_physical, pack_raw, to_physical};
 
-/// One E2E header reading: the counter the protected PDU carried and the
-/// Data ID the document configured. The CRC is deliberately not evaluated.
+/// One E2E header reading: counter, Data ID and CRC verdict when the profile
+/// and CRC position are known.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct E2eReading {
     pub profile: u32,
     pub counter: u8,
     pub data_id: Option<u32>,
+    pub crc: Option<u64>,
+    pub crc_ok: Option<bool>,
 }
 
 pub fn decode_e2e(plan: &DecodePlan, payload: &[u8]) -> Vec<E2eReading> {
@@ -31,13 +33,121 @@ pub fn decode_e2e(plan: &DecodePlan, payload: &[u8]) -> Vec<E2eReading> {
                 u64::from(spec.counter_bits),
                 false,
             );
+            let (crc, crc_ok) = match (spec.crc_bit_offset, spec.crc_bits) {
+                (Some(offset), Some(bits)) if bits % 8 == 0 && offset % 8 == 0 => {
+                    let width = usize::try_from(bits / 8).ok().unwrap_or(0);
+                    let start = usize::try_from(offset / 8).ok().unwrap_or(usize::MAX);
+                    let end = start.saturating_add(width);
+                    if width == 0 || end > payload.len() {
+                        (None, None)
+                    } else {
+                        let actual =
+                            extract_raw(payload, u64::from(offset), u64::from(bits), false);
+                        let mut data = Vec::with_capacity(payload.len() - width);
+                        data.extend_from_slice(&payload[..start]);
+                        data.extend_from_slice(&payload[end..]);
+                        let expected = e2e_crc(spec.profile, &data).filter(|_| {
+                            matches!(
+                                (spec.profile, bits),
+                                (1 | 2, 8)
+                                    | (4, 32)
+                                    | (5, 16)
+                                    | (7, 64)
+                                    | (11, 8)
+                                    | (22, 32)
+                                    | (44, 64)
+                            )
+                        });
+                        (
+                            Some(actual),
+                            Some(expected.is_some_and(|value| value == actual)),
+                        )
+                    }
+                }
+                _ => (None, None),
+            };
             Some(E2eReading {
                 profile: spec.profile,
                 counter: raw as u8,
                 data_id: spec.data_id,
+                crc,
+                crc_ok,
             })
         })
         .collect()
+}
+
+fn e2e_crc(profile: u32, data: &[u8]) -> Option<u64> {
+    Some(match profile {
+        1 => u64::from(crc8(data, 0x1D, 0xFF, 0xFF)),
+        2 => u64::from(crc8(data, 0x2F, 0xFF, 0xFF)),
+        4 => u64::from(crc32_p4(data)),
+        5 => u64::from(crc16_ccitt(data)),
+        7 | 44 => crc64_ecma(data),
+        11 => u64::from(crc8(data, 0x1D, 0xFF, 0xFF)),
+        22 => u64::from(crc32_p4(data)),
+        _ => return None,
+    })
+}
+
+fn crc8(data: &[u8], poly: u8, init: u8, xorout: u8) -> u8 {
+    let mut crc = init;
+    for byte in data {
+        crc ^= *byte;
+        for _ in 0..8 {
+            crc = if crc & 0x80 != 0 {
+                (crc << 1) ^ poly
+            } else {
+                crc << 1
+            };
+        }
+    }
+    crc ^ xorout
+}
+
+fn crc16_ccitt(data: &[u8]) -> u16 {
+    let mut crc = 0xFFFFu16;
+    for byte in data {
+        crc ^= u16::from(*byte) << 8;
+        for _ in 0..8 {
+            crc = if crc & 0x8000 != 0 {
+                (crc << 1) ^ 0x1021
+            } else {
+                crc << 1
+            };
+        }
+    }
+    crc
+}
+
+fn crc32_p4(data: &[u8]) -> u32 {
+    let mut crc = 0xFFFF_FFFFu32;
+    for byte in data {
+        crc ^= u32::from(*byte);
+        for _ in 0..8 {
+            crc = if crc & 1 != 0 {
+                (crc >> 1) ^ 0xF4AC_FB13
+            } else {
+                crc >> 1
+            };
+        }
+    }
+    crc ^ 0xFFFF_FFFF
+}
+
+fn crc64_ecma(data: &[u8]) -> u64 {
+    let mut crc = 0u64;
+    for byte in data {
+        crc ^= u64::from(*byte) << 56;
+        for _ in 0..8 {
+            crc = if crc & 0x8000_0000_0000_0000 != 0 {
+                (crc << 1) ^ 0x42F0_E1EB_A9EA_3693
+            } else {
+                crc << 1
+            };
+        }
+    }
+    crc
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -259,4 +369,36 @@ pub fn encode_payload(
         written += 1;
     }
     written
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn e2e_crc_known_vector() {
+        assert_eq!(crc8(b"123456789", 0x1D, 0xFF, 0xFF), 0x4B);
+        assert_eq!(crc64_ecma(b"123456789"), 0x6C40_DF5F_0B49_7347);
+    }
+
+    #[test]
+    fn decode_e2e_checks_profile1_crc() {
+        let mut plan = DecodePlan::default();
+        plan.e2e.push(E2ePlan {
+            profile: 1,
+            counter_bit_offset: 8,
+            counter_bits: 8,
+            data_id: Some(1),
+            crc_bit_offset: Some(0),
+            crc_bits: Some(8),
+        });
+        let mut payload = vec![0u8, 3, 0x11, 0x22];
+        payload[0] = crc8(&payload[1..], 0x1D, 0xFF, 0xFF);
+        let readings = decode_e2e(&plan, &payload);
+        assert_eq!(readings.len(), 1);
+        assert_eq!(readings[0].counter, 3);
+        assert_eq!(readings[0].crc_ok, Some(true));
+        payload[2] ^= 0x01;
+        assert_eq!(decode_e2e(&plan, &payload)[0].crc_ok, Some(false));
+    }
 }

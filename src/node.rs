@@ -125,6 +125,9 @@ struct NodeRuntime {
     someip_tcp: Vec<crate::script::SomeIpTcpSend>,
     /// SD offers queued by `someip_offer`.
     someip_offer: Vec<crate::script::SomeIpOffer>,
+    /// Auto-reply payloads queued by `someip_reply`.
+    someip_reply: Vec<crate::script::SomeIpReply>,
+    nm_timing: Vec<crate::script::NmTiming>,
     /// One slot per Timer handler, in handler order; named one-shot slots
     /// join on `set_timer`. `next_due_us == 0` means "not armed yet": the
     /// first step after start arms periodic slots one period out.
@@ -492,6 +495,8 @@ impl ScriptNode {
             someip: Vec::new(),
             someip_tcp: Vec::new(),
             someip_offer: Vec::new(),
+            someip_reply: Vec::new(),
+            nm_timing: Vec::new(),
             timers,
         };
         // `on start` handlers, in declaration order.
@@ -1468,6 +1473,8 @@ impl ScriptNode {
         rt.someip.append(&mut rt.vm.someip_outbox);
         rt.someip_tcp.append(&mut rt.vm.someip_tcp_outbox);
         rt.someip_offer.append(&mut rt.vm.someip_offer_outbox);
+        rt.someip_reply.append(&mut rt.vm.someip_reply_outbox);
+        rt.nm_timing.append(&mut rt.vm.nm_timing_outbox);
     }
 
     /// Hands the bus everything `emit_value` queued since the last call.
@@ -1529,6 +1536,20 @@ impl ScriptNode {
         self.runtime
             .as_mut()
             .map(|rt| std::mem::take(&mut rt.someip_offer))
+            .unwrap_or_default()
+    }
+
+    pub fn take_someip_reply(&mut self) -> Vec<crate::script::SomeIpReply> {
+        self.runtime
+            .as_mut()
+            .map(|rt| std::mem::take(&mut rt.someip_reply))
+            .unwrap_or_default()
+    }
+
+    pub fn take_nm_timing(&mut self) -> Vec<crate::script::NmTiming> {
+        self.runtime
+            .as_mut()
+            .map(|rt| std::mem::take(&mut rt.nm_timing))
             .unwrap_or_default()
     }
 

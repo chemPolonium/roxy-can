@@ -372,6 +372,8 @@ fn e2e_protection_structure_is_checked_without_authenticating() {
             payload: None,
             counter_offset: None,
             counter_length: None,
+            crc_offset: None,
+            crc_length: None,
         },
     );
     let (_, issues) = build_decode_plan(&comm, comm.frames.get(&FrameId(1)).unwrap(), 1);
@@ -419,6 +421,8 @@ fn profile_1_counter_position_enters_the_plan() {
             payload: None,
             counter_offset: None,
             counter_length: None,
+            crc_offset: None,
+            crc_length: None,
         },
     );
     let (plan, issues) = build_decode_plan(&comm, comm.frames.get(&FrameId(1)).unwrap(), 1);

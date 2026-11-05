@@ -793,6 +793,11 @@ pub struct E2eProtection {
     pub counter_offset: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub counter_length: Option<u32>,
+    /// CRC position when the document states it, in bits inside the PDU.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub crc_offset: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub crc_length: Option<u32>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -980,6 +985,10 @@ pub struct E2ePlan {
     pub counter_bit_offset: u32,
     pub counter_bits: u32,
     pub data_id: Option<u32>,
+    #[serde(default)]
+    pub crc_bit_offset: Option<u32>,
+    #[serde(default)]
+    pub crc_bits: Option<u32>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]

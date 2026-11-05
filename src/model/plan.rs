@@ -114,12 +114,21 @@ pub fn build_decode_plan(comm: &Comm, frame: &Frame, version: u32) -> (DecodePla
                 _ if matches!(protection.profile, Some(1 | 2)) => Some((8, 4)),
                 _ => None,
             };
+            let crc = match (protection.crc_offset, protection.crc_length) {
+                (Some(offset), Some(length)) if (8..=32).contains(&length) => {
+                    Some((offset, length))
+                }
+                _ if matches!(protection.profile, Some(1 | 2)) => Some((0, 8)),
+                _ => None,
+            };
             if let Some((offset, length)) = counter {
                 e2e.push(E2ePlan {
                     profile: protection.profile.unwrap_or(0),
                     counter_bit_offset: base.saturating_add(offset),
                     counter_bits: length,
                     data_id: protection.data_id,
+                    crc_bit_offset: crc.map(|(offset, _)| base.saturating_add(offset)),
+                    crc_bits: crc.map(|(_, length)| length),
                 });
             }
         }
