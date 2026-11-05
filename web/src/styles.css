@@ -308,7 +308,7 @@ select:disabled {
 /* Keep the toolbar from reflowing when a label changes (Start/Stop, Pause/
    Resume, Simulation/Replay). */
 .run-mode-menu > button {
-  min-width: 112px;
+  min-width: 94px;
   justify-content: space-between;
 }
 
