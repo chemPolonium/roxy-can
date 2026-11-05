@@ -61,12 +61,16 @@ fn ms_text(v: f64) -> String {
     format!("{:.2}", v / 1000.0)
 }
 
-/// The record draft minus a trailing `.asc`/`.blf` (any case), so the
-/// format combo can stamp its own extension on arm. A draft that names
-/// some other extension keeps it — the stem is the user's text.
+/// The record draft minus a trailing `.asc`/`.blf`/`.pcap`/`.pcapng` (any
+/// case), so the format combo can stamp its own extension on arm. A draft that
+/// names some other extension keeps it — the stem is the user's text.
 fn strip_record_ext(path: &str) -> &str {
     let lower = path.to_ascii_lowercase();
-    if lower.ends_with(".asc") || lower.ends_with(".blf") {
+    if lower.ends_with(".pcapng") {
+        &path[..path.len() - 7]
+    } else if lower.ends_with(".pcap") {
+        &path[..path.len() - 5]
+    } else if lower.ends_with(".asc") || lower.ends_with(".blf") {
         &path[..path.len() - 4]
     } else {
         path
@@ -129,7 +133,12 @@ fn path_key(path: &str) -> String {
 fn is_replay_log(path: &std::path::Path) -> bool {
     path.extension()
         .and_then(|ext| ext.to_str())
-        .is_some_and(|ext| ext.eq_ignore_ascii_case("asc") || ext.eq_ignore_ascii_case("blf"))
+        .is_some_and(|ext| {
+            matches!(
+                ext.to_ascii_lowercase().as_str(),
+                "asc" | "blf" | "pcap" | "pcapng"
+            )
+        })
 }
 
 fn direct_folder(path: &str) -> String {
@@ -230,6 +239,9 @@ pub struct App {
     /// Frontend workspace embedded in the project: tabs, cursors, column
     /// layout and splitters. Opaque to the core.
     pub web_workspace: Option<serde_json::Value>,
+    /// Panel pages stored in the project file, in `.rxpanel` format. The
+    /// shell merges them into its page book when it adopts the project.
+    pub panel_pages: Vec<serde_json::Value>,
     /// Bumped whenever a project is loaded so the web shell knows to adopt
     /// the file's workspace exactly once.
     pub workspace_rev: u64,
@@ -292,6 +304,8 @@ pub struct App {
     /// Ethernet buses and the ARXML matrices loaded for them. Separate index
     /// space from CAN and FlexRay.
     pub eth_buses: std::collections::BTreeMap<u8, std::sync::Arc<crate::eth::db::EthDb>>,
+    /// SOME/IP method/event layouts read alongside the Ethernet ARXML.
+    pub someip_services: crate::eth::arxml_service::ServiceCatalog,
     /// CAN ARXML descriptions bound to a bus, in binding order: each entry is
     /// (file path, cluster inside the matrix). A bus may carry several, which
     /// is how files from different suppliers describe one physical bus.
@@ -461,6 +475,7 @@ impl App {
             project_path: None,
             recent_projects: Vec::new(),
             web_workspace: None,
+            panel_pages: Vec::new(),
             workspace_rev: 0,
             reference: None,
             reference_rev: 0,
@@ -488,6 +503,7 @@ impl App {
             fr_buses: Default::default(),
             fr_names: Default::default(),
             eth_buses: Default::default(),
+            someip_services: Default::default(),
             can_arxml: Default::default(),
             fr_sources: Default::default(),
             eth_sources: Default::default(),
@@ -908,7 +924,9 @@ impl App {
     /// next Start.
     pub fn sync_record_path(&mut self) {
         let stem = strip_record_ext(self.record_path_buf.trim());
-        let ext = if self.record_format == 1 {
+        let ext = if self.record_format == 2 {
+            "pcap"
+        } else if self.record_format == 1 {
             "blf"
         } else {
             "asc"
@@ -998,7 +1016,7 @@ impl App {
         let path = path.trim().to_string();
         let p = std::path::Path::new(&path);
         if !p.is_file() || !is_replay_log(p) {
-            return Err(format!("not an ASC/BLF recording: {path}"));
+            return Err(format!("not an ASC/BLF/PCAP recording: {path}"));
         }
         if !self
             .replay_files

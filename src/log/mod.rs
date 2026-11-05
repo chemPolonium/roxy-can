@@ -1,6 +1,7 @@
 pub mod asc;
 pub mod blf;
 pub mod error;
+pub mod pcap;
 pub mod vec_stream;
 
 mod backing;
@@ -11,6 +12,7 @@ use crate::source::FrameStream;
 use asc::{AscStream, parse_asc_full};
 use blf::BlfStream;
 use error::LogError;
+use pcap::PcapStream;
 use vec_stream::VecStream;
 
 pub use asc::AscWriter;
@@ -21,6 +23,7 @@ pub use asc::AscWriter;
 pub enum LogFormat {
     Asc,
     Blf,
+    Pcap,
     Mf4,
 }
 
@@ -33,6 +36,7 @@ impl LogFormat {
         match ext.as_str() {
             "asc" => Some(LogFormat::Asc),
             "blf" => Some(LogFormat::Blf),
+            "pcap" | "pcapng" => Some(LogFormat::Pcap),
             "mf4" => Some(LogFormat::Mf4),
             _ => None,
         }
@@ -59,6 +63,7 @@ pub(crate) fn open_stream_at(
 ) -> Result<Box<dyn FrameStream>, LogError> {
     match LogFormat::detect(path) {
         Some(LogFormat::Blf) => Ok(Box::new(BlfStream::open(path)?)),
+        Some(LogFormat::Pcap) => Ok(Box::new(PcapStream::open(path)?)),
         Some(LogFormat::Mf4) => Err(LogError::UnsupportedFormat("MF4")),
         Some(LogFormat::Asc) => {
             let size = std::fs::metadata(path)?.len();
@@ -106,6 +111,8 @@ mod tests {
         assert_eq!(p("log.asc"), Some(LogFormat::Asc));
         assert_eq!(p("LOG.ASC"), Some(LogFormat::Asc));
         assert_eq!(p("capture.blf"), Some(LogFormat::Blf));
+        assert_eq!(p("capture.pcap"), Some(LogFormat::Pcap));
+        assert_eq!(p("capture.PCAPNG"), Some(LogFormat::Pcap));
         assert_eq!(p("capture.MF4"), Some(LogFormat::Mf4));
         assert_eq!(p("notes.txt"), None);
         assert_eq!(p("no_extension"), None);

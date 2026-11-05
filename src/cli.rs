@@ -70,6 +70,10 @@ pub struct CliOpts {
     pub duration_s: Option<f64>,
     /// Write the message-statistics CSV here when the run ends.
     pub stats_csv: Option<String>,
+    /// Collect `test()` assertions and fail the process on failures.
+    pub test_report: bool,
+    /// Write the test report as JSON here.
+    pub test_json: Option<String>,
 }
 
 /// Inputs of the `--check-script` headless gate: the scripts to check,
@@ -119,7 +123,7 @@ pub fn usage() -> &'static str {
                                  rows merged in log-time order
 
 run options
-  --replay <path>    log to replay (.asc or .blf)
+  --replay <path>    log to replay (.asc, .blf, .pcap or .pcapng)
   --project <path>   project (.rxproj) to simulate: generators and script
                      nodes run on the virtual bus (needs --duration)
   --profile <name>   overlay profiles/<name>.toml from the project
@@ -130,6 +134,8 @@ run options
                      (replay default: run to the end of the log;
                       project: required, a simulation has no end)
   --stats <path>     write the message-statistics CSV when the run ends
+  --test              collect test() assertions from the project run
+  --test-json <path> write the test report JSON (requires --test)
   --dbc <path>       DBC for --check-script's assembly checks (repeatable,
                      merged in order, first library wins on clashes)
   --node <name>      the DBC node name the checked scripts act as; turns
@@ -162,6 +168,8 @@ pub fn parse_args(args: &[String]) -> Result<Cli, String> {
     let mut speed = 1.0f64;
     let mut duration_s = None;
     let mut stats_csv = None;
+    let mut test_report = false;
+    let mut test_json = None;
     let mut scripts = Vec::new();
     // `--dbc` feeds either --check-script's assembly checks or --export-csv's
     // CAN decode; collect it once and route it by which command was asked for.
@@ -222,6 +230,8 @@ pub fn parse_args(args: &[String]) -> Result<Cli, String> {
                 duration_s = Some(d);
             }
             "--stats" => stats_csv = Some(value(args, &mut i, "--stats")?),
+            "--test" => test_report = true,
+            "--test-json" => test_json = Some(value(args, &mut i, "--test-json")?),
             other => return Err(format!("unknown flag `{other}`")),
         }
         i += 1;
@@ -331,6 +341,12 @@ pub fn parse_args(args: &[String]) -> Result<Cli, String> {
     if replay.is_none() && project.is_none() {
         return Err("`--replay <log>` or `--project <project>` is required".to_string());
     }
+    if (test_report || test_json.is_some()) && project.is_none() {
+        return Err("`--test` requires `--project`".to_string());
+    }
+    if test_json.is_some() && !test_report {
+        return Err("`--test-json` requires `--test`".to_string());
+    }
     Ok(Cli::Run(CliOpts {
         replay,
         project,
@@ -338,6 +354,8 @@ pub fn parse_args(args: &[String]) -> Result<Cli, String> {
         speed,
         duration_s,
         stats_csv,
+        test_report,
+        test_json,
     }))
 }
 
@@ -459,6 +477,32 @@ pub fn run(opts: &CliOpts) -> Result<String, String> {
     }
     app.stop();
 
+    let mut test_failed = 0usize;
+    let mut test_rows: Vec<serde_json::Value> = Vec::new();
+    if opts.test_report {
+        for node in app.snap.nodes.iter() {
+            for test in &node.tests {
+                if test.failures > 0 {
+                    test_failed += 1;
+                }
+                test_rows.push(serde_json::json!({
+                    "node": node.name,
+                    "name": test.name,
+                    "runs": test.runs,
+                    "failures": test.failures,
+                }));
+            }
+        }
+        if let Some(path) = &opts.test_json {
+            let body = serde_json::json!({
+                "tests": test_rows,
+                "failed": test_failed,
+            });
+            std::fs::write(path, serde_json::to_string_pretty(&body).unwrap())
+                .map_err(|error| format!("{path}: {error}"))?;
+        }
+    }
+
     if let Some(csv) = &opts.stats_csv {
         app.export_stats_csv(0, csv);
         if !app.status.starts_with("exported") {
@@ -493,6 +537,25 @@ pub fn run(opts: &CliOpts) -> Result<String, String> {
     ));
     if let Some(csv) = &opts.stats_csv {
         report.push_str(&format!("  stats csv  : {csv}\n"));
+    }
+    if opts.test_report {
+        report.push_str(&format!(
+            "  tests      : {} run, {} failed\n",
+            test_rows.len(),
+            test_failed
+        ));
+        for row in &test_rows {
+            report.push_str(&format!(
+                "    {} / {}: {} run, {} failed\n",
+                row["node"].as_str().unwrap_or(""),
+                row["name"].as_str().unwrap_or(""),
+                row["runs"].as_u64().unwrap_or(0),
+                row["failures"].as_u64().unwrap_or(0),
+            ));
+        }
+        if test_failed > 0 {
+            return Err(report);
+        }
     }
     Ok(report)
 }

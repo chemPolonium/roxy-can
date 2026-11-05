@@ -27,6 +27,26 @@ fn no_arguments_open_the_window() {
 }
 
 #[test]
+fn test_flags_need_a_project_and_produce_a_report() {
+    let cli = parse_args(&flag_set(&[
+        "--project",
+        "p.rxproj",
+        "--duration",
+        "1",
+        "--test",
+        "--test-json",
+        "out.json",
+    ]))
+    .unwrap();
+    let Cli::Run(opts) = cli else {
+        panic!("expected run");
+    };
+    assert!(opts.test_report);
+    assert_eq!(opts.test_json.as_deref(), Some("out.json"));
+    assert!(parse_args(&flag_set(&["--test"])).is_err());
+}
+
+#[test]
 fn help_wins_over_the_rest_of_the_line() {
     for form in ["-h", "--help"] {
         let cli = parse_args(&flag_set(&[form, "--nonsense"])).unwrap();
@@ -361,6 +381,8 @@ fn a_cli_replay_runs_the_log_and_exports() {
         speed: 50.0, // a 1 s log finishes in ~20 ms of wall clock
         duration_s: None,
         stats_csv: Some(stats.clone()),
+        test_report: false,
+        test_json: None,
     })
     .unwrap();
 
@@ -390,6 +412,8 @@ fn the_duration_flag_stops_before_the_log_ends() {
         speed: 1.0,
         duration_s: Some(0.05),
         stats_csv: None,
+        test_report: false,
+        test_json: None,
     })
     .unwrap();
     assert!(
@@ -419,6 +443,8 @@ fn a_missing_log_reports_instead_of_running() {
         speed: 1.0,
         duration_s: None,
         stats_csv: None,
+        test_report: false,
+        test_json: None,
     })
     .unwrap_err();
     assert!(err.contains("log load failed"), "{err}");
@@ -460,6 +486,8 @@ fn a_project_simulates_headless_until_the_duration_stops_it() {
         speed: 1.0,
         duration_s: Some(0.2),
         stats_csv: Some(stats.clone()),
+        test_report: false,
+        test_json: None,
     })
     .unwrap();
     assert!(report.contains("simulation finished"), "{report}");
@@ -666,6 +694,8 @@ fn a_project_node_script_drives_a_headless_simulation() {
         speed: 1.0,
         duration_s: Some(0.3),
         stats_csv: None,
+        test_report: false,
+        test_json: None,
     })
     .unwrap();
     let frames: u64 = report
@@ -722,6 +752,8 @@ fn a_profile_overlay_drives_a_muted_project() {
         // second leaves margin even when parallel tests slow the laps.
         duration_s: Some(0.5),
         stats_csv: None,
+        test_report: false,
+        test_json: None,
     })
     .unwrap();
     assert!(
@@ -769,6 +801,8 @@ fn a_bad_profile_aborts_the_run_before_traffic() {
         speed: 1.0,
         duration_s: Some(0.2),
         stats_csv: None,
+        test_report: false,
+        test_json: None,
     })
     .unwrap_err();
     assert!(err.contains("EngineEcu"), "{err}");

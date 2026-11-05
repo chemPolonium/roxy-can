@@ -187,7 +187,7 @@ on panel_action("Start sequence") {
 ```
 
 动作可以带一个数值参数：第二个标识符是处理器里的局部变量，接收控件发来的值。
-按钮用属性栏的 **Argument** 发送固定值（缺省按 0 发送），Setpoint 控件提交时发送输入值；
+**Script action** 按钮用属性栏的 **Argument** 发送固定值（缺省按 0 发送），Setpoint 控件提交时发送输入值；
 只有直接调用 `run_panel_action` 且不带 `value` 时参数才是 `nil`（用 `defined(value)` 判断）。
 
 ```c
@@ -200,7 +200,7 @@ on panel_action("Set speed", value) {
 }
 ```
 
-面板按钮编辑时把 Action 选为 **Script action**，再从下拉里选动作名（也可以手写）；
+面板按钮编辑时把 **On click** 选为 **Script action**，再从下拉里选动作名（也可以手写）；
 Setpoint 控件的 **Script action** 字段会在写入后再触发同名动作。
 
 ### on message \<id\>
@@ -284,6 +284,24 @@ on fr 0 slot 13 {
 这种处理器能"听 FlexRay、答 CAN"（网关形状），也能用 `fr_send` / `set_fr_sig` 直接动 FlexRay。
 
 `send(frame_id())` 在这种处理器里是**编译错误**——槽号和 CAN id 是两套编号，把槽号发上 CAN 是最容易犯的错，静态检查直接拦下。
+
+### on someip \<service\> \<method\>
+
+收到解码后的 SOME/IP 消息时触发，按 service/method 匹配：
+
+```c
+on someip 0x1234 0x8001 {
+    print(someip_client(), someip_session(), someip_return(), someip_len());
+    if (someip_byte(0) == 1) {
+        sys_set("Bench::Ready", 1);
+    }
+}
+```
+
+- `someip_service()` / `someip_method()` / `someip_client()` / `someip_session()` / `someip_return()`；
+- `someip_len()` / `someip_byte(index)` 读 payload；
+- 处理器里可以 `someip_send`、`sys_set`、`set_timer`、`send`；
+- 只对已解码的 SOME/IP 消息运行，SD 消息不进入该事件。
 
 ### on errorFrame
 
@@ -410,6 +428,51 @@ send_frame(closeCmd);
 - `send_frame` 一次只发这一帧：CAN 走节点自己的路（仍受节点角色开关约束），FlexRay/Ethernet 只注入本会话，端口边界与既有脚本一致。
 - 字段名拼错、消息不存在或长度不合法时，整帧丢弃并在节点日志写明原因。
 - `frame(...)` 的路径与已写字段会在节点启动时按 DBC/集群描述校验，拼错会进 `[check]`。能在 CAN 目录里解析的 `send_frame` 会折算成数值 id 并进入静态发送集（`--check-script` 与编辑器收发 tab 都能看到，来源写作 `<frame Bus.Frame>`）；FlexRay/Ethernet 路径没有数值发送集，只做名字校验。编辑器在 `frame(` 后补全 `Bus.Frame` 路径，并对源码里已识别的 frame 变量补全其信号字段。
+
+### someip_send(bus, service, method, client, session, type, payload)
+
+从脚本发一条 SOME/IP UDP 报文：
+
+```c
+let b = bytes(2);
+b[0] = 0x11;
+b[1] = 0x22;
+someip_send(0, 0x1234, 0x8001, 7, 0, 0x00, b);
+```
+
+- `bus` 是工程里的 ETH 路号；
+- `session=0` 由核心自动递增；
+- payload 可用 `bytes(n)` 或 `array(n)`；
+- 有实时 Npcap 口时走线上，否则只注入会话；
+- 发送仍受测量状态约束，`on start` 里不发。
+
+### someip_tcp_send(host, port, service, method, client, session, type, payload)
+
+从脚本发一条 SOME/IP over TCP：
+
+```c
+someip_tcp_send("127.0.0.1", 30501, 0x1234, 0x8001, 7, 0, 0x00, b);
+```
+
+用本机 TCP socket 发 16 字节 SOME/IP 头 + payload；连接失败或写超时写进 Write。TCP 接收仍走现有 `SomeIpTcp` 重组。
+
+### someip_offer(bus, service, instance, ttl, major, minor)
+
+发一条 SOME/IP-SD OfferService；`ttl=0` 发 StopOffer：
+
+```c
+on timer 1000 {
+    someip_offer(0, 0x1234, 1, 3, 1, 0);
+}
+```
+
+- `bus` 是 ETH 路号；
+- 固定从 10.0.0.1:30490 发到 10.0.0.2:30490；
+- TTL 由脚本按 timer 周期维护；
+- 有实时口走线上，否则注入会话；
+- 本地 Offer 存在时，收到同 service/instance 的 Subscribe 会自动回 SubscribeAck（eventgroup 原样带回，TTL=3）；`ttl=0` 后不再应答。
+- 订阅表按 service/instance/eventgroup 保存远端 endpoint；脚本发 `type=0x02` 的 event 时，会向匹配订阅者的 IP:port 逐个转发。
+
 
 ### sig(id, "Name")
 

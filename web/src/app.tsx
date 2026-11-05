@@ -21,12 +21,19 @@ import {
   sendCommand,
 } from "./api";
 import { triggerDownload } from "./download";
+import {
+  buildTriggerFile,
+  parseTriggerFile,
+  resolveTriggerFile,
+  triggerEditOf,
+} from "./triggerFile";
 import { Activity } from "./components/Activity";
 import { BusesModal } from "./components/BusesModal";
 import { BusStatsPanel } from "./components/BusStatsPanel";
 import { CursorAnalysis } from "./components/CursorAnalysis";
 import { ColumnsMenu } from "./components/ColumnsMenu";
 import { CommandPalette } from "./components/CommandPalette";
+import { MenuButton } from "./components/MenuButton";
 import type { PaletteCommand } from "./components/CommandPalette";
 import { DataPanel } from "./components/DataPanel";
 import { DbcExplorer } from "./components/DbcExplorer";
@@ -52,6 +59,8 @@ import {
   type ReferenceColumns,
   type ReferenceData,
 } from "./components/ReferenceModal";
+import { ReplayChannelMap } from "./components/ReplayChannelMap";
+import { replayMapTotals } from "./replayTargets";
 import {
   SignalChart,
   cursorLabels,
@@ -61,6 +70,7 @@ import {
 } from "./components/SignalChart";
 import { SignalPicker } from "./components/SignalPicker";
 import { SpecPanel } from "./components/SpecPanel";
+import { SomeIpPanel } from "./components/SomeIpPanel";
 import type { ChartYMode } from "./chartScale";
 import { ScriptsModal } from "./components/ScriptsModal";
 import { StatePanel } from "./components/StatePanel";
@@ -103,6 +113,8 @@ import {
 } from "./traceLayout";
 import {
   defaultPanelBook,
+  exportPanelFile,
+  mergeProjectPanels,
   panelSetpointTarget,
   parsePanelBook,
   parsePanelHex,
@@ -123,7 +135,7 @@ import {
   type PanelWriteTarget,
 } from "./panelBinding";
 
-type RightTab = "statistics" | "bus" | "spec" | "activity";
+type RightTab = "statistics" | "bus" | "spec" | "someip" | "activity";
 type MainView = "trace" | "messages" | "panel";
 type ChartTab = "rate" | "signals" | "monitor" | "data" | "state";
 type Drag = "main" | "right" | null;
@@ -162,7 +174,7 @@ interface SavedWorkspace extends Partial<SavedView> {
 
 
 function normalizeView(saved: Partial<SavedView>): Partial<SavedView> {
-  const tabs: RightTab[] = ["statistics", "bus", "spec", "activity"];
+  const tabs: RightTab[] = ["statistics", "bus", "spec", "someip", "activity"];
   const chartTabs: ChartTab[] = [
     "rate",
     "signals",
@@ -502,6 +514,8 @@ export function App() {
   const [catalog, setCatalog] = useState<Catalog | null>(null);
   const [catalogLoading, setCatalogLoading] = useState(false);
   const [catalogError, setCatalogError] = useState("");
+  const [catalogKey, setCatalogKey] = useState("");
+  const catalogKeyRef = useRef("");
   const [busesOpen, setBusesOpen] = useState(false);
   const [generatorOpen, setGeneratorOpen] = useState(false);
   const [triggersOpen, setTriggersOpen] = useState(false);
@@ -513,13 +527,10 @@ export function App() {
   const [drag, setDrag] = useState<Drag>(null);
   const [theme, setTheme] = useState<Theme>(loadTheme);
   const [menuOpen, setMenuOpen] = useState(false);
-  const [setupOpen, setSetupOpen] = useState(false);
   const [runModeOpen, setRunModeOpen] = useState(false);
   const brandMenuRef = useRef<HTMLDivElement>(null);
-  const setupMenuRef = useRef<HTMLDivElement>(null);
   const runModeMenuRef = useRef<HTMLDivElement>(null);
   const brandTriggerRef = useRef<HTMLButtonElement | null>(null);
-  const setupTriggerRef = useRef<HTMLButtonElement | null>(null);
   const runModeTriggerRef = useRef<HTMLButtonElement | null>(null);
   const [signalView, setSignalView] = useState<SignalView>(
     savedView.signalView ?? { windowS: 30, endS: null },
@@ -550,6 +561,7 @@ export function App() {
   const [eventOpen, setEventOpen] = useState(false);
   const [workspaceHydrated, setWorkspaceHydrated] = useState(false);
   const appliedWorkspaceRev = useRef(-1);
+  const appliedPanelPages = useRef("");
   const appliedReferenceRev = useRef(-1);
   const uiFps = useUiFps();
   const workspaceRef = useRef<HTMLDivElement>(null);
@@ -645,6 +657,23 @@ export function App() {
     setWorkspaceHydrated(true);
   }, [state?.workspaceRev]);
 
+  // Panel pages live in the project file as `.rxpanel` documents. Merge them
+  // into the book once per project revision, skipping names the book already
+  // has, so opening a project restores its pages without a manual Import.
+  const panelPagesSignature = useMemo(
+    () => JSON.stringify(state?.panelPages ?? []),
+    [state?.panelPages],
+  );
+  useEffect(() => {
+    if (!workspaceHydrated || !state) return;
+    const pages = state.panelPages ?? [];
+    if (pages.length === 0) return;
+    const key = `${state.projectPath}|${panelPagesSignature}`;
+    if (appliedPanelPages.current === key) return;
+    appliedPanelPages.current = key;
+    setPanelBook((book) => mergeProjectPanels(book, pages));
+  }, [workspaceHydrated, state?.projectPath, panelPagesSignature]);
+
   // The core owns the derived list; mirror it for the editor.
   const derivedSignature = useMemo(
     () => JSON.stringify(state?.derived ?? []),
@@ -726,7 +755,6 @@ export function App() {
           traceColumns,
           layout,
           readSignals,
-          panelBook,
         },
       }).catch(() => {});
     }, 350);
@@ -745,7 +773,6 @@ export function App() {
     traceColumns,
     layout,
     readSignals,
-    panelBook,
     state?.workspaceRev,
   ]);
 
@@ -874,27 +901,6 @@ export function App() {
   }, [menuOpen]);
 
   useEffect(() => {
-    if (!setupOpen) return;
-    const close = (event: PointerEvent) => {
-      if (
-        !(event.target instanceof Element) ||
-        !event.target.closest(".top-menu")
-      ) {
-        setSetupOpen(false);
-      }
-    };
-    const escape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setSetupOpen(false);
-    };
-    window.addEventListener("pointerdown", close);
-    window.addEventListener("keydown", escape);
-    return () => {
-      window.removeEventListener("pointerdown", close);
-      window.removeEventListener("keydown", escape);
-    };
-  }, [setupOpen]);
-
-  useEffect(() => {
     if (!runModeOpen) return;
     const close = (event: PointerEvent) => {
       if (
@@ -921,13 +927,6 @@ export function App() {
       ?.querySelector<HTMLButtonElement>("button:not(:disabled)")
       ?.focus();
   }, [menuOpen]);
-
-  useEffect(() => {
-    if (!setupOpen) return;
-    setupMenuRef.current
-      ?.querySelector<HTMLButtonElement>("button:not(:disabled)")
-      ?.focus();
-  }, [setupOpen]);
 
   useEffect(() => {
     if (!runModeOpen) return;
@@ -1388,7 +1387,7 @@ export function App() {
   };
 
   // Trigger jumps walk the *view*, not the playhead: after jumping to a
-  // marker the next pair is relative to where the user is looking.
+  // fired edge the next pair is relative to where the user is looking.
   const markerReferenceUs =
     signalView.endS !== null
       ? Math.round((signalView.endS - signalView.windowS / 2) * 1e6)
@@ -1396,20 +1395,18 @@ export function App() {
 
   const prevTriggerUs = useMemo(() => {
     let best: number | null = null;
-    for (const marker of state?.markers ?? []) {
-      const t = Math.round(marker * 1e6);
-      if (t < markerReferenceUs - 1) best = t;
+    for (const fire of state?.triggerFires ?? []) {
+      if (fire.atUs < markerReferenceUs - 1) best = fire.atUs;
     }
     return best;
-  }, [markerReferenceUs, state?.markers]);
+  }, [markerReferenceUs, state?.triggerFires]);
 
   const nextTriggerUs = useMemo(() => {
-    for (const marker of state?.markers ?? []) {
-      const t = Math.round(marker * 1e6);
-      if (t > markerReferenceUs + 1) return t;
+    for (const fire of state?.triggerFires ?? []) {
+      if (fire.atUs > markerReferenceUs + 1) return fire.atUs;
     }
     return null;
-  }, [markerReferenceUs, state?.markers]);
+  }, [markerReferenceUs, state?.triggerFires]);
 
   const resetLayout = () => {
     setLayout(DEFAULT_LAYOUT);
@@ -1559,11 +1556,14 @@ export function App() {
       },
     });
 
+  const projectPanels = () =>
+    panelBook.pages.map((page) => JSON.parse(exportPanelFile(page)) as unknown);
+
   const saveProject = async (path: string | null) => {
     // Flush the current view before the file is written; the debounced sync
     // may still be waiting and would otherwise save the previous workspace.
     await pushWorkspace().catch(() => {});
-    await run({ type: "save_project", path });
+    await run({ type: "save_project", path, panels: projectPanels() });
   };
 
   const saveProjectAs = async () => {
@@ -1576,7 +1576,7 @@ export function App() {
       initialPath: projectFolder,
       initialName: `${base}.rxproj`,
     });
-    if (path) await run({ type: "save_project", path });
+    if (path) await run({ type: "save_project", path, panels: projectPanels() });
   };
 
   const openProjectPicker = async () => {
@@ -1617,7 +1617,7 @@ export function App() {
     const path = await pickHost({
       mode: "file",
       title: "Add replay recording",
-      accept: ["asc", "blf"],
+      accept: ["asc", "blf", "pcap", "pcapng"],
       initialPath: projectFolder,
     });
     if (path) void run({ type: "add_replay_file", path });
@@ -1632,10 +1632,22 @@ export function App() {
     if (folder) void run({ type: "add_replay_folder", path: folder });
   };
 
+  const catalogBusKey = (state?.buses ?? [])
+    .map(
+      (bus) =>
+        `${bus.index}:${bus.kind}:${bus.descriptions
+          .map((description) => description.path)
+          .join(",")}`,
+    )
+    .join("|");
+  catalogKeyRef.current = catalogBusKey;
+
   const loadCatalog = async () => {
     setCatalogLoading(true);
     try {
-      setCatalog(await fetchCatalog());
+      const next = await fetchCatalog();
+      setCatalog(next);
+      setCatalogKey(catalogKeyRef.current);
       setCatalogError("");
     } catch (e) {
       setCatalogError(describeError(e));
@@ -1657,10 +1669,13 @@ export function App() {
     }
   }, [sysvarsOpen, catalog, catalogLoading]);
 
-  // Panel setpoints pick from the catalog's writable signals.
+  // Panel setpoints pick from the catalog's writable signals. The catalog is
+  // also invalidated when buses/descriptions change: a Panel opened before
+  // the DBC finished loading must not keep an empty message list.
   useEffect(() => {
-    if (mainView === "panel" && !catalog && !catalogLoading) void loadCatalog();
-  }, [mainView, catalog, catalogLoading]);
+    if (mainView !== "panel" || catalogLoading) return;
+    if (!catalog || catalogKey !== catalogBusKey) void loadCatalog();
+  }, [mainView, catalog, catalogLoading, catalogKey, catalogBusKey]);
 
   const openPicker = () => {
     setSessionOpen(false);
@@ -1858,6 +1873,18 @@ export function App() {
     closeDialogs();
     setSessionView("replay");
     setSessionOpen(true);
+  };
+  const openReplayChannels = () => {
+    openReplay();
+    // The dialog mounts a frame after the state change; bring the map into
+    // view when a long recordings list would otherwise push it below the fold.
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        document
+          .getElementById("replay-channel-map")
+          ?.scrollIntoView({ block: "nearest" });
+      });
+    });
   };
 
   const openHelp = () => {
@@ -2107,32 +2134,138 @@ export function App() {
     void run({ type: "remove_entry", ch: entry.channel, id: entry.id });
   const simulateBus = (ch: number) =>
     void run({ type: "simulate_bus_nodes", ch });
-  const addTrigger = (kind: string) =>
-    void run({ type: "add_trigger", kind });
+  const addTrigger = (
+    kind: string,
+    seed?: {
+      ch?: number;
+      id?: number;
+      ext?: boolean;
+      bus?: number;
+      slot?: number;
+      signal_key?: string;
+    },
+  ) => void run({ type: "add_trigger", kind, ...seed });
   const setTriggerEnabled = (index: number, on: boolean) =>
     void run({ type: "set_trigger_enabled", index, on });
   const removeTrigger = (index: number) =>
     void run({ type: "remove_trigger", index });
   const rearmTriggers = () => void run({ type: "rearm_triggers" });
-  const editTrigger = (edit: TriggerEdit) =>
-    void run({
-      type: "edit_trigger",
-      index: edit.index,
-      kind: edit.kind,
-      ch: edit.ch,
-      id: edit.id,
-      ext: edit.ext,
-      signal: edit.signal,
-      threshold: edit.threshold,
-      rising: edit.rising,
-      bus: edit.bus,
-      slot: edit.slot,
-      key: edit.key,
-      derived_id: edit.derivedId,
-      action: edit.action,
-      send_ch: edit.sendCh,
-      send_id: edit.sendId,
+  const rearmTrigger = (index: number) =>
+    void run({ type: "rearm_trigger", index });
+  const editTriggerCommand = (edit: TriggerEdit): Command => ({
+    type: "edit_trigger",
+    index: edit.index,
+    kind: edit.kind,
+    ch: edit.ch,
+    id: edit.id,
+    ext: edit.ext,
+    signal: edit.signal,
+    threshold: edit.threshold,
+    rising: edit.rising,
+    bus: edit.bus,
+    slot: edit.slot,
+    key: edit.key,
+    derived_id: edit.derivedId,
+    action: edit.action,
+    send_ch: edit.sendCh,
+    send_id: edit.sendId,
+    sys_var_key: edit.sysVarKey,
+    sys_var_value: edit.sysVarValue,
+    script_name: edit.scriptName,
+    script_value: edit.scriptValue,
+    send_frame: edit.sendFrame,
+    send_data: edit.sendData,
+    someip_method: edit.someipMethod ?? 0,
+    someip_client: edit.someipClient ?? 0,
+    someip_session: edit.someipSession ?? 0,
+    someip_type: edit.someipType ?? 0,
+    cond_someip_method: edit.condSomeipMethod,
+    cond_someip_type: edit.condSomeipType,
+    someip_values: edit.someipValues,
+    offset: edit.offset,
+    mask: edit.mask,
+    value: edit.value,
+    vlan: edit.vlan,
+    pre_frames: edit.preFrames,
+    post_frames: edit.postFrames,
+    cooldown_ms: edit.cooldownMs,
+    max_fires: edit.maxFires,
+  });
+  const editTrigger = (edit: TriggerEdit) => void run(editTriggerCommand(edit));
+
+  const exportTriggers = () => {
+    const file = buildTriggerFile(
+      state?.triggers ?? [],
+      state?.buses ?? [],
+    );
+    const blob = new Blob([JSON.stringify(file, null, 2)], {
+      type: "application/json",
     });
+    const url = URL.createObjectURL(blob);
+    triggerDownload(url, `triggers-${new Date().toISOString().slice(0, 10)}.rxtriggers`);
+    window.setTimeout(() => URL.revokeObjectURL(url), 0);
+    showToast(`Exported ${file.triggers.length} rules`);
+  };
+
+  const importTriggers = async (text: string) => {
+    let raw: unknown;
+    try {
+      raw = JSON.parse(text);
+    } catch {
+      showToast("That file is not valid JSON");
+      return;
+    }
+    const parsed = parseTriggerFile(raw);
+    if ("error" in parsed) {
+      showToast(parsed.error);
+      return;
+    }
+    const resolved = resolveTriggerFile(
+      parsed.file,
+      state?.buses ?? [],
+    );
+    if (resolved.rules.length === 0) {
+      showToast(resolved.skipped[0] ?? "No rules could be imported");
+      return;
+    }
+    const base = state?.triggers.length ?? 0;
+    for (let i = 0; i < resolved.rules.length; i += 1) {
+      const rule = resolved.rules[i];
+      await run({ type: "add_trigger", kind: rule.kind });
+      await run(editTriggerCommand(triggerEditOf(rule, base + i)));
+      await run({
+        type: "set_trigger_enabled",
+        index: base + i,
+        on: rule.enabled,
+      });
+    }
+    const suffix = resolved.skipped.length
+      ? ` · skipped ${resolved.skipped.length}: ${resolved.skipped.join("; ")}`
+      : "";
+    showToast(`Imported ${resolved.rules.length} rules${suffix}`);
+  };
+  const triggerFromTrace = (frame: Frame) => {
+    if (frame.kind === "can") {
+      addTrigger("id", { ch: frame.bus, id: frame.id, ext: frame.extended });
+      showToast("Trigger added for this CAN ID");
+    } else if (frame.kind === "fr") {
+      addTrigger("fr_frame", { bus: frame.bus, slot: frame.id });
+      showToast("Trigger added for this FlexRay slot");
+    } else {
+      showToast("Triggers watch CAN and FlexRay frames; Ethernet has no condition yet");
+      return;
+    }
+    openTriggers();
+  };
+  const triggerFromSignal = (key: string) => {
+    if (!key.startsWith("sig:can:") && !key.startsWith("sig:fr:")) {
+      showToast("Triggers watch CAN and FlexRay signals; Ethernet has no condition yet");
+      return;
+    }
+    addTrigger("signal", { signal_key: key });
+    showToast("Trigger added for this signal");
+    openTriggers();
+  };
   const setTriggerLimits = (limits: TriggerLimits) =>
     void run({
       type: "set_trigger_limits",
@@ -2207,7 +2340,7 @@ export function App() {
     state?.buses.filter((bus) => bus.can?.attached || bus.flexray?.attached)
       .length ?? 0;
   const replaying = state?.runMode === "Replay";
-  const runModeLabel = replaying ? "Offline" : "Online";
+  const runModeLabel = replaying ? "Replay" : "Simulation";
   const recordActive = Boolean(state?.recording) && measuring;
   const recordArmed = Boolean(state?.recording) && !measuring;
   const projectFolder = (() => {
@@ -2255,7 +2388,7 @@ export function App() {
       .replace(/\{time\}/g, time)
       .replace(/\{index\}/g, "001");
     const stem = hasCodes ? expanded : `${expanded}_${date}_${time}`;
-    return `${stem}.${recordFormat === 1 ? "blf" : "asc"}`;
+    return `${stem}.${recordFormat === 2 ? "pcap" : recordFormat === 1 ? "blf" : "asc"}`;
   };
   const pushRecordSettings = () =>
     void run({
@@ -2333,6 +2466,11 @@ export function App() {
     state?.replayPosUs != null && state?.replayTotalUs != null
       ? `${(state.replayPosUs / 1e6).toFixed(2)} / ${(state.replayTotalUs / 1e6).toFixed(2)} s`
       : "";
+  // Channels this replay carries but drops because no bus answers to their
+  // number. The map itself lives in Setup → Replay; the bar only flags it.
+  const replayDropped = replayMapTotals(
+    state?.replayMap ?? { can: [], fr: [], eth: [] },
+  ).dropped;
   const chartSeries = useMemo(
     () => signals.filter((signal) => !signal.read),
     [signals],
@@ -2814,6 +2952,7 @@ export function App() {
           onMoveCursor={moveChartCursor}
           onClearCursors={clearChartCursors}
           onSignalAction={chartSignalAction}
+          onTriggerSignal={triggerFromSignal}
           fullscreen={chartFullscreen}
           measuring={measuring}
           paused={state?.tracePaused ?? false}
@@ -2942,6 +3081,34 @@ export function App() {
           data,
           ...panelPhysical(frame),
         });
+      } else if (frame.protocol === "someip") {
+        void run({
+          type: "panel_send_someip",
+          bus: frame.bus,
+          service: frame.service,
+          method: frame.method,
+          client: frame.client,
+          session: frame.session,
+          message_type: frame.messageType,
+          data,
+          transport: frame.transport ?? "udp",
+          host: frame.host ?? "127.0.0.1",
+          port: frame.port ?? 30490,
+          values: frame.mode === "physical" && frame.values?.length
+            ? Object.fromEntries(
+                frame.values
+                  .filter((entry) => entry.text === undefined)
+                  .map((entry) => [entry.name, entry.value]),
+              )
+            : undefined,
+          texts: frame.mode === "physical" && frame.values?.length
+            ? Object.fromEntries(
+                frame.values
+                  .filter((entry) => entry.text !== undefined)
+                  .map((entry) => [entry.name, entry.text ?? ""]),
+              )
+            : undefined,
+        });
       } else {
         void run({
           type: "panel_send_eth_frame",
@@ -2961,12 +3128,6 @@ export function App() {
       }
       void run({ type: "run_panel_action", name, value: widget.argument });
       return;
-    }
-    const writes = (widget.writes ?? [])
-      .map((write) => ({ source: write.source.trim(), value: write.value }))
-      .filter((write) => write.source.length > 0);
-    if (writes.length > 0) {
-      void run({ type: "panel_write_signals", writes });
     }
   };
 
@@ -2994,9 +3155,9 @@ export function App() {
       signals,
       sysvars: state?.sysvars ?? [],
       writeTargets: pageWriteTargets,
-      frameBuses: (catalog?.channels ?? [])
-        .filter((channel) => channel.kind === "can")
-        .map((channel) => ({ index: channel.index, name: channel.name })),
+      frameBuses: (state?.buses ?? [])
+        .filter((bus) => bus.kind === "can")
+        .map((bus) => ({ index: bus.index, name: bus.name })),
       frBuses: (state?.buses ?? [])
         .filter((bus) => bus.kind === "flexray")
         .map((bus) => ({ index: bus.index, name: bus.name })),
@@ -3229,7 +3390,7 @@ export function App() {
             </button>
             {menuOpen && (
               <div
-                class="brand-menu-panel"
+                class="app-menu app-menu-brand"
                 id="brand-menu-panel"
                 role="menu"
                 ref={brandMenuRef}
@@ -3374,20 +3535,13 @@ export function App() {
               </span>
               {recordActive && <span class="rec-badge">REC</span>}
             </h1>
-            <button
-              type="button"
+            <div
               class="brand-project"
               title={
                 state?.projectPath
-                  ? `${state.projectPath} — project menu`
-                  : "Project menu"
+                  ? state.projectPath
+                  : "Open the R menu to open or create a project"
               }
-              aria-haspopup="menu"
-              aria-expanded={menuOpen}
-              onClick={(event) => {
-                brandTriggerRef.current = event.currentTarget;
-                setMenuOpen((open) => !open);
-              }}
             >
               <span>
                 {state
@@ -3402,10 +3556,7 @@ export function App() {
                   *
                 </span>
               )}
-              <span class="brand-caret" aria-hidden="true">
-                ▾
-              </span>
-            </button>
+            </div>
           </div>
         </div>
         <div class="actions">
@@ -3449,8 +3600,8 @@ export function App() {
               aria-expanded={runModeOpen}
               title={
                 replaying
-                  ? "Offline plays the active recording from Setup"
-                  : "Online runs generators and follows the bus mode"
+                  ? "Replay plays the active recording; choose files in Setup"
+                  : "Simulation runs generators and follows the bus mode"
               }
               onClick={(event) => {
                 runModeTriggerRef.current = event.currentTarget;
@@ -3464,7 +3615,7 @@ export function App() {
             </button>
             {runModeOpen && (
               <div
-                class="top-menu-panel mode-panel"
+                class="app-menu app-menu-top mode-panel"
                 role="menu"
                 aria-label="Run mode"
                 ref={runModeMenuRef}
@@ -3487,8 +3638,8 @@ export function App() {
                     {!replaying ? "✓" : ""}
                   </span>
                   <span class="menu-copy">
-                    <strong>Online</strong>
-                    <small>Run generators and analyse traffic.</small>
+                    <strong>Simulation</strong>
+                    <small>Run generators and analyse live bus traffic.</small>
                   </span>
                 </button>
                 <button
@@ -3501,7 +3652,7 @@ export function App() {
                     {replaying ? "✓" : ""}
                   </span>
                   <span class="menu-copy">
-                    <strong>Offline</strong>
+                    <strong>Replay</strong>
                     <small>Play the active recording; choose files in Setup.</small>
                   </span>
                 </button>
@@ -3529,89 +3680,75 @@ export function App() {
             <span class="record-dot" aria-hidden="true" />
             Record
           </button>
-          <div class="top-menu">
-            <button
-              type="button"
-              disabled={!online}
-              aria-haspopup="menu"
-              aria-expanded={setupOpen}
-              onClick={(event) => {
-                setupTriggerRef.current = event.currentTarget;
-                setSetupOpen((open) => !open);
-              }}
-            >
-              Setup
-              <span class="top-menu-caret" aria-hidden="true">
-                ▾
-              </span>
-            </button>
-            {setupOpen && (
-              <div
-                class="top-menu-panel"
-                role="menu"
-                ref={setupMenuRef}
-                onKeyDown={(event) =>
-                  handleMenuKey(
-                    event,
-                    setupMenuRef.current,
-                    () => setSetupOpen(false),
-                    setupTriggerRef.current,
-                  )
-                }
-              >
+          <MenuButton
+            className="top-menu"
+            menuClass="app-menu-top"
+            menuLabel="Setup"
+            disabled={!online}
+            label={
+              <>
+                Setup
+                <span class="top-menu-caret" aria-hidden="true">
+                  ▾
+                </span>
+              </>
+            }
+          >
+            {(close) => (
+              <>
                 <button
                   type="button"
                   role="menuitem"
                   onClick={() => {
-                    setSetupOpen(false);
+                    close();
                     openTriggers();
                   }}
                 >
-                  Triggers…
+                  Triggers
                 </button>
                 <button
                   type="button"
                   role="menuitem"
                   onClick={() => {
-                    setSetupOpen(false);
+                    close();
                     openVariables();
                   }}
                 >
-                  Variables…
+                  Variables
                 </button>
                 <button
                   type="button"
                   role="menuitem"
                   onClick={() => {
-                    setSetupOpen(false);
+                    close();
                     openScripts();
                   }}
                 >
-                  Scripts…
+                  Scripts
                 </button>
                 <button
                   type="button"
                   role="menuitem"
                   onClick={() => {
-                    setSetupOpen(false);
+                    close();
                     openRecord();
                   }}
                 >
-                  Recording…
+                  Recording setup
                 </button>
                 <button
                   type="button"
                   role="menuitem"
                   onClick={() => {
-                    setSetupOpen(false);
+                    close();
                     openReplay();
                   }}
                 >
-                  Replay…
+                  Replay setup
                 </button>
-              </div>
+              </>
             )}
-          </div>
+          </MenuButton>
           <button
             type="button"
             class="primary"
@@ -3676,7 +3813,7 @@ export function App() {
           <strong>{state ? `${seconds(state.simTimeUs, 2)} s` : "—"}</strong>
         </div>
         <div class="stat">
-          <span>Mode</span>
+          <span>Run mode</span>
           <strong>{state ? runModeLabel : "—"}</strong>
         </div>
         <div class="stat">
@@ -3700,6 +3837,20 @@ export function App() {
         <section class="replaybar">
           <span class="replay-mode">Replay</span>
           <span class="replay-pos">{replayText || "no position"}</span>
+          <button
+            type="button"
+            class="mini replay-channels"
+            title="Map this recording's channel numbers onto project buses"
+            aria-label={
+              replayDropped > 0
+                ? `Channels, ${replayDropped} not replayed`
+                : "Channels"
+            }
+            onClick={openReplayChannels}
+          >
+            Channels
+            {replayDropped > 0 && <em>{replayDropped} not replayed</em>}
+          </button>
           <div class="replay-nav">
             <label>
               Speed
@@ -4012,6 +4163,7 @@ export function App() {
             onAddToChart={(frame) => void addFrameSignals(frame, "chart")}
             onWatch={(frame) => void addFrameSignals(frame, "monitor")}
             onShowTime={(tUs) => goToTimeUs(tUs, false)}
+            onTrigger={triggerFromTrace}
           />
           ) : (
             <>
@@ -4314,6 +4466,7 @@ export function App() {
                   onMoveCursor={moveChartCursor}
                   onClearCursors={clearChartCursors}
                   onSignalAction={chartSignalAction}
+                  onTriggerSignal={triggerFromSignal}
                   fullscreen={chartFullscreen}
                   measuring={measuring}
                   paused={state?.tracePaused ?? false}
@@ -4473,6 +4626,13 @@ export function App() {
                 </button>
                 <button
                   type="button"
+                  class={tab === "someip" ? "on" : ""}
+                  onClick={() => setTab("someip")}
+                >
+                  SOME/IP
+                </button>
+                <button
+                  type="button"
                   class={tab === "activity" ? "on" : ""}
                   onClick={() => setTab("activity")}
                 >
@@ -4486,9 +4646,13 @@ export function App() {
                     ? `${state?.busStats.length ?? 0} buses`
                     : tab === "spec"
                       ? `${state?.specRows.length ?? 0} violations`
-                      : `${writeRows.length} line${writeRows.length === 1 ? "" : "s"}`}
+                      : tab === "someip"
+                        ? `${state?.someip?.length ?? 0} message${
+                            (state?.someip?.length ?? 0) === 1 ? "" : "s"
+                          }`
+                        : `${writeRows.length} line${writeRows.length === 1 ? "" : "s"}`}
               </span>
-              {tab !== "bus" && tab !== "spec" && (
+              {tab !== "bus" && tab !== "spec" && tab !== "someip" && (
                 <button
                   type="button"
                   class="mini"
@@ -4545,6 +4709,13 @@ export function App() {
                 onClear={() => void run({ type: "clear_spec" })}
                 onExport={() => openExport("spec")}
               />
+            ) : tab === "someip" ? (
+              <SomeIpPanel
+                rows={state?.someip ?? []}
+                services={state?.someipServices ?? []}
+                subscriptions={state?.someipSubscriptions ?? []}
+                issues={state?.someipIssues ?? []}
+              />
             ) : (
               <div class="panel-list">
                 <div class="panel-filter-row">
@@ -4593,7 +4764,10 @@ export function App() {
       </main>
 
       <footer class="statusbar">
-        <span class={`state ${measuring ? "running" : "stopped"}`}>
+        <span
+          class={`state ${measuring ? "running" : "stopped"}`}
+          title={`Measurement state; run mode is ${runModeLabel}`}
+        >
           {measuring ? (state?.tracePaused ? "PAUSED" : "MEASURING") : "STOPPED"}
         </span>
         <span>
@@ -4634,15 +4808,21 @@ export function App() {
           }
           buses={state?.buses ?? []}
           txEntries={state?.tx ?? []}
+          frEntries={state?.frTx ?? []}
           catalog={catalog}
           catalogLoading={catalogLoading}
           derived={derivedDefs}
+          sysvars={state?.sysvars ?? []}
+          scripts={state?.scripts ?? []}
           onAdd={addTrigger}
           onToggle={setTriggerEnabled}
           onRemove={removeTrigger}
           onRearm={rearmTriggers}
+          onRearmOne={rearmTrigger}
           onEdit={editTrigger}
           onLimits={setTriggerLimits}
+          onExport={exportTriggers}
+          onImport={(text) => void importTriggers(text)}
           onClose={() => setTriggersOpen(false)}
         />
       )}
@@ -4748,9 +4928,7 @@ export function App() {
       {busesOpen && (
         <BusesModal
           buses={state?.buses ?? []}
-          replayMap={
-            state?.replayMap ?? { can: [], fr: [], eth: [] }
-          }
+          projectFolder={projectFolder}
           realBus={busLive}
           wireLocked={replaying}
           hardware={hardware}
@@ -4775,9 +4953,10 @@ export function App() {
           onDetach={detachHardware}
           onAttachFr={attachFrHardware}
           onDetachFr={detachFrHardware}
-          onSetReplay={(kind, raw, target) =>
-            void run({ type: "set_replay_channel", kind, raw, target })
+          onAttachEth={(bus, device) =>
+            void run({ type: "attach_eth_port", bus, device })
           }
+          onDetachEth={(bus) => void run({ type: "detach_eth_port", bus })}
           onSetReal={(real) => void run({ type: "set_bus_mode", real })}
           onClose={() => setBusesOpen(false)}
         />
@@ -5107,20 +5286,25 @@ export function App() {
                 <div class="record-settings">
                   <div class="record-field">
                     <span>Save to</span>
-                    <div class="record-name-row">
-                      <input
-                        value={recordDir}
-                        readOnly
-                        placeholder="Record/ beside the project"
-                        title="Folder for new recordings; click Browse to choose"
-                        onClick={chooseRecordFolder}
-                      />
+                    <input
+                      value={recordDir}
+                      placeholder="Record/ beside the project"
+                      title="Folder for new recordings; type a path or use Browse"
+                      onInput={(event) =>
+                        setRecordDir((event.target as HTMLInputElement).value)
+                      }
+                      onBlur={pushRecordSettings}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter") event.currentTarget.blur();
+                      }}
+                    />
+                    <div class="record-browse-row">
                       <button
                         type="button"
                         class="mini"
                         onClick={chooseRecordFolder}
                       >
-                        Browse…
+                        Browse
                       </button>
                     </div>
                   </div>
@@ -5174,6 +5358,7 @@ export function App() {
                     >
                       <option value={0}>ASC</option>
                       <option value={1}>BLF</option>
+                      <option value={2}>PCAP (Ethernet)</option>
                     </select>
                   </label>
                 </div>
@@ -5199,6 +5384,22 @@ export function App() {
                   >
                     Download last recording
                   </button>
+                  {state?.recordEthFile &&
+                    state.recordEthFile !== state.recordFile && (
+                      <button
+                        type="button"
+                        disabled={recordActive}
+                        title="Save the Ethernet PCAP sidecar"
+                        onClick={() =>
+                          triggerDownload(
+                            "/api/recording?eth=1",
+                            fileNameOf(state.recordEthFile),
+                          )
+                        }
+                      >
+                        Download Ethernet PCAP
+                      </button>
+                    )}
                 </div>
                 <p class="hint">
                   Field codes expand when each file opens: {"{date}"} is the
@@ -5402,6 +5603,15 @@ export function App() {
                     Folders are saved with the project; Refresh rescans them.
                     The checked row is the Offline source.
                   </p>
+
+                  <ReplayChannelMap
+                    map={state?.replayMap ?? { can: [], fr: [], eth: [] }}
+                    buses={state?.buses ?? []}
+                    logName={state?.log ? baseName(state.log) : null}
+                    onSet={(kind, raw, target) =>
+                      void run({ type: "set_replay_channel", kind, raw, target })
+                    }
+                  />
                 </>
               )}
             </div>

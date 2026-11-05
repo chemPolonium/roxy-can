@@ -759,8 +759,78 @@ pub fn fmt_signal_value(phys: f64, unit: &str, type_tag: &str, label: Option<&st
 }
 
 pub fn load_dbc_str(content: &str) -> Result<SymbolTable, String> {
-    let db = can_dbc::Dbc::try_from(content).map_err(|e| format!("parse error: {e:?}"))?;
-    Ok(SymbolTable::from_dbc(&db))
+    match can_dbc::Dbc::try_from(content) {
+        Ok(db) => Ok(SymbolTable::from_dbc(&db)),
+        Err(first) => {
+            let normalized = normalize_ev_ranges(content);
+            if normalized == content {
+                return Err(format!("parse error: {first:?}"));
+            }
+            can_dbc::Dbc::try_from(normalized.as_str())
+                .map(|db| SymbolTable::from_dbc(&db))
+                .map_err(|e| format!("parse error: {e:?}"))
+        }
+    }
+}
+
+/// Vector's CANaero/ISO11783 databases put floating-point (or 3.4E+038)
+/// min/max bounds in `EV_` environment-variable lines, while `can-dbc` 10
+/// insists those fields are `i64`. Environment variables are not used by this
+/// app, so clamp only those two bounds and retry; messages/signals keep their
+/// original bytes.
+fn normalize_ev_ranges(content: &str) -> String {
+    let mut out = String::with_capacity(content.len());
+    for line in content.lines() {
+        let trimmed = line.trim_start();
+        if !trimmed.starts_with("EV_") {
+            out.push_str(line);
+            out.push('\n');
+            continue;
+        }
+        let Some(open) = line.find('[') else {
+            out.push_str(line);
+            out.push('\n');
+            continue;
+        };
+        let Some(close_rel) = line[open + 1..].find(']') else {
+            out.push_str(line);
+            out.push('\n');
+            continue;
+        };
+        let close = open + 1 + close_rel;
+        let range = &line[open + 1..close];
+        let Some((min, max)) = range.split_once('|') else {
+            out.push_str(line);
+            out.push('\n');
+            continue;
+        };
+        let clamp = |text: &str| -> Option<i64> {
+            let value = text.trim().parse::<f64>().ok()?;
+            if !value.is_finite() {
+                return Some(0);
+            }
+            if value <= i64::MIN as f64 {
+                Some(i64::MIN)
+            } else if value >= i64::MAX as f64 {
+                Some(i64::MAX)
+            } else {
+                Some(value as i64)
+            }
+        };
+        match (clamp(min), clamp(max)) {
+            (Some(min), Some(max)) => {
+                out.push_str(&line[..open + 1]);
+                out.push_str(&format!("{min}|{max}"));
+                out.push_str(&line[close..]);
+                out.push('\n');
+            }
+            _ => {
+                out.push_str(line);
+                out.push('\n');
+            }
+        }
+    }
+    out
 }
 
 /// Folds `extra` into `primary`: lookups fall through in order, so on a
@@ -1528,5 +1598,23 @@ VAL_ 420 S States;
 "#,
         );
         assert!(db.is_err(), "the named-table VAL_ form is unparseable");
+    }
+
+    #[test]
+    fn float_environment_variable_bounds_are_normalized() {
+        let source = r#"VERSION ""
+NS_ :
+BS_:
+BU_: ECU
+BO_ 100 Msg: 8 ECU
+ SG_ Sig : 0|8@1+ (1,0) [0|0] "" ECU
+EV_ evElevatorAngle: 1 [-0.4364|0.4364] "rad" 0 5 DUMMY_NODE_VECTOR0 Vector__XXX;
+EV_ evSpeed: 1 [0|3.4E+038] "" 0 8 DUMMY_NODE_VECTOR0 Vector__XXX;
+"#;
+        let table = load_dbc_str(source).expect("float EV bounds");
+        assert!(table.messages.values().any(|msg| msg.name == "Msg"));
+        let normalized = normalize_ev_ranges(source);
+        assert!(normalized.contains("[0|0]"), "{normalized}");
+        assert!(!normalized.contains("3.4E+038"), "{normalized}");
     }
 }

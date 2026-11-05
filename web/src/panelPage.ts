@@ -6,9 +6,9 @@ export const PAGE_MIN_H = 20;
 export const PAGE_MAX_W = 400;
 export const PAGE_MAX_H = 300;
 
-/// What a Panel button does: apply its signal writes, send one CAN frame, or
-/// run a named script handler (`on panel_action("…")`). Simulation controls
-/// live in the top bar, not on panel buttons.
+/// What a Panel button does: send one frame, or run a named script handler
+/// (`on panel_action("…")`). Simulation controls live in the top bar, not on
+/// panel buttons. `none` is the unconfigured state of a freshly added button.
 export type PanelActionKind = "script" | "none" | "send";
 
 /// One frame a button sends once, in the protocol's own address terms.
@@ -22,6 +22,19 @@ export type PanelFrameSend = (
     }
   | { protocol: "fr"; bus: number; slot: number; data: string }
   | { protocol: "eth"; bus: number; frame: string; data: string }
+  | {
+      protocol: "someip";
+      bus: number;
+      service: number;
+      method: number;
+      client: number;
+      session: number;
+      messageType: number;
+      data: string;
+      transport?: "udp" | "tcp";
+      host?: string;
+      port?: number;
+    }
 ) & {
   /// CAN address selector: a manually typed raw frame or a catalog message.
   /// Missing means the editor infers it from whether the ID matches.
@@ -37,6 +50,9 @@ export type PanelFrameSend = (
 export interface PanelFrameValue {
   name: string;
   value: number;
+  /// String field value, used by ARXML string/union fields instead of
+  /// `value`. Numeric fields keep `value`.
+  text?: string;
 }
 
 export const PANEL_MAX_FRAME_VALUES = 128;
@@ -75,7 +91,7 @@ export function panelFrameProblem(frame: PanelFrameSend): string | null {
   if (physical) {
     for (const entry of frame.values ?? []) {
       if (!entry.name.trim()) return "Select a signal to send";
-      if (!Number.isFinite(entry.value)) {
+      if (entry.text === undefined && !Number.isFinite(entry.value)) {
         return `Value for ${entry.name} must be a number`;
       }
     }
@@ -107,6 +123,39 @@ export function panelFrameProblem(frame: PanelFrameSend): string | null {
     if (!physical && bytes.length > 254) return "FlexRay data must be at most 254 bytes";
     return null;
   }
+  if (frame.protocol === "someip") {
+    if ((frame.transport ?? "udp") === "tcp") {
+      if (!(frame.host ?? "").trim()) return "TCP host is required";
+      if (
+        !Number.isInteger(frame.port ?? 0) ||
+        (frame.port ?? 0) < 1 ||
+        (frame.port ?? 0) > 65535
+      ) {
+        return "TCP port must be 1..65535";
+      }
+    }
+    if (!Number.isInteger(frame.bus) || frame.bus < 0 || frame.bus > 255) {
+      return "Bus must be an Ethernet channel";
+    }
+    for (const [label, value] of [
+      ["Service", frame.service],
+      ["Method", frame.method],
+      ["Client", frame.client],
+      ["Session", frame.session],
+    ] as const) {
+      if (!Number.isInteger(value) || value < 0 || value > 0xffff) {
+        return `${label} must be 0..0xFFFF`;
+      }
+    }
+    if (
+      !Number.isInteger(frame.messageType) ||
+      frame.messageType < 0 ||
+      frame.messageType > 0xff
+    ) {
+      return "Message type must be 0..0xFF";
+    }
+    return null;
+  }
   if (!Number.isInteger(frame.bus) || frame.bus < 0 || frame.bus > 255) {
     return "Bus must be an Ethernet channel";
   }
@@ -130,12 +179,6 @@ interface Geometry {
   h: number;
 }
 
-/// One signal value a Button's preset writes.
-export interface PanelWrite {
-  source: string;
-  value: number;
-}
-
 export interface PanelButton extends Geometry {
   id: string;
   kind: "button";
@@ -145,8 +188,6 @@ export interface PanelButton extends Geometry {
   script?: string;
   /// Value handed to a script handler that declares a parameter.
   argument?: number;
-  /// Signals applied before the action; each is attempted independently.
-  writes?: PanelWrite[];
   /// The one-shot CAN frame for `action === "send"`.
   frame?: PanelFrameSend;
 }
@@ -260,7 +301,6 @@ export interface PanelWidgetPatch {
   action?: PanelActionKind;
   script?: string;
   argument?: number;
-  writes?: PanelWrite[];
   frame?: PanelFrameSend;
   panelAction?: string;
   source?: string;
@@ -280,7 +320,7 @@ export type PanelFieldKey = keyof PanelWidgetPatch;
 export interface PanelFieldSpec {
   key: PanelFieldKey;
   label: string;
-  kind: "text" | "select" | "list" | "digits" | "number" | "bands" | "writes" | "frame";
+  kind: "text" | "select" | "list" | "digits" | "number" | "bands" | "frame";
   options?: { value: string; label: string }[];
   placeholder?: string;
   maxLength?: number;
@@ -343,24 +383,6 @@ function isPanelKind(value: unknown): value is PanelWidgetKind {
   );
 }
 
-export const PANEL_MAX_WRITES = 16;
-
-/// Keeps rows that name a signal and carry a finite value; malformed rows in
-/// a saved page are dropped the same way invalid bands are.
-export function normalisePanelWrites(raw: unknown): PanelWrite[] | undefined {
-  if (!Array.isArray(raw)) return undefined;
-  const writes: PanelWrite[] = [];
-  for (const entry of raw.slice(0, PANEL_MAX_WRITES)) {
-    if (!entry || typeof entry !== "object") continue;
-    const value = entry as Record<string, unknown>;
-    const source = text(value.source, 120);
-    const number = Number(value.value);
-    if (!source || !Number.isFinite(number)) continue;
-    writes.push({ source, value: number });
-  }
-  return writes.length > 0 ? writes : undefined;
-}
-
 /// Stored physical values: unique non-empty names with finite numbers.
 function normalisePanelFrameValues(raw: unknown): PanelFrameValue[] {
   if (!Array.isArray(raw)) return [];
@@ -369,10 +391,11 @@ function normalisePanelFrameValues(raw: unknown): PanelFrameValue[] {
     if (!entry || typeof entry !== "object") continue;
     const value = entry as Record<string, unknown>;
     const name = text(value.name, 120);
-    const number = Number(value.value);
-    if (!name || !Number.isFinite(number)) continue;
+    const string = typeof value.text === "string" ? text(value.text, 512) : "";
+    const number = string ? 0 : Number(value.value);
+    if (!name || (!string && !Number.isFinite(number))) continue;
     if (values.some((existing) => existing.name === name)) continue;
-    values.push({ name, value: number });
+    values.push(string ? { name, value: 0, text: string } : { name, value: number });
   }
   return values;
 }
@@ -482,7 +505,7 @@ const BUTTON_FIELDS: PanelFieldSpec[] = [
     label: "On click",
     kind: "select",
     options: [
-      { value: "none", label: "Write signals" },
+      { value: "none", label: "No action" },
       { value: "send", label: "Send message" },
       { value: "script", label: "Script action" },
     ],
@@ -500,11 +523,6 @@ const BUTTON_FIELDS: PanelFieldSpec[] = [
     label: "Argument",
     kind: "number",
     placeholder: "0",
-  },
-  {
-    key: "writes",
-    label: "Signal writes",
-    kind: "writes",
   },
   {
     key: "frame",
@@ -638,7 +656,6 @@ const BUTTON_SPEC: PanelWidgetSpec = {
     if (key === "action") return widget.action;
     if (key === "script") return widget.script ?? "";
     if (key === "argument") return widget.argument ?? 0;
-    if (key === "writes") return widget.writes?.length ?? 0;
     if (key === "frame") return widget.frame ? 1 : 0;
     if (key === "label") return widget.label;
     return "";
@@ -650,11 +667,8 @@ const BUTTON_SPEC: PanelWidgetSpec = {
       patch.action !== undefined && isActionKind(patch.action)
         ? patch.action
         : widget.action;
-    let writes = patch.writes === undefined ? widget.writes : patch.writes;
     let frame = patch.frame === undefined ? widget.frame : patch.frame;
     if (patch.action !== undefined && action !== widget.action) {
-      if (action === "none") frame = undefined;
-      else writes = undefined;
       if (action !== "send") frame = undefined;
     }
     return {
@@ -669,7 +683,6 @@ const BUTTON_SPEC: PanelWidgetSpec = {
         patch.argument === undefined || !Number.isFinite(argument)
           ? widget.argument
           : argument,
-      writes,
       frame,
     };
   },
@@ -1109,11 +1122,9 @@ function widgetPatch(
   value: Record<string, unknown>,
   kind: PanelWidgetKind,
 ): PanelWidgetPatch {
-  // A button has exactly one payload: signal writes, one message, or a
-  // script. A saved combination keeps the writes and narrows to that mode.
-  const writes = kind === "button" ? normalisePanelWrites(value.writes) : undefined;
-  let action = value.action as PanelActionKind;
-  if (writes && action !== "none") action = "none";
+  // A button has exactly one payload: one message or a script. A saved
+  // combination narrows to the action it names.
+  const action = value.action as PanelActionKind;
   const frame =
     kind === "button" && action === "send"
       ? normalisePanelFrame(value.frame)
@@ -1125,7 +1136,6 @@ function widgetPatch(
           action,
           script: text(value.script, 80),
           argument: Number(value.argument),
-          writes: action === "none" ? writes : undefined,
           frame,
         }
       : {}),
@@ -1358,28 +1368,6 @@ function strictWidget(
   if (kind === "button" && !isActionKind(value.action)) {
     return { error: `${where}: unknown action` };
   }
-  if (kind === "button" && value.writes !== undefined) {
-    if (!Array.isArray(value.writes)) {
-      return { error: `${where}: signal writes must be a list` };
-    }
-    if (value.writes.length > PANEL_MAX_WRITES) {
-      return { error: `${where}: at most ${PANEL_MAX_WRITES} signal writes` };
-    }
-    if (value.writes.length > 0 && value.action !== "none") {
-      return {
-        error: `${where}: signal writes need the "Write signals" action`,
-      };
-    }
-    for (const entry of value.writes) {
-      if (!entry || typeof entry !== "object") {
-        return { error: `${where}: each signal write needs a source and value` };
-      }
-      const write = entry as Record<string, unknown>;
-      if (typeof write.source !== "string" || typeof write.value !== "number" || !Number.isFinite(write.value)) {
-        return { error: `${where}: each signal write needs a source and a finite value` };
-      }
-    }
-  }
   if (kind === "button" && value.action === "send" && !normalisePanelFrame(value.frame)) {
     return {
       error: `${where}: Send message needs a valid bus, ID and hex data`,
@@ -1471,6 +1459,30 @@ export function addPanelPageFromFile(
     book: { ...book, activeId: id, pages: [...book.pages, stored] },
     page: stored,
   };
+}
+
+/// Merges `.rxpanel` documents stored in a project file into the current
+/// book. The project is the source for its pages: a same-name page is
+/// replaced in place (keeping its tab id), and malformed documents are
+/// skipped.
+export function mergeProjectPanels(
+  book: PanelBook,
+  documents: unknown[],
+): PanelBook {
+  let next = book;
+  for (const raw of documents) {
+    const parsed = importPanelFile(raw);
+    if ("error" in parsed) continue;
+    const at = next.pages.findIndex((page) => page.name === parsed.page.name);
+    if (at >= 0) {
+      const pages = next.pages.slice();
+      pages[at] = { ...parsed.page, id: next.pages[at].id };
+      next = { ...next, pages };
+      continue;
+    }
+    next = addPanelPageFromFile(next, parsed.page).book;
+  }
+  return next;
 }
 
 export function updatePanelWidget(
@@ -1598,7 +1610,6 @@ export function pastePanelWidget(
           action: widget.action,
           script: widget.script,
           argument: widget.argument,
-          writes: widget.writes,
           frame: widget.frame,
         }
       : {}),

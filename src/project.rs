@@ -444,8 +444,9 @@ fn restore_triggers(project: &ProjectV2, app: &mut App) {
         .iter()
         .filter_map(|row| {
             let ch = match row.kind {
-                0..=3 => can_bus_of(project, row.cluster)?,
-                5 | 6 => flexray_bus_of(project, row.cluster)?,
+                0..=3 | 8 | 11 => can_bus_of(project, row.cluster)?,
+                5 | 6 | 10 => flexray_bus_of(project, row.cluster)?,
+                9 | 12 => eth_bus_of(project, row.cluster)?,
                 _ => 0,
             };
             let send_ch = if row.action == 2 {
@@ -466,6 +467,27 @@ fn restore_triggers(project: &ProjectV2, app: &mut App) {
                 action: row.action,
                 send_ch,
                 send_id: row.action_id,
+                action_key: row.action_key.clone(),
+                action_value: row.action_value,
+                action_data: row.action_data.clone(),
+                cond_someip_method: row.cond_someip_method,
+                cond_someip_type: row.cond_someip_type,
+                someip_method: row.someip_method,
+                someip_client: row.someip_client,
+                someip_session: row.someip_session,
+                someip_type: row.someip_type,
+                someip_values: row.someip_values.clone(),
+                someip_transport: row.someip_transport.clone(),
+                someip_host: row.someip_host.clone(),
+                someip_port: row.someip_port,
+                offset: row.offset,
+                mask: row.mask,
+                value: row.value,
+                vlan: row.vlan,
+                cooldown_ms: row.cooldown_ms,
+                max_fires: row.max_fires,
+                pre_frames: row.pre_frames,
+                post_frames: row.post_frames,
                 enabled: row.enabled,
             })
         })
@@ -506,6 +528,34 @@ fn restore_triggers(project: &ProjectV2, app: &mut App) {
                     threshold: c.threshold,
                     rising: c.rising,
                 },
+                8 => crate::trigger::TriggerCond::PayloadMatch {
+                    ch: c.ch,
+                    id: c.id,
+                    ext: c.ext,
+                    offset: c.offset,
+                    mask: c.mask,
+                    value: c.value,
+                },
+                9 => crate::trigger::TriggerCond::EthFlow {
+                    bus: c.ch,
+                    ethertype: c.id.min(u32::from(u16::MAX)) as u16,
+                    vlan: c.vlan,
+                },
+                10 => crate::trigger::TriggerCond::FrTimeout {
+                    bus: c.ch,
+                    slot: c.id.min(u32::from(u16::MAX)) as u16,
+                },
+                11 => crate::trigger::TriggerCond::E2eIssue {
+                    ch: c.ch,
+                    id: c.id,
+                    ext: c.ext,
+                },
+                12 => crate::trigger::TriggerCond::SomeIp {
+                    bus: c.ch,
+                    service: c.id.min(u32::from(u16::MAX)) as u16,
+                    method: c.cond_someip_method,
+                    message_type: c.cond_someip_type,
+                },
                 _ => return None,
             };
             let action = match c.action {
@@ -516,10 +566,44 @@ fn restore_triggers(project: &ProjectV2, app: &mut App) {
                 },
                 3 => crate::trigger::TriggerAction::ClearTrace,
                 4 => crate::trigger::TriggerAction::InsertMarker,
+                5 => crate::trigger::TriggerAction::SetSysVar {
+                    key: c.action_key.clone(),
+                    value: c.action_value.unwrap_or(0.0),
+                },
+                6 => crate::trigger::TriggerAction::RunScript {
+                    name: c.action_key.clone(),
+                    value: c.action_value,
+                },
+                7 => crate::trigger::TriggerAction::SendFr {
+                    bus: c.send_ch,
+                    slot: c.send_id.min(u32::from(u16::MAX)) as u16,
+                },
+                8 => crate::trigger::TriggerAction::SendEth {
+                    bus: c.send_ch,
+                    frame: c.action_key.clone(),
+                    data: crate::generator::parse_hex_bytes(&c.action_data).unwrap_or_default(),
+                },
+                9 => crate::trigger::TriggerAction::SendSomeIp {
+                    bus: c.send_ch,
+                    service: c.send_id.min(u32::from(u16::MAX)) as u16,
+                    method: c.someip_method,
+                    client: c.someip_client,
+                    session: c.someip_session,
+                    message_type: c.someip_type,
+                    data: crate::generator::parse_hex_bytes(&c.action_data).unwrap_or_default(),
+                    values: c.someip_values.clone(),
+                    transport: c.someip_transport.clone(),
+                    host: c.someip_host.clone(),
+                    port: c.someip_port,
+                },
                 _ => crate::trigger::TriggerAction::StartRecording,
             };
             let mut trigger = crate::trigger::Trigger::new(cond, action);
             trigger.enabled = c.enabled;
+            trigger.cooldown_us = u64::from(c.cooldown_ms) * 1_000;
+            trigger.max_fires = c.max_fires;
+            trigger.pre_frames = (c.pre_frames >= 0).then_some(c.pre_frames as usize);
+            trigger.post_frames = (c.post_frames >= 0).then_some(c.post_frames as u32);
             Some(trigger)
         })
         .collect();
@@ -587,6 +671,14 @@ fn flexray_bus_of(project: &ProjectV2, cluster: u32) -> Option<u8> {
         .and_then(|entry| entry.bus)
 }
 
+fn eth_bus_of(project: &ProjectV2, cluster: u32) -> Option<u8> {
+    project
+        .clusters
+        .iter()
+        .find(|entry| entry.kind == ClusterKind::Ethernet && entry.id == cluster)
+        .and_then(|entry| entry.bus)
+}
+
 fn replay_entries(app: &App) -> Vec<crate::model::ReplayCfg> {
     use crate::replay_map::LogBusKind;
     let mut entries = Vec::new();
@@ -646,6 +738,10 @@ fn triggers(app: &App) -> Vec<TriggerCfgV2> {
     for trigger in &app.snap.triggers {
         let mut send_ch = 0u8;
         let mut send_id = 0u32;
+        let mut offset = 0u8;
+        let mut mask = 0xFFu8;
+        let mut value = 0u8;
+        let mut vlan = None;
         let (kind, ch, id, ext, signal, threshold, rising) = match &trigger.cond {
             crate::trigger::TriggerCond::SignalCross {
                 ch,
@@ -692,29 +788,132 @@ fn triggers(app: &App) -> Vec<TriggerCfgV2> {
                 threshold,
                 rising,
             } => (7, 0, 0, false, id.clone(), *threshold, *rising),
+            crate::trigger::TriggerCond::PayloadMatch {
+                ch,
+                id,
+                ext,
+                offset: at,
+                mask: bits,
+                value: wanted,
+            } => {
+                offset = *at;
+                mask = *bits;
+                value = *wanted;
+                (8, *ch, *id, *ext, String::new(), 0.0, false)
+            }
+            crate::trigger::TriggerCond::EthFlow {
+                bus,
+                ethertype,
+                vlan: tag,
+            } => {
+                vlan = *tag;
+                (
+                    9,
+                    *bus,
+                    u32::from(*ethertype),
+                    false,
+                    String::new(),
+                    0.0,
+                    false,
+                )
+            }
+            crate::trigger::TriggerCond::FrTimeout { bus, slot } => {
+                (10, *bus, u32::from(*slot), false, String::new(), 0.0, false)
+            }
+            crate::trigger::TriggerCond::E2eIssue { ch, id, ext } => {
+                (11, *ch, *id, *ext, String::new(), 0.0, false)
+            }
+            crate::trigger::TriggerCond::SomeIp { bus, service, .. } => (
+                12,
+                *bus,
+                u32::from(*service),
+                false,
+                String::new(),
+                0.0,
+                false,
+            ),
         };
         let cluster = match kind {
-            0..=3 => ids
+            0..=3 | 8 | 11 => ids
                 .can
                 .get(ch as usize)
                 .copied()
                 .map(crate::model::ClusterId),
-            5 | 6 => ids.fr.get(&ch).copied().map(crate::model::ClusterId),
+            5 | 6 | 10 => ids.fr.get(&ch).copied().map(crate::model::ClusterId),
+            9 | 12 => ids.eth.get(&ch).copied().map(crate::model::ClusterId),
             _ => Some(crate::model::ClusterId(0)),
         };
         let Some(cluster) = cluster else {
             continue;
         };
-        let action = match trigger.action {
+        let mut action_key = String::new();
+        let mut action_value = None;
+        let mut action_data = String::new();
+        let mut someip_method = 0u16;
+        let mut someip_client = 0u16;
+        let mut someip_session = 0u16;
+        let mut someip_type = 0u8;
+        let mut someip_values = std::collections::BTreeMap::new();
+        let mut someip_transport = "udp".to_string();
+        let mut someip_host = String::new();
+        let mut someip_port = 30490u16;
+        let action = match &trigger.action {
             crate::trigger::TriggerAction::StartRecording => 0,
             crate::trigger::TriggerAction::StopRecording => 1,
             crate::trigger::TriggerAction::Send { ch, id } => {
-                send_ch = ch;
-                send_id = id;
+                send_ch = *ch;
+                send_id = *id;
                 2
+            }
+            crate::trigger::TriggerAction::SendFr { bus, slot } => {
+                send_ch = *bus;
+                send_id = u32::from(*slot);
+                7
+            }
+            crate::trigger::TriggerAction::SendEth { bus, frame, data } => {
+                send_ch = *bus;
+                action_key.clone_from(frame);
+                action_data = crate::generator::hex_of(data);
+                8
+            }
+            crate::trigger::TriggerAction::SendSomeIp {
+                bus,
+                service,
+                method,
+                client,
+                session,
+                message_type,
+                data,
+                values,
+                transport,
+                host,
+                port,
+            } => {
+                send_ch = *bus;
+                send_id = u32::from(*service);
+                someip_method = *method;
+                someip_client = *client;
+                someip_session = *session;
+                someip_type = *message_type;
+                someip_values = values.clone();
+                someip_transport = transport.clone();
+                someip_host = host.clone();
+                someip_port = *port;
+                action_data = crate::generator::hex_of(data);
+                9
             }
             crate::trigger::TriggerAction::ClearTrace => 3,
             crate::trigger::TriggerAction::InsertMarker => 4,
+            crate::trigger::TriggerAction::SetSysVar { key, value } => {
+                action_key.clone_from(key);
+                action_value = Some(*value);
+                5
+            }
+            crate::trigger::TriggerAction::RunScript { name, value } => {
+                action_key.clone_from(name);
+                action_value = *value;
+                6
+            }
         };
         let action_cluster = if action == 2 {
             ids.can
@@ -723,6 +922,14 @@ fn triggers(app: &App) -> Vec<TriggerCfgV2> {
                 .map(crate::model::ClusterId)
         } else {
             None
+        };
+        let (cond_someip_method, cond_someip_type) = match &trigger.cond {
+            crate::trigger::TriggerCond::SomeIp {
+                method,
+                message_type,
+                ..
+            } => (*method, *message_type),
+            _ => (None, None),
         };
         rows.push(TriggerCfgV2 {
             kind,
@@ -735,6 +942,31 @@ fn triggers(app: &App) -> Vec<TriggerCfgV2> {
             action,
             action_cluster: action_cluster.map(|id| id.0),
             action_id: send_id,
+            action_key,
+            action_value,
+            action_data,
+            cond_someip_method,
+            cond_someip_type,
+            someip_method,
+            someip_client,
+            someip_session,
+            someip_type,
+            someip_values,
+            someip_transport,
+            someip_host,
+            someip_port,
+            offset,
+            mask,
+            value,
+            vlan,
+            cooldown_ms: (trigger.cooldown_us / 1_000).min(u64::from(u32::MAX)) as u32,
+            max_fires: trigger.max_fires,
+            pre_frames: trigger
+                .pre_frames
+                .map_or(-1, |n| n.min(i32::MAX as usize) as i32),
+            post_frames: trigger
+                .post_frames
+                .map_or(-1, |n| n.min(i32::MAX as u32) as i32),
             enabled: trigger.enabled,
         });
     }

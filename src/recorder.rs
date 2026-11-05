@@ -5,6 +5,7 @@
 use crate::can::frame::CanFrame;
 use crate::log::AscWriter;
 use crate::log::blf::BlfWriter;
+use crate::log::pcap::PcapWriter;
 
 enum Backend {
     Asc(AscWriter),
@@ -56,11 +57,15 @@ impl RecordFilter {
 /// an empty record behind.
 pub struct Recorder {
     writer: Option<Backend>,
+    /// Ethernet sidecar (or the main `.pcap` when that extension is chosen).
+    eth: Option<PcapWriter>,
     pub recording: bool,
     /// Base path as typed; the actual file gets a date-time suffix.
     pub record_path: String,
-    /// The dated path of the most recent recording, kept as a replay source.
+    /// The dated path of the most recent CAN/FR recording.
     pub last_record: String,
+    /// The dated path of the matching Ethernet PCAP.
+    pub last_eth_record: String,
     /// Monotonic per-session counter for `{index}` field codes.
     record_counter: u64,
     /// Optional whitelist for the file. The filter gates the file's contents
@@ -72,9 +77,11 @@ impl Recorder {
     pub fn new() -> Self {
         Recorder {
             writer: None,
+            eth: None,
             recording: false,
             record_path: String::new(),
             last_record: String::new(),
+            last_eth_record: String::new(),
             record_counter: 0,
             filter: RecordFilter::default(),
         }
@@ -119,11 +126,35 @@ impl Recorder {
         }
     }
 
+    /// Writes one Ethernet frame to the PCAP sidecar. The record filter is
+    /// CAN/FR-only, so Ethernet always records what the session sees; the
+    /// sidecar exists to keep the pcap replay path complete.
+    /// One entry point for every protocol's wire event.
+    pub fn write_event(&mut self, event: &crate::bus::BusEvent<'_>) {
+        match event {
+            crate::bus::BusEvent::Can(frame) => self.write(frame),
+            crate::bus::BusEvent::Fr(row) => self.write_fr(row),
+            crate::bus::BusEvent::Eth(frame) => self.write_eth(frame),
+        }
+    }
+
+    pub fn write_eth(&mut self, f: &crate::eth::EthFrame) {
+        if let Some(Backend::Blf(writer)) = &mut self.writer {
+            writer.write_eth(f);
+        }
+        if let Some(writer) = &mut self.eth {
+            writer.write(f).ok();
+        }
+    }
+
     /// Pushes the open file's buffer to disk. Called at the end of every
     /// measurement step, so the file grows while the recording runs: a person
     /// watching it (or a process that dies before Stop) should see the frames
     /// that were already on the bus, not a 144-byte stub.
     pub fn flush(&mut self) {
+        if let Some(writer) = &mut self.eth {
+            writer.flush();
+        }
         match &mut self.writer {
             Some(Backend::Asc(w)) => {
                 w.flush().ok();
@@ -135,6 +166,9 @@ impl Recorder {
 
     /// Closes the file, if any. Recorded data stays; only the handle goes.
     pub fn close(&mut self) {
+        if let Some(writer) = self.eth.take() {
+            writer.finish();
+        }
         if let Some(w) = self.writer.take() {
             match w {
                 Backend::Asc(w) => w.finish().ok(),
@@ -143,25 +177,24 @@ impl Recorder {
         }
     }
 
-    /// Opens the dated file derived from `record_path`. The extension
-    /// picks the backend: `.blf` writes the binary container format,
-    /// anything else records ASC as before. Returns the opened path, or
-    /// the error text for the status line.
+    /// Opens the dated file derived from `record_path`. `.blf`/`.asc` write
+    /// the CAN/FR container and an Ethernet PCAP sidecar; `.pcap` writes
+    /// Ethernet only. Returns the opened main path, or the error text.
     pub fn open(&mut self) -> Result<String, String> {
-        // Never abandon a live file. Nothing on today's call paths gets here
-        // with a writer still open -- a start closes first, and the checkbox and
-        // the trigger action are exclusive -- but "the caller remembered to
-        // close" is not an assumption this type should carry: an abandoned BLF
-        // loses its buffered objects and an abandoned ASC its trailer.
         self.close();
         let b = self.record_path.trim();
         let lower = b.to_ascii_lowercase();
-        let (blf, cut) = if lower.ends_with(".blf") {
-            (true, 4)
+        if lower.ends_with(".pcapng") {
+            return Err("Ethernet recording writes classic .pcap, not .pcapng".to_string());
+        }
+        let (blf, pcap, cut) = if lower.ends_with(".blf") {
+            (true, false, 4)
         } else if lower.ends_with(".asc") {
-            (false, 4)
+            (false, false, 4)
+        } else if lower.ends_with(".pcap") {
+            (false, true, 5)
         } else {
-            (false, 0)
+            (false, false, 0)
         };
         let base_raw = &b[..b.len() - cut];
         let has_codes = base_raw.contains("{date}")
@@ -179,37 +212,49 @@ impl Recorder {
         } else {
             expanded
         };
-        let ext = if blf { "blf" } else { "asc" };
-        // Without a field code the recorder owns uniqueness with its own
-        // timestamp; a pattern that already says when it ran keeps the name
-        // the operator wrote.
+        let ext = if pcap {
+            "pcap"
+        } else if blf {
+            "blf"
+        } else {
+            "asc"
+        };
         let stem = if has_codes {
             base
         } else {
             format!("{base}_{}", now.format("%Y%m%d_%H%M%S"))
         };
         let mut path = format!("{stem}.{ext}");
-        // Two records in the same second must never overwrite each other:
-        // every green lamp is a new file, even on a quick off/on toggle.
         let mut seq = 2;
         while std::path::Path::new(&path).exists() {
             path = format!("{stem}_{seq}.{ext}");
             seq += 1;
         }
-        // The default home is the project's Record/ folder; make sure it
-        // exists instead of failing the whole recording on a missing dir.
         if let Some(parent) = std::path::Path::new(&path).parent() {
             std::fs::create_dir_all(parent)
                 .map_err(|e| format!("record folder unavailable: {e}"))?;
         }
+        if pcap {
+            self.eth = Some(PcapWriter::create(&path).map_err(|e| e.to_string())?);
+            self.last_eth_record = path.clone();
+            self.last_record = path.clone();
+            return Ok(path);
+        }
+        let mut eth_path = format!("{stem}.eth.pcap");
+        let mut eth_seq = 2;
+        while std::path::Path::new(&eth_path).exists() {
+            eth_path = format!("{stem}.eth_{eth_seq}.pcap");
+            eth_seq += 1;
+        }
+        self.eth = Some(PcapWriter::create(&eth_path).map_err(|e| e.to_string())?);
+        self.last_eth_record = eth_path;
         self.writer = Some(if blf {
             Backend::Blf(BlfWriter::create(&path).map_err(|e| e.to_string())?)
         } else {
             Backend::Asc(AscWriter::new(&path).map_err(|e| e.to_string())?)
         });
-        let opened = path.clone();
-        self.last_record = opened.clone();
-        Ok(opened)
+        self.last_record = path.clone();
+        Ok(path)
     }
 }
 
@@ -258,6 +303,37 @@ mod tests {
         assert_ne!(first, second, "each start opens a fresh file");
         assert!(std::path::Path::new(&first).exists());
         assert!(std::path::Path::new(&second).exists());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn pcap_recording_writes_ethernet_frames() {
+        let dir = temp_dir("eth-pcap");
+        let mut rec = Recorder::new();
+        rec.recording = true;
+        rec.record_path = dir.join("eth.pcap").to_string_lossy().into_owned();
+        let path = rec.open().unwrap();
+        assert!(path.ends_with(".pcap"));
+        let frame = crate::eth::EthFrame::session(1_000, 0, Some(7), 0x0800, [1, 2, 3, 4]);
+        rec.write_eth(&frame);
+        rec.close();
+        assert!(std::path::Path::new(&path).exists());
+        let data = std::fs::read(&path).unwrap();
+        assert!(data.len() > 24, "PCAP header + one record");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn asc_recording_also_opens_an_ethernet_sidecar() {
+        let dir = temp_dir("eth-sidecar");
+        let mut rec = Recorder::new();
+        rec.recording = true;
+        rec.record_path = dir.join("mixed.asc").to_string_lossy().into_owned();
+        let path = rec.open().unwrap();
+        assert!(path.ends_with(".asc"));
+        assert!(rec.last_eth_record.ends_with(".eth.pcap"));
+        assert!(std::path::Path::new(&rec.last_eth_record).exists());
+        rec.close();
         std::fs::remove_dir_all(&dir).ok();
     }
 }

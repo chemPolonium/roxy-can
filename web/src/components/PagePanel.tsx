@@ -7,7 +7,6 @@ import {
   PAGE_MIN_W,
   PANEL_BAND_COLORS,
   PANEL_MAX_BANDS,
-  PANEL_MAX_WRITES,
   PANEL_WIDGET_KINDS,
   activePanelPage,
   addPanelPage,
@@ -45,7 +44,6 @@ import {
   type PanelToggle,
   type PanelButton,
   type PanelSetpoint,
-  type PanelWrite,
   type PanelFrameSend,
 } from "../panelPage";
 import {
@@ -208,6 +206,9 @@ function FrameField({
   const [valueDrafts, setValueDrafts] = useState<Record<string, string>>({});
   const [editing, setEditing] = useState<"id" | "slot" | "data" | null>(null);
   const [error, setError] = useState("");
+  const [errorField, setErrorField] = useState<"id" | "slot" | "data" | null>(
+    null,
+  );
   const protocol = frame?.protocol ?? "can";
 
   useEffect(() => {
@@ -233,9 +234,11 @@ function FrameField({
     const problem = panelFrameProblem(next);
     if (problem) {
       setError(problem);
+      setErrorField(null);
       return false;
     }
     setError("");
+    setErrorField(null);
     onChange(next);
     return true;
   };
@@ -250,7 +253,7 @@ function FrameField({
       ...(next.protocol === "can" ? { source: "raw" as const } : {}),
     });
 
-  const defaultFor = (kind: "can" | "fr" | "eth"): PanelFrameSend => {
+  const defaultFor = (kind: "can" | "fr" | "eth" | "someip"): PanelFrameSend => {
     if (kind === "can") {
       return {
         protocol: "can",
@@ -266,6 +269,21 @@ function FrameField({
         bus: frBuses[0]?.index ?? 0,
         slot: 1,
         data: "",
+      };
+    }
+    if (kind === "someip") {
+      return {
+        protocol: "someip",
+        bus: ethBuses[0]?.index ?? 0,
+        service: 0x1234,
+        method: 0x0001,
+        client: 1,
+        session: 0,
+        messageType: 0x02,
+        data: "",
+        transport: "udp",
+        host: "127.0.0.1",
+        port: 30490,
       };
     }
     const bus = ethBuses[0]?.index ?? 0;
@@ -324,6 +342,7 @@ function FrameField({
     const current = base();
     if (!Number.isInteger(id) || current.protocol !== "can") {
       setError("ID must be hex");
+      setErrorField("id");
       setIdDraft(frameIdText(frame));
       return;
     }
@@ -336,6 +355,7 @@ function FrameField({
     const current = base();
     if (!Number.isInteger(slot) || current.protocol !== "fr") {
       setError("Slot must be a number");
+      setErrorField("slot");
       setSlotDraft(frame?.protocol === "fr" ? String(frame.slot) : "");
       return;
     }
@@ -349,6 +369,7 @@ function FrameField({
     const bytes = parsePanelHex(dataDraft);
     if (bytes === null) {
       setError("Data must be hex bytes");
+      setErrorField("data");
       setDataDraft(frame?.data ?? "");
       return;
     }
@@ -359,6 +380,7 @@ function FrameField({
       );
       if (def?.length != null && bytes.length !== def.length) {
         setError(`Frame "${current.frame}" carries ${def.length} payload bytes`);
+        setErrorField("data");
         setDataDraft(frame?.data ?? "");
         return;
       }
@@ -373,12 +395,20 @@ function FrameField({
     const values = (current.values ?? []).filter((entry) => entry.name !== name);
     const trimmed = raw.trim();
     if (trimmed !== "") {
-      const value = Number(trimmed);
-      if (!Number.isFinite(value)) {
-        setError(`Value for ${name} must be a number`);
-        return;
+      if (
+        trimmed.length >= 2 &&
+        ((trimmed.startsWith('"') && trimmed.endsWith('"')) ||
+          (trimmed.startsWith("'") && trimmed.endsWith("'")))
+      ) {
+        values.push({ name, value: 0, text: trimmed.slice(1, -1) });
+      } else {
+        const value = Number(trimmed);
+        if (!Number.isFinite(value)) {
+          setError(`Value for ${name} must be a number or "text"`);
+          return;
+        }
+        values.push({ name, value });
       }
-      values.push({ name, value });
     }
     commit({ ...current, mode: "physical", values });
   };
@@ -390,9 +420,11 @@ function FrameField({
         : "Raw frame. Pick a defined message to edit physical values."
       : protocol === "fr"
         ? "Session only — the FR port stays receive-only."
-        : `Session only — no Ethernet transmit port.${
-            ethDef?.length != null ? ` ${ethDef.length} payload bytes.` : ""
-          }`;
+        : protocol === "someip"
+          ? "SOME/IP over UDP, session only — no Ethernet transmit port."
+          : `Session only — no Ethernet transmit port.${
+              ethDef?.length != null ? ` ${ethDef.length} payload bytes.` : ""
+            }`;
 
   return (
     <div class="page-frame">
@@ -403,7 +435,7 @@ function FrameField({
           onFocus={onFocus}
           onChange={(event) => {
             const next = (event.target as HTMLSelectElement).value;
-            if (next !== "can" && next !== "fr" && next !== "eth") return;
+            if (next !== "can" && next !== "fr" && next !== "eth" && next !== "someip") return;
             setError("");
             onChange(defaultFor(next));
           }}
@@ -411,6 +443,7 @@ function FrameField({
           <option value="can">CAN</option>
           <option value="fr">FlexRay</option>
           <option value="eth">Ethernet</option>
+          <option value="someip">SOME/IP</option>
         </select>
       </label>
       {protocol === "can" ? (
@@ -418,9 +451,12 @@ function FrameField({
           <label>
             Bus
             <select
-              value={
-                frame?.protocol === "can" ? String(frame.channel) : ""
-              }
+              value={String(
+                frame?.protocol === "can" &&
+                  canBuses.some((bus) => bus.index === frame.channel)
+                  ? frame.channel
+                  : (canBuses[0]?.index ?? 0),
+              )}
               onFocus={onFocus}
               onChange={(event) => {
                 const value = (event.target as HTMLSelectElement).value;
@@ -430,7 +466,7 @@ function FrameField({
               }}
             >
               {canBuses.map((bus) => (
-                <option value={bus.index} key={bus.index}>
+                <option value={String(bus.index)} key={bus.index}>
                   {bus.name}
                 </option>
               ))}
@@ -489,6 +525,8 @@ function FrameField({
               ID (hex)
               <input
                 value={idDraft}
+                class={errorField === "id" ? "invalid" : undefined}
+                aria-invalid={errorField === "id"}
                 placeholder="0x7DF"
                 spellcheck={false}
                 disabled={source === "catalog"}
@@ -547,7 +585,12 @@ function FrameField({
           <label>
             Bus
             <select
-              value={frame?.protocol === "fr" ? String(frame.bus) : ""}
+              value={String(
+                frame?.protocol === "fr" &&
+                  frBuses.some((bus) => bus.index === frame.bus)
+                  ? frame.bus
+                  : (frBuses[0]?.index ?? 0),
+              )}
               onFocus={onFocus}
               onChange={(event) => {
                 const value = (event.target as HTMLSelectElement).value;
@@ -557,7 +600,7 @@ function FrameField({
               }}
             >
               {frBuses.map((bus) => (
-                <option value={bus.index} key={bus.index}>
+                <option value={String(bus.index)} key={bus.index}>
                   {bus.name}
                 </option>
               ))}
@@ -570,6 +613,8 @@ function FrameField({
               min={1}
               max={2047}
               value={slotDraft}
+              class={errorField === "slot" ? "invalid" : undefined}
+              aria-invalid={errorField === "slot"}
               placeholder="1"
               onFocus={() => {
                 onFocus();
@@ -588,12 +633,191 @@ function FrameField({
             />
           </label>
         </>
+      ) : protocol === "someip" && frame?.protocol === "someip" ? (
+        <>
+          <label>
+            Bus
+            <select
+              value={String(frame.bus)}
+              onFocus={onFocus}
+              onChange={(event) =>
+                commit({
+                  ...frame,
+                  bus: Number((event.target as HTMLSelectElement).value),
+                })
+              }
+            >
+              {ethBuses.map((bus) => (
+                <option value={String(bus.index)} key={bus.index}>
+                  {bus.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            Service
+            <input
+              type="number"
+              value={frame.service}
+              onChange={(event) =>
+                commit({
+                  ...frame,
+                  service: Number((event.target as HTMLInputElement).value),
+                  values: [],
+                  mode: "raw",
+                })
+              }
+            />
+          </label>
+          <label>
+            Method
+            <input
+              type="number"
+              value={frame.method}
+              onChange={(event) =>
+                commit({
+                  ...frame,
+                  method: Number((event.target as HTMLInputElement).value),
+                  values: [],
+                  mode: "raw",
+                })
+              }
+            />
+          </label>
+          <label>
+            Client
+            <input
+              type="number"
+              value={frame.client}
+              onChange={(event) =>
+                commit({
+                  ...frame,
+                  client: Number((event.target as HTMLInputElement).value),
+                })
+              }
+            />
+          </label>
+          <label>
+            Session (0 = auto)
+            <input
+              type="number"
+              value={frame.session}
+              onChange={(event) =>
+                commit({
+                  ...frame,
+                  session: Number((event.target as HTMLInputElement).value),
+                })
+              }
+            />
+          </label>
+          <label title="0x00 request, 0x02 notification, 0x80 response">
+            Type
+            <input
+              type="number"
+              value={frame.messageType}
+              onChange={(event) =>
+                commit({
+                  ...frame,
+                  messageType: Number(
+                    (event.target as HTMLInputElement).value,
+                  ),
+                })
+              }
+            />
+          </label>
+          <label>
+            Transport
+            <select
+              value={frame.transport ?? "udp"}
+              onChange={(event) =>
+                commit({
+                  ...frame,
+                  transport: (event.target as HTMLSelectElement).value as
+                    | "udp"
+                    | "tcp",
+                })
+              }
+            >
+              <option value="udp">UDP</option>
+              <option value="tcp">TCP</option>
+            </select>
+          </label>
+          {(frame.transport ?? "udp") === "tcp" && (
+            <>
+              <label>
+                Host
+                <input
+                  value={frame.host ?? "127.0.0.1"}
+                  onChange={(event) =>
+                    commit({
+                      ...frame,
+                      host: (event.target as HTMLInputElement).value,
+                    })
+                  }
+                />
+              </label>
+              <label>
+                Port
+                <input
+                  type="number"
+                  value={frame.port ?? 30490}
+                  onChange={(event) =>
+                    commit({
+                      ...frame,
+                      port: Number((event.target as HTMLInputElement).value),
+                    })
+                  }
+                />
+              </label>
+            </>
+          )}
+          <label>
+            Fields (name=value; …)
+            <input
+              key={`${frame.bus}:${frame.service}:${frame.method}`}
+              defaultValue={(frame.values ?? [])
+                .map((entry) =>
+                  entry.text !== undefined
+                    ? `${entry.name}="${entry.text}"`
+                    : `${entry.name}=${entry.value}`,
+                )
+                .join("; ")}
+              placeholder="speed=12.5; wheel[0]=1"
+              spellcheck={false}
+              onBlur={(event) => {
+                const text = (event.target as HTMLInputElement).value.trim();
+                if (text === "") {
+                  commit({ ...frame, mode: "raw", values: [] });
+                  return;
+                }
+                const values: { name: string; value: number }[] = [];
+                for (const part of text.split(";")) {
+                  const [rawName, rawValue] = part.split("=");
+                  const name = rawName?.trim() ?? "";
+                  const value = Number(rawValue?.trim() ?? "");
+                  if (!name || !Number.isFinite(value)) {
+                    setError(`Field "${part.trim()}" must be name=number`);
+                    return;
+                  }
+                  values.push({ name, value });
+                }
+                setError("");
+                commit({ ...frame, mode: "physical", values });
+              }}
+            />
+          </label>
+        </>
       ) : (
         <>
           <label>
             Bus
             <select
-              value={frame?.protocol === "eth" ? String(frame.bus) : ""}
+              value={String(
+                frame?.protocol === "eth" &&
+                  ethBuses.some((bus) => bus.index === frame.bus)
+                  ? frame.bus
+                  : (ethBuses[0]?.index ?? 0),
+              )}
               onFocus={onFocus}
               onChange={(event) => {
                 const value = (event.target as HTMLSelectElement).value;
@@ -609,7 +833,7 @@ function FrameField({
               }}
             >
               {ethBuses.map((bus) => (
-                <option value={bus.index} key={bus.index}>
+                <option value={String(bus.index)} key={bus.index}>
                   {bus.name}
                 </option>
               ))}
@@ -719,6 +943,8 @@ function FrameField({
           Data (hex)
           <input
             value={dataDraft}
+            class={errorField === "data" ? "invalid" : undefined}
+            aria-invalid={errorField === "data"}
             placeholder="02 10 03"
             spellcheck={false}
             maxLength={8192}
@@ -744,7 +970,11 @@ function FrameField({
           />
         </label>
       )}
-      {error && <span class="page-frame-error">{error}</span>}
+      {error && (
+        <span class="page-frame-error" role="alert" aria-live="polite">
+          {error}
+        </span>
+      )}
       <span class="page-frame-hint">{dataHint}</span>
     </div>
   );
@@ -1837,12 +2067,11 @@ export function PagePanel({
         }}
       >
         {widget.label ||
-          (widget.action === "none"
-            ? "Preset"
-            : widget.action === "send"
-              ? "Send"
-              : widget.script || "Script") ||
-          "Button"}
+          (widget.action === "send"
+            ? "Send"
+            : widget.action === "script"
+              ? widget.script || "Script"
+              : "Button")}
       </button>
     );
   };
@@ -1856,7 +2085,6 @@ export function PagePanel({
     if (!fieldSpec) return null;
     if (key === "script" && field(widget, "action") !== "script") return null;
     if (key === "argument" && field(widget, "action") !== "script") return null;
-    if (key === "writes" && field(widget, "action") !== "none") return null;
     if (key === "frame" && field(widget, "action") !== "send") return null;
     if (
       widget.kind === "setpoint" &&
@@ -1875,73 +2103,6 @@ export function PagePanel({
     const value = field(widget, fieldSpec.key);
     const update = (patch: PanelWidgetPatch) =>
       commit(updatePanelWidget(page, widget.id, patch));
-    if (fieldSpec.kind === "writes") {
-      const writes: PanelWrite[] =
-        widget.kind === "button" ? (widget.writes ?? []) : [];
-      return (
-        <div class="page-writes">
-          <span class="page-writes-label">{fieldSpec.label}</span>
-          {writes.map((write, index) => (
-            <div class="page-write-row" key={index}>
-              <SuggestionInput
-                value={write.source}
-                options={(view.writeTargets ?? []).map((target) => target.key)}
-                placeholder="channel:id:signal"
-                maxLength={120}
-                onFocus={pushHistory}
-                onCommit={(next) =>
-                  update({
-                    writes: writes.map((entry, at) =>
-                      at === index ? { ...entry, source: next } : entry,
-                    ),
-                  })
-                }
-              />
-              <span class="page-write-value">
-                Value
-                <DraftNumberInput
-                  value={write.value}
-                  placeholder="0"
-                  onFocus={pushHistory}
-                  onCommit={(next) =>
-                    update({
-                      writes: writes.map((entry, at) =>
-                        at === index ? { ...entry, value: next } : entry,
-                      ),
-                    })
-                  }
-                />
-              </span>
-              <button
-                type="button"
-                class="mini page-write-remove"
-                title="Remove signal write"
-                aria-label="Remove signal write"
-                onClick={() =>
-                  update({
-                    writes: writes.filter((_, at) => at !== index),
-                  })
-                }
-              >
-                <svg viewBox="0 0 16 16" aria-hidden="true">
-                  <path d="M4.5 4.5l7 7M11.5 4.5l-7 7" />
-                </svg>
-              </button>
-            </div>
-          ))}
-          <button
-            type="button"
-            class="mini page-write-add"
-            disabled={writes.length >= PANEL_MAX_WRITES}
-            onClick={() =>
-              update({ writes: [...writes, { source: "", value: 0 }] })
-            }
-          >
-            + Signal
-          </button>
-        </div>
-      );
-    }
     if (fieldSpec.kind === "frame") {
       return (
         <FrameField
@@ -1979,12 +2140,30 @@ export function PagePanel({
           <select
             value={String(value)}
             onFocus={pushHistory}
-            onChange={(event) =>
+            onChange={(event) => {
+              const next = (event.target as HTMLSelectElement).value;
+              if (
+                fieldSpec.key === "action" &&
+                next === "send" &&
+                widget.kind === "button" &&
+                !widget.frame
+              ) {
+                update({
+                  action: "send",
+                  frame: {
+                    protocol: "can",
+                    channel: view.frameBuses?.[0]?.index ?? 0,
+                    id: 0x7df,
+                    extended: false,
+                    data: "00",
+                  },
+                });
+                return;
+              }
               update({
-                [fieldSpec.key]: (event.target as HTMLSelectElement)
-                  .value as never,
-              } as PanelWidgetPatch)
-            }
+                [fieldSpec.key]: next,
+              } as PanelWidgetPatch);
+            }}
           >
             {fieldSpec.options?.map((option) => (
               <option value={option.value} key={option.value}>
@@ -2217,7 +2396,7 @@ export function PagePanel({
                 {addOpen && (
                   <div
                     ref={addMenu}
-                    class="page-add-menu"
+                    class="app-menu app-menu-page"
                     role="menu"
                     onKeyDown={(event) => {
                       const items = [

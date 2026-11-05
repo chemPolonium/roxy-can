@@ -2203,6 +2203,7 @@ fn a_derived_trigger_follows_the_core_sampled_value() {
             rising: true,
         },
         action: crate::trigger::TriggerAction::InsertMarker,
+        enabled: true,
     });
     let mut status = String::new();
     app.eval_timeout_triggers(2_000_000, 0, &mut status);
@@ -2228,6 +2229,184 @@ fn a_derived_trigger_follows_the_core_sampled_value() {
 /// The chart is a subscription owner even for lanes that never entered the
 /// project's Graphics window (the demo's eight lanes). Clearing Data must not
 /// unmount the live curve; only the last owner going away may unsubscribe.
+#[test]
+fn someip_trigger_filters_method_and_type() {
+    let cond = crate::trigger::TriggerCond::SomeIp {
+        bus: 0,
+        service: 0x1234,
+        method: Some(0x8001),
+        message_type: Some(0x02),
+    };
+    assert!(cond.someip_matches(0, 0x1234, 0x8001, 0x02));
+    assert!(!cond.someip_matches(1, 0x1234, 0x8001, 0x02), "wrong bus");
+    assert!(
+        !cond.someip_matches(0, 0x1235, 0x8001, 0x02),
+        "wrong service"
+    );
+    assert!(
+        !cond.someip_matches(0, 0x1234, 0x8002, 0x02),
+        "wrong method"
+    );
+    assert!(!cond.someip_matches(0, 0x1234, 0x8001, 0x00), "wrong type");
+    assert!(
+        crate::trigger::TriggerCond::SomeIp {
+            bus: 0,
+            service: 0x1234,
+            method: None,
+            message_type: None,
+        }
+        .someip_matches(0, 0x1234, 0x9999, 0x80)
+    );
+}
+
+/// Panel sends can encode named ARXML fields instead of requiring hex.
+#[test]
+fn panel_someip_send_encodes_arxml_fields() {
+    let mut app = quiet_app();
+    app.ensure_eth_bus(0);
+    app.measuring = true;
+    app.someip_services
+        .services
+        .push(crate::eth::arxml_service::ServiceDef {
+            name: "SpeedService".to_string(),
+            id: 0x1234,
+            major: 1,
+            methods: Vec::new(),
+            events: vec![crate::eth::arxml_service::ServiceEvent {
+                name: "SpeedEvent".to_string(),
+                id: 0x8001,
+                fields: vec![crate::eth::arxml_service::ServiceField {
+                    name: "speed".to_string(),
+                    ty: crate::eth::arxml_service::ServiceType::U16,
+                    props: Default::default(),
+                }],
+            }],
+            instances: Vec::new(),
+            buses: vec![0],
+            issues: Vec::new(),
+        });
+    app.send(crate::bus::BusCommand::SetSomeIpServices(
+        app.someip_services.clone(),
+    ));
+    app.send(crate::bus::BusCommand::PanelSendSomeIp {
+        bus: 0,
+        service: 0x1234,
+        method: 0x8001,
+        client: 1,
+        session: 0,
+        message_type: 0x02,
+        data: Vec::new(),
+        values: std::collections::BTreeMap::from([("speed".to_string(), 258.0)]),
+        texts: Default::default(),
+        transport: "udp".to_string(),
+        host: String::new(),
+        port: 30490,
+    });
+    app.refresh_snapshot();
+    let event = app.snap.someip.last().expect("panel frame was injected");
+    assert_eq!(event.payload, [0x01, 0x02]);
+    assert_eq!(event.session, 1, "session 0 means auto");
+    app.send(crate::bus::BusCommand::PanelSendSomeIp {
+        bus: 0,
+        service: 0x1234,
+        method: 0x8001,
+        client: 1,
+        session: 0,
+        message_type: 0x02,
+        data: Vec::new(),
+        values: std::collections::BTreeMap::new(),
+        texts: Default::default(),
+        transport: "udp".to_string(),
+        host: String::new(),
+        port: 30490,
+    });
+    app.refresh_snapshot();
+    assert_eq!(app.snap.someip.last().unwrap().session, 2);
+}
+
+/// A Panel request is correlated with the response session; the response is
+/// reported in Write, and an unanswered request times out.
+#[test]
+fn someip_request_response_is_correlated() {
+    let mut app = quiet_app();
+    app.ensure_eth_bus(0);
+    app.measuring = true;
+    app.someip_services
+        .services
+        .push(crate::eth::arxml_service::ServiceDef {
+            name: "SpeedService".to_string(),
+            id: 0x1234,
+            major: 1,
+            methods: vec![crate::eth::arxml_service::ServiceMethod {
+                name: "GetSpeed".to_string(),
+                id: 0x0001,
+                input: Vec::new(),
+                output: vec![crate::eth::arxml_service::ServiceField {
+                    name: "speed".to_string(),
+                    ty: crate::eth::arxml_service::ServiceType::U16,
+                    props: Default::default(),
+                }],
+            }],
+            events: Vec::new(),
+            instances: Vec::new(),
+            buses: vec![0],
+            issues: Vec::new(),
+        });
+    app.send(crate::bus::BusCommand::SetSomeIpServices(
+        app.someip_services.clone(),
+    ));
+    app.send(crate::bus::BusCommand::PanelSendSomeIp {
+        bus: 0,
+        service: 0x1234,
+        method: 0x0001,
+        client: 1,
+        session: 0,
+        message_type: 0x00,
+        data: Vec::new(),
+        values: Default::default(),
+        texts: Default::default(),
+        transport: "udp".to_string(),
+        host: String::new(),
+        port: 30490,
+    });
+    app.send(crate::bus::BusCommand::PanelSendSomeIp {
+        bus: 0,
+        service: 0x1234,
+        method: 0x0001,
+        client: 1,
+        session: 1,
+        message_type: 0x80,
+        data: vec![0, 7],
+        values: Default::default(),
+        texts: Default::default(),
+        transport: "udp".to_string(),
+        host: String::new(),
+        port: 30490,
+    });
+    app.refresh_snapshot();
+    assert!(
+        app.snap
+            .write
+            .iter()
+            .any(|line| line.text.contains("SOME/IP response 0x1234.0x0001")),
+        "response is reported after matching the request session"
+    );
+}
+
+/// A Button-sent message must survive the sampler even when a generator
+/// refreshed the same signal only a few milliseconds earlier.
+#[test]
+fn fast_generator_does_not_swallow_button_samples() {
+    let mut app = quiet_app();
+    let key = SigKey::can_in(crate::model::ClusterId(1), 0x100, false, "Value");
+    app.subscribe_signal(key.clone());
+    let sub = app.subs.get_mut(&key).unwrap();
+    sub.push_sample(1_000_000, 10.0, 50_000);
+    sub.push_sample(1_005_000, 42.0, 50_000);
+    let values: Vec<f64> = sub.history.iter().map(|(_, value)| *value).collect();
+    assert_eq!(values, [10.0, 42.0]);
+}
+
 #[test]
 fn clearing_an_observer_keeps_a_chart_owned_subscription() {
     let mut app = App::headless();
@@ -2393,6 +2572,7 @@ fn deleting_a_derived_channel_drops_its_trigger_rules() {
             rising: true,
         },
         action: crate::trigger::TriggerAction::InsertMarker,
+        enabled: true,
     });
     assert_eq!(app.triggers.len(), 1);
     app.set_derived_defs(Vec::new());
@@ -2453,6 +2633,7 @@ fn a_derived_trigger_fires_inside_a_real_step() {
             rising: true,
         },
         action: crate::trigger::TriggerAction::InsertMarker,
+        enabled: true,
     });
     app.start_virtual();
     app.subs.get_mut(&a).unwrap().push_sample(1_000, 5.0, 1);
@@ -4861,6 +5042,263 @@ fn an_insert_marker_trigger_stamps_the_bus_clock() {
     assert!(app.snap.markers.is_empty(), "markers are run-scored state");
 }
 
+/// Every edge that runs an action lands in the Write log and in the
+/// replay bar's navigation list, not only marker actions.
+#[test]
+fn a_trigger_edge_lands_in_the_write_log_and_the_fire_list() {
+    let mut app = quiet_app();
+    app.triggers.push(Trigger::new(
+        TriggerCond::IdPresent { ch: 0, id: 0x777 },
+        TriggerAction::InsertMarker,
+    ));
+    receive(
+        &mut app,
+        10_000,
+        vec![rx_frame(10_000, 0x777, 8, FrameFlags::NONE)],
+    );
+    app.refresh_snapshot();
+    assert_eq!(app.snap.trigger_fires.len(), 1, "one edge, one entry");
+    let fire = &app.snap.trigger_fires[0];
+    assert_eq!(fire.at_us, 10_000);
+    assert!(fire.ok);
+    assert!(fire.text.contains("0x777"), "{}", fire.text);
+    assert!(
+        app.snap
+            .write
+            .iter()
+            .any(|line| line.text.contains("trigger 1")),
+        "the edge is visible in Write"
+    );
+}
+
+/// Cooldown holds an oscillating rule back, the fire cap stops it without
+/// disabling the row, and re-arming one rule resets only that rule.
+#[test]
+fn trigger_cooldown_max_fires_and_per_rule_rearm_gate_edges() {
+    let mut app = quiet_app();
+    let mut trigger = Trigger::new(
+        TriggerCond::IdPresent { ch: 0, id: 0x777 },
+        TriggerAction::InsertMarker,
+    );
+    trigger.cooldown_us = 50_000;
+    trigger.max_fires = 2;
+    app.triggers.push(trigger);
+
+    let hit = |app: &mut App, t: u64| {
+        // Appearance conditions latch; drop the latch so the next frame is
+        // a fresh edge, exactly what Re-arm does for a live rule.
+        if let Some(trigger) = app.triggers.first_mut() {
+            trigger.level = false;
+        }
+        receive(app, t, vec![rx_frame(t, 0x777, 8, FrameFlags::NONE)]);
+    };
+
+    hit(&mut app, 10_000);
+    assert_eq!(app.triggers[0].fired, 1);
+    hit(&mut app, 40_000);
+    assert_eq!(app.triggers[0].fired, 1, "inside the 50 ms cooldown");
+    hit(&mut app, 100_000);
+    assert_eq!(app.triggers[0].fired, 2);
+    hit(&mut app, 200_000);
+    assert_eq!(app.triggers[0].fired, 2, "fire cap reached");
+    assert!(app.triggers[0].enabled, "the row stays enabled at the cap");
+
+    app.send(crate::bus::BusCommand::RearmTrigger { index: 0 });
+    assert_eq!(app.triggers[0].fired, 0, "per-rule re-arm resets the count");
+    hit(&mut app, 300_000);
+    assert_eq!(app.triggers[0].fired, 1, "and the rule runs again");
+}
+
+/// New actions reuse the Panel/core write paths: a sysvar write is clamped,
+/// a script action is queued, and both report success in the fire list.
+#[test]
+fn trigger_actions_set_a_sysvar_and_queue_a_script() {
+    let mut app = quiet_app();
+    app.send(crate::bus::BusCommand::DefineSysVar(
+        crate::bus::SysVarDef {
+            namespace: "Bench".to_string(),
+            name: "Ready".to_string(),
+            init: 0.0,
+            min: Some(0.0),
+            max: Some(10.0),
+            unit: String::new(),
+            comment: String::new(),
+        },
+    ));
+    app.triggers.push(Trigger::new(
+        TriggerCond::IdPresent { ch: 0, id: 0x777 },
+        TriggerAction::SetSysVar {
+            key: "Bench::Ready".to_string(),
+            value: 7.0,
+        },
+    ));
+    app.triggers.push(Trigger::new(
+        TriggerCond::IdPresent { ch: 0, id: 0x777 },
+        TriggerAction::RunScript {
+            name: "Go".to_string(),
+            value: Some(1.5),
+        },
+    ));
+    receive(
+        &mut app,
+        10_000,
+        vec![rx_frame(10_000, 0x777, 8, FrameFlags::NONE)],
+    );
+    app.refresh_snapshot();
+    assert_eq!(app.snap.sysvars[0].value, 7.0, "the sysvar write landed");
+    assert_eq!(app.snap.trigger_fires.len(), 2);
+    assert!(app.snap.trigger_fires.iter().all(|fire| fire.ok));
+    assert!(
+        app.snap
+            .trigger_fires
+            .iter()
+            .any(|fire| fire.result.contains("queued \"Go\"")),
+        "the script action reports its queue hand-off"
+    );
+}
+
+/// A payload rule reads one masked byte, so an undescribed frame can be
+/// watched without a database entry. A changed byte clears the level and the
+/// next match is a fresh edge.
+#[test]
+fn a_payload_trigger_fires_on_the_masked_byte() {
+    let mut app = quiet_app();
+    app.triggers.push(Trigger::new(
+        TriggerCond::PayloadMatch {
+            ch: 0,
+            id: 0x700,
+            ext: false,
+            offset: 1,
+            mask: 0xF0,
+            value: 0xA0,
+        },
+        TriggerAction::InsertMarker,
+    ));
+    let mut frame = rx_frame(10_000, 0x700, 8, FrameFlags::NONE);
+    frame.data[1] = 0xAB;
+    receive(&mut app, 10_000, vec![frame]);
+    assert_eq!(app.snap.markers, [10_000], "masked byte matched");
+
+    let mut miss = rx_frame(20_000, 0x700, 8, FrameFlags::NONE);
+    miss.data[1] = 0x0B;
+    receive(&mut app, 20_000, vec![miss]);
+    let mut hit = rx_frame(30_000, 0x700, 8, FrameFlags::NONE);
+    hit.data[1] = 0xAF;
+    receive(&mut app, 30_000, vec![hit]);
+    assert_eq!(
+        app.snap.markers,
+        [10_000, 30_000],
+        "a non-matching frame cleared the level"
+    );
+}
+
+/// An Ethernet flow rule latches once per run like the other presence
+/// conditions; the tag and EtherType both have to match.
+#[test]
+fn an_ethernet_flow_trigger_latches_on_its_flow() {
+    let mut app = quiet_app();
+    app.triggers.push(Trigger::new(
+        TriggerCond::EthFlow {
+            bus: 0,
+            ethertype: 0x88B5,
+            vlan: Some(7),
+        },
+        TriggerAction::InsertMarker,
+    ));
+    app.ingest_eth(crate::eth::EthFrame::session(
+        10_000,
+        0,
+        Some(8),
+        0x88B5,
+        vec![1, 2],
+    ));
+    assert!(app.snap.markers.is_empty(), "wrong VLAN does not match");
+    app.ingest_eth(crate::eth::EthFrame::session(
+        20_000,
+        0,
+        Some(7),
+        0x88B5,
+        vec![1, 2],
+    ));
+    app.refresh_snapshot();
+    assert_eq!(app.snap.markers, [20_000]);
+    app.ingest_eth(crate::eth::EthFrame::session(
+        30_000,
+        0,
+        Some(7),
+        0x88B5,
+        vec![3],
+    ));
+    app.refresh_snapshot();
+    assert_eq!(app.snap.markers, [20_000], "presence latches for the run");
+}
+
+/// The new action payloads and the per-rule gates survive a project save.
+#[test]
+fn trigger_actions_and_limits_round_trip_through_a_project() {
+    let mut app = quiet_app();
+    app.send(crate::bus::BusCommand::AddChannel);
+    app.settle();
+    let mut setpoint = Trigger::new(
+        TriggerCond::IdPresent { ch: 0, id: 0x777 },
+        TriggerAction::SetSysVar {
+            key: "Bench::Ready".to_string(),
+            value: 3.5,
+        },
+    );
+    setpoint.cooldown_us = 250_000;
+    setpoint.max_fires = 4;
+    app.triggers.push(setpoint);
+    app.triggers.push(Trigger::new(
+        TriggerCond::IdPresent { ch: 0, id: 0x778 },
+        TriggerAction::RunScript {
+            name: "Go".to_string(),
+            value: None,
+        },
+    ));
+    app.triggers.push(Trigger::new(
+        TriggerCond::PayloadMatch {
+            ch: 0,
+            id: 0x700,
+            ext: false,
+            offset: 3,
+            mask: 0xF0,
+            value: 0xA0,
+        },
+        TriggerAction::InsertMarker,
+    ));
+
+    app.triggers[2].pre_frames = Some(2);
+    app.triggers[2].post_frames = Some(3);
+    app.panel_pages =
+        vec![serde_json::json!({"format": "roxy-can-panel", "page": {"name": "Bench"}})];
+    app.triggers.push(Trigger::new(
+        TriggerCond::IdPresent { ch: 0, id: 0x779 },
+        TriggerAction::SendEth {
+            bus: 0,
+            frame: "Payload".into(),
+            data: vec![0xAA, 0xBB],
+        },
+    ));
+    app.refresh_snapshot();
+    let project = ProjectV2::from_app(&app, None);
+    assert_eq!(project.triggers.len(), 4, "four rules were saved");
+    let mut restored = App::headless();
+    project.apply(&mut restored);
+    restored.refresh_snapshot();
+
+    assert_eq!(restored.triggers.len(), 4);
+    assert_eq!(restored.triggers[0].action, app.triggers[0].action);
+    assert_eq!(restored.triggers[0].cooldown_us, 250_000);
+    assert_eq!(restored.triggers[0].max_fires, 4);
+    assert_eq!(restored.triggers[1].action, app.triggers[1].action);
+    assert_eq!(restored.triggers[2].cond, app.triggers[2].cond);
+    assert_eq!(restored.triggers[2].pre_frames, Some(2));
+    assert_eq!(restored.triggers[2].post_frames, Some(3));
+    assert_eq!(restored.triggers[3].action, app.triggers[3].action);
+    assert_eq!(restored.panel_pages, app.panel_pages);
+}
+
 /// A trigger-started recording opens with the frames that came before the
 /// event, oldest first, and the triggering frame itself lands right after
 /// them.
@@ -6060,7 +6498,7 @@ fn a_trigger_edit_flips_the_crossing_direction() {
         &app.triggers[0].cond,
         TriggerCond::SignalCross { rising: true, .. }
     ));
-    let action = app.triggers[0].action;
+    let action = app.triggers[0].action.clone();
     app.send(crate::bus::BusCommand::EditTrigger {
         index: 0,
         cond: TriggerCond::SignalCross {
@@ -6072,6 +6510,10 @@ fn a_trigger_edit_flips_the_crossing_direction() {
             rising: false,
         },
         action,
+        cooldown_us: 0,
+        max_fires: 0,
+        pre_frames: None,
+        post_frames: None,
     });
     match &app.triggers[0].cond {
         TriggerCond::SignalCross {
@@ -6082,7 +6524,7 @@ fn a_trigger_edit_flips_the_crossing_direction() {
         }
         other => panic!("expected a signal trigger, got {other:?}"),
     }
-    let action = app.triggers[0].action;
+    let action = app.triggers[0].action.clone();
     let cond = match &app.triggers[0].cond {
         TriggerCond::SignalCross {
             ch,
@@ -6105,6 +6547,10 @@ fn a_trigger_edit_flips_the_crossing_direction() {
         index: 0,
         cond,
         action,
+        cooldown_us: 0,
+        max_fires: 0,
+        pre_frames: None,
+        post_frames: None,
     });
     assert!(matches!(
         &app.triggers[0].cond,
@@ -6933,6 +7379,7 @@ fn a_sysvar_condition_fires_when_the_operator_raises_it() {
             rising: true,
         },
         action: crate::trigger::TriggerAction::ClearTrace,
+        enabled: true,
     });
     app.settle();
 
@@ -7339,6 +7786,14 @@ fn e2e_counter_continuity_is_published_per_message() {
         sources: Vec::new(),
     });
     app.settle();
+    app.triggers.push(Trigger::new(
+        TriggerCond::E2eIssue {
+            ch: 0,
+            id: 0x123,
+            ext: false,
+        },
+        TriggerAction::InsertMarker,
+    ));
     let frame = |t: u64, counter: u8| {
         let mut f = frame_at(t, 0x123, 8, Direction::Rx);
         f.data[0] = 0xAA;
@@ -7348,7 +7803,12 @@ fn e2e_counter_continuity_is_published_per_message() {
     receive(
         &mut app,
         10_000,
-        vec![frame(10_000, 0), frame(20_000, 1), frame(30_000, 1)],
+        vec![
+            frame(10_000, 0),
+            frame(20_000, 1),
+            frame(30_000, 1),
+            frame(40_000, 5),
+        ],
     );
     let view = app
         .snap
@@ -7357,10 +7817,11 @@ fn e2e_counter_continuity_is_published_per_message() {
         .expect("E2E continuity published");
     assert_eq!(view.profile, 1);
     assert_eq!(view.data_id, Some(0x123));
-    assert_eq!(view.frames, 3);
-    assert_eq!(view.counter, Some(1));
+    assert_eq!(view.frames, 4);
+    assert_eq!(view.counter, Some(5));
     assert_eq!(view.repeats, 1, "0,1,1 repeats once");
-    assert_eq!(view.jumps, 0);
+    assert_eq!(view.jumps, 1, "1 -> 5 is a jump");
+    assert_eq!(app.snap.markers, [40_000], "the E2E jump fired the rule");
 }
 
 /// Frame decoding must find the model through the channel's current cluster
@@ -8108,6 +8569,231 @@ fn a_flexray_arrival_fires_a_trigger_on_the_watched_bus() {
         "re-arming lets the next arrival fire again"
     );
     app.stop();
+}
+
+/// A FlexRay slot timeout rides the same grace as the spec verdict: no
+/// arrival means no opinion, and silence past grace is a fresh edge.
+#[test]
+fn a_flexray_slot_timeout_fires_after_grace() {
+    let mut app = quiet_app();
+    app.tx_list.retain(|t| t.channel != 0);
+    app.load_cluster_description(crate::test_assets::path("PowerTrain.arxml"), Some(0));
+    let q0 = app.hw.attach_fr_mock(0, 5);
+    app.start_virtual();
+    app.triggers.push(Trigger::new(
+        TriggerCond::FrTimeout { bus: 0, slot: 13 },
+        TriggerAction::InsertMarker,
+    ));
+
+    let mut status = String::new();
+    app.eval_timeout_triggers(10_000, 3, &mut status);
+    assert!(app.snap.markers.is_empty(), "never seen: no opinion");
+
+    fr_step(&mut app, &q0, 13, 10_000);
+    let mut status = String::new();
+    app.eval_timeout_triggers(10_000_000, 3, &mut status);
+    app.refresh_snapshot();
+    assert_eq!(
+        app.snap.markers,
+        [10_000_000],
+        "silence past grace fires the rule"
+    );
+    app.stop();
+}
+
+/// A FlexRay send action queues the whole entry, not a payload typed into the
+/// rule: the generator row's width and encoded signals are what goes out.
+#[test]
+fn a_trigger_sends_a_whole_flexray_entry() {
+    let mut app = quiet_app();
+    app.load_cluster_description(crate::test_assets::path("PowerTrain.arxml"), Some(0));
+    app.send(crate::bus::BusCommand::AddFrEntry {
+        bus: 0,
+        slot: 13,
+        node: String::new(),
+    });
+    app.settle();
+    let width = app.fr_tx_list[0].len;
+    app.triggers.push(Trigger::new(
+        TriggerCond::IdPresent { ch: 0, id: 0x700 },
+        TriggerAction::SendFr { bus: 0, slot: 13 },
+    ));
+
+    receive(
+        &mut app,
+        10_000,
+        vec![rx_frame(10_000, 0x700, 8, FrameFlags::NONE)],
+    );
+    assert_eq!(app.fr_from_scripts.len(), 1, "one whole entry was queued");
+    let queued = app.fr_from_scripts[0].clone();
+    assert_eq!((queued.1, queued.2), (0, 13));
+    assert_eq!(queued.3.len(), width, "the row's declared width is kept");
+
+    app.advance_clock(20_000);
+    app.tick(20_000);
+    app.refresh_snapshot();
+    assert!(
+        app.snap
+            .fr_trace
+            .iter()
+            .any(|row| row.bus == 0 && row.slot == 13),
+        "the entry landed in the next generator block: queued={} trace={:?}",
+        app.fr_from_scripts.len(),
+        app.snap.fr_trace
+    );
+    app.stop();
+}
+
+/// An Ethernet send action injects one whole matrix frame: the definition
+/// supplies VLAN/EtherType/length, the rule supplies the payload bytes.
+#[test]
+fn a_trigger_sends_a_whole_ethernet_frame() {
+    let mut app = quiet_app();
+    app.measuring = true;
+    app.eth_dbs.insert(
+        0,
+        std::sync::Arc::new(crate::eth::db::EthDb {
+            clusters: vec![crate::eth::db::EthCluster {
+                name: "ETH1".into(),
+                vlans: vec![100],
+            }],
+            frames: vec![crate::eth::db::EthFrameDef {
+                name: "Payload".into(),
+                cluster: "ETH1".into(),
+                vlan: Some(100),
+                length: 4,
+                ethertype_hint: Some(0x88B5),
+                pdus: vec![],
+            }],
+            ..Default::default()
+        }),
+    );
+    app.triggers.push(Trigger::new(
+        TriggerCond::IdPresent { ch: 0, id: 0x700 },
+        TriggerAction::SendEth {
+            bus: 0,
+            frame: "Payload".into(),
+            data: vec![0xAA, 0xBB, 0xCC, 0xDD],
+        },
+    ));
+    receive(
+        &mut app,
+        10_000,
+        vec![rx_frame(10_000, 0x700, 8, FrameFlags::NONE)],
+    );
+    app.refresh_snapshot();
+    let frame = app.snap.eth_trace.last().expect("the injected frame");
+    assert_eq!(frame.payload.as_ref(), [0xAA, 0xBB, 0xCC, 0xDD]);
+    assert_eq!(frame.vlan, Some(100));
+    assert_eq!(frame.ethertype, 0x88B5);
+    app.stop();
+}
+
+/// A captured SOME/IP datagram is decoded into the service-event ring, not
+/// just left as an opaque Ethernet payload.
+#[test]
+fn someip_messages_reach_the_service_event_ring() {
+    let mut app = quiet_app();
+    app.triggers.push(crate::trigger::Trigger::new(
+        crate::trigger::TriggerCond::SomeIp {
+            bus: 0,
+            service: 0x1234,
+            method: None,
+            message_type: None,
+        },
+        crate::trigger::TriggerAction::InsertMarker,
+    ));
+    let mut someip = Vec::new();
+    someip.extend_from_slice(&0x1234u16.to_be_bytes());
+    someip.extend_from_slice(&0x8001u16.to_be_bytes());
+    someip.extend_from_slice(&8u32.to_be_bytes());
+    someip.extend_from_slice(&1u16.to_be_bytes());
+    someip.extend_from_slice(&7u16.to_be_bytes());
+    someip.extend_from_slice(&[1, 1, 0x02, 0]);
+    let mut udp = Vec::new();
+    udp.extend_from_slice(&30501u16.to_be_bytes());
+    udp.extend_from_slice(&30490u16.to_be_bytes());
+    udp.extend_from_slice(&((8 + someip.len()) as u16).to_be_bytes());
+    udp.extend_from_slice(&0u16.to_be_bytes());
+    udp.extend_from_slice(&someip);
+    let mut ip = vec![0u8; 20];
+    ip[0] = 0x45;
+    ip[2..4].copy_from_slice(&((20 + udp.len()) as u16).to_be_bytes());
+    ip[9] = 17;
+    ip[12..16].copy_from_slice(&[10, 0, 0, 1]);
+    ip[16..20].copy_from_slice(&[10, 0, 0, 2]);
+    ip.extend_from_slice(&udp);
+    app.ingest_eth(crate::eth::EthFrame::session(10_000, 0, None, 0x0800, ip));
+    app.refresh_snapshot();
+    assert_eq!(app.snap.someip.len(), 1);
+    let event = &app.snap.someip[0];
+    assert_eq!((event.service, event.method), (0x1234, 0x8001));
+    assert_eq!(event.message_type, 0x02);
+    assert_eq!(event.session, 7);
+    assert!(
+        app.trigger_summary(0).starts_with("ETH0"),
+        "SOME/IP rule must name the Ethernet bus, got {}",
+        app.trigger_summary(0)
+    );
+    assert_eq!(app.snap.markers, [10_000], "the service rule fired");
+}
+
+/// A decoded SOME/IP field publishes through the ordinary signal observer as
+/// a synthetic Ethernet frame, so it can be plotted like any other signal.
+#[test]
+fn someip_fields_publish_to_signal_subscribers() {
+    let mut app = quiet_app();
+    app.ensure_eth_bus(0);
+    app.someip_services
+        .services
+        .push(crate::eth::arxml_service::ServiceDef {
+            name: "SpeedService".to_string(),
+            id: 0x1234,
+            major: 1,
+            methods: Vec::new(),
+            events: vec![crate::eth::arxml_service::ServiceEvent {
+                name: "SpeedEvent".to_string(),
+                id: 0x8001,
+                fields: vec![crate::eth::arxml_service::ServiceField {
+                    name: "speed".to_string(),
+                    ty: crate::eth::arxml_service::ServiceType::U16,
+                    props: Default::default(),
+                }],
+            }],
+            instances: Vec::new(),
+            buses: vec![0],
+            issues: Vec::new(),
+        });
+    app.send(crate::bus::BusCommand::SetSomeIpServices(
+        app.someip_services.clone(),
+    ));
+    app.settle();
+    let key = app.eth_key(0, "SOMEIP 0x1234/0x8001".to_string(), "speed".to_string());
+    app.subscribe_signal(key.clone());
+
+    let mut someip = Vec::new();
+    someip.extend_from_slice(&0x1234u16.to_be_bytes());
+    someip.extend_from_slice(&0x8001u16.to_be_bytes());
+    someip.extend_from_slice(&10u32.to_be_bytes());
+    someip.extend_from_slice(&1u16.to_be_bytes());
+    someip.extend_from_slice(&7u16.to_be_bytes());
+    someip.extend_from_slice(&[1, 1, 0x02, 0, 0, 7]);
+    let mut udp = Vec::new();
+    udp.extend_from_slice(&30501u16.to_be_bytes());
+    udp.extend_from_slice(&30490u16.to_be_bytes());
+    udp.extend_from_slice(&((8 + someip.len()) as u16).to_be_bytes());
+    udp.extend_from_slice(&0u16.to_be_bytes());
+    udp.extend_from_slice(&someip);
+    let mut ip = vec![0u8; 20];
+    ip[0] = 0x45;
+    ip[2..4].copy_from_slice(&((20 + udp.len()) as u16).to_be_bytes());
+    ip[9] = 17;
+    ip[12..16].copy_from_slice(&[10, 0, 0, 1]);
+    ip[16..20].copy_from_slice(&[10, 0, 0, 2]);
+    ip.extend_from_slice(&udp);
+    app.ingest_eth(crate::eth::EthFrame::session(10_000, 0, None, 0x0800, ip));
+    app.settle();
+    assert_eq!(app.subs.get(&key).map(|sub| sub.latest), Some(7.0));
 }
 
 /// Hardware RX: frames received on an attached adapter ingest like any
@@ -11412,6 +12098,7 @@ fn removing_a_flexray_bus_takes_everything_keyed_on_it() {
             rising: true,
         },
         action: TriggerAction::StartRecording,
+        enabled: true,
     });
     let rules_on = |app: &App, bus: u8| -> usize {
         app.snap
@@ -11823,6 +12510,7 @@ fn the_frame_length_convention_renames_trace_rows() {
                 signals: vec![],
             }],
         }],
+        ..Default::default()
     };
     app.eth_buses.insert(0, std::sync::Arc::new(db));
     app.ingest_eth(crate::eth::EthFrame::new(
@@ -12039,6 +12727,7 @@ fn an_ethernet_signal_drives_a_dotted_script_read() {
                 }],
             }],
         }],
+        ..Default::default()
     };
     app.eth_buses.insert(0, std::sync::Arc::new(db));
     app.push_eth_db_to_core();

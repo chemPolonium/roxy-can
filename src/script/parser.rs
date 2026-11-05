@@ -60,6 +60,8 @@ pub enum OnKind {
     /// Every frame on the node's channel, whatever its id: the gateway /
     /// logger shape. `on message *`.
     AnyMessage,
+    /// A SOME/IP message for one service/method (`on someip 0x1234 0x8001`).
+    SomeIp { service: u16, method: u16 },
     /// An error frame arrived on the node's channel (`on errorFrame`).
     ErrorFrame,
     /// A periodic tick every `period_ms` milliseconds.
@@ -576,6 +578,17 @@ impl P {
                 }
             }
             "errorframe" | "errorFrame" => OnKind::ErrorFrame,
+            "someip" => {
+                let service = self.id_literal()?;
+                let method = self.id_literal()?;
+                if service > u32::from(u16::MAX) || method > u32::from(u16::MAX) {
+                    return self.err("someip service/method must be 0..0xFFFF");
+                }
+                OnKind::SomeIp {
+                    service: service as u16,
+                    method: method as u16,
+                }
+            }
             "fr" => {
                 // `on fr slot 13` / `on fr 0 slot 13`. The cluster is optional
                 // because a one-cluster setup is the common case, but it has to

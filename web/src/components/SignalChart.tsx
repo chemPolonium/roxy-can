@@ -468,6 +468,7 @@ export function SignalChart({
   onMoveCursor,
   onClearCursors,
   onSignalAction,
+  onTriggerSignal,
   fullscreen,
   measuring,
   paused,
@@ -493,6 +494,8 @@ export function SignalChart({
   onMoveCursor: (id: number, t: number) => void;
   onClearCursors: () => void;
   onSignalAction: (key: string, action: ChartSignalAction) => void;
+  /// Arms a trigger watched at this signal's threshold.
+  onTriggerSignal?: (key: string) => void;
   fullscreen: boolean;
   measuring: boolean;
   paused: boolean;
@@ -1590,7 +1593,8 @@ export function SignalChart({
           if (event.shiftKey) return;
           const rect = event.currentTarget.getBoundingClientRect();
           if (event.clientX - rect.left >= GUTTER) {
-            onView(() => ({ windowS: 30, endS: null }));
+            // Re-enter LIVE without discarding the current time zoom.
+            onView((old) => ({ ...old, endS: null }));
           }
         }}
         onContextMenu={(event) => {
@@ -1713,6 +1717,17 @@ export function SignalChart({
             }}
           >
             Watch in State
+          </button>
+          <button
+            type="button"
+            disabled={!onTriggerSignal}
+            title="Add a trigger rule watched at this signal"
+            onClick={() => {
+              onTriggerSignal?.(menuSignal.key);
+              setLaneMenu(null);
+            }}
+          >
+            Trigger on this signal
           </button>
           <div class="signal-menu-sep" />
           <button

@@ -14,6 +14,7 @@
 //! The mapping is session state; a Profile can carry the same mapping
 //! into a project.
 
+pub mod eth;
 pub mod kvaser;
 pub mod vector;
 
@@ -290,6 +291,8 @@ pub struct Hardware {
     /// the bus. Drained alongside the CAN adapters; rows land in the Trace
     /// window's FR section and nowhere else.
     pub fr_watches: HashMap<u8, FrWatch>,
+    /// Ethernet bus index → live Npcap port.
+    pub eth_ports: HashMap<u8, crate::hw::eth::EthPort>,
     /// CANoe-style bus mode. `false` (Simulated) parks every attachment:
     /// received frames are discarded and wire writes are suppressed, while
     /// the attachments stay configured for the moment the mode flips
@@ -327,6 +330,7 @@ impl Hardware {
             refresh_seq: 0,
             buses: Default::default(),
             fr_watches: Default::default(),
+            eth_ports: Default::default(),
             live: true,
             pending_tx_fail: Vec::new(),
         }
@@ -373,6 +377,53 @@ impl Hardware {
 
     pub fn detach(&mut self, bus: u8) {
         self.buses.remove(&bus);
+    }
+
+    pub fn eth_interfaces() -> Result<Vec<crate::hw::eth::EthInterface>, String> {
+        crate::hw::eth::interfaces()
+    }
+
+    pub fn attach_eth(&mut self, bus: u8, device: &str) -> Result<(), String> {
+        let port = crate::hw::eth::EthPort::open(device)?;
+        self.eth_ports.insert(bus, port);
+        Ok(())
+    }
+
+    pub fn detach_eth(&mut self, bus: u8) {
+        self.eth_ports.remove(&bus);
+    }
+
+    pub fn poll_eth(&mut self, sim_t_us: u64) -> Vec<crate::eth::EthFrame> {
+        let mut out = Vec::new();
+        if !self.live {
+            return out;
+        }
+        let mut buses: Vec<u8> = self.eth_ports.keys().copied().collect();
+        buses.sort();
+        for bus in buses {
+            let Some(port) = self.eth_ports.get(&bus) else {
+                continue;
+            };
+            while let Some(mut frame) = port.try_read() {
+                frame.t_us = sim_t_us;
+                frame.bus = bus;
+                out.push(frame);
+            }
+        }
+        out
+    }
+
+    pub fn send_eth(&self, bus: u8, frame: &crate::eth::EthFrame) -> Result<(), String> {
+        self.eth_ports
+            .get(&bus)
+            .ok_or_else(|| format!("no Ethernet port attached to ETH{bus}"))
+            .and_then(|port| port.send(frame))
+    }
+
+    pub fn eth_device(&self, bus: u8) -> Option<&str> {
+        self.eth_ports
+            .get(&bus)
+            .map(crate::hw::eth::EthPort::device)
     }
 
     /// Closes every Vector CAN and FlexRay port, leaving other drivers'

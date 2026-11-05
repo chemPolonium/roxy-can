@@ -71,6 +71,12 @@ impl ReplayMap {
         self.table_mut(kind).insert(raw, to);
     }
 
+    /// 删掉一条选择，回到"按原编号"。和 `set(kind, raw, None)` 不同：那是
+    /// 明确不回放，重新打开工程后仍然不回放。
+    pub fn forget(&mut self, kind: LogBusKind, raw: u8) {
+        self.table_mut(kind).remove(&raw);
+    }
+
     /// 删掉一个 cluster 之后，指向它的表项变成"不回放"；别的表项不动。
     pub fn drop_cluster(&mut self, kind: LogBusKind, cluster: ClusterId) {
         let table = self.table_mut(kind);
@@ -192,6 +198,18 @@ mod tests {
             map.configured(LogBusKind::Eth),
             vec![(1, Some(ClusterId(9)))]
         );
+    }
+
+    #[test]
+    fn forgetting_a_choice_restores_the_original_number() {
+        let mut map = ReplayMap::default();
+        map.set(LogBusKind::Can, 3, Some(ClusterId(7)));
+        map.set(LogBusKind::Can, 4, None);
+        map.forget(LogBusKind::Can, 3);
+        map.forget(LogBusKind::Can, 4);
+        assert_eq!(map.target(LogBusKind::Can, 3), ReplayTarget::Same);
+        assert_eq!(map.target(LogBusKind::Can, 4), ReplayTarget::Same);
+        assert!(map.configured(LogBusKind::Can).is_empty());
     }
 
     #[test]

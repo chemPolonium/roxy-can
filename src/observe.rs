@@ -78,6 +78,14 @@ impl SampleCache {
             .map(|p| p.0)
     }
 
+    /// Value of the newest point, wherever it lives.
+    fn last_value(&self) -> Option<f64> {
+        self.tail
+            .last()
+            .or_else(|| self.chunks.last().and_then(|c| c.last()))
+            .map(|p| p.1)
+    }
+
     fn push_point(&mut self, p: (u64, f64)) {
         self.tail.push(p);
         self.total += 1;
@@ -318,9 +326,16 @@ impl Subscription {
     /// run began -- recomputing them every time the oldest point is trimmed would
     /// cost an O(n) rescan per sample.
     pub(crate) fn push_sample(&mut self, t_us: u64, v: f64, min_gap: u64) {
-        // The cache owns the spacing rule: judging a candidate only against
-        // the newest point would let a re-delivered frame through.
-        if self.history.merge(&[(t_us, v)], min_gap).is_empty() {
+        // A value change is real bus data even when it lands inside the
+        // downsampling stride. Keeping only the periodic frame makes a
+        // Button-triggered message disappear when a generator runs fast.
+        // Same-value redelivery still obeys the stride.
+        let changed = self
+            .history
+            .last_value()
+            .is_none_or(|previous| (previous - v).abs() > f64::EPSILON);
+        let gap = if changed { min_gap.min(1_000) } else { min_gap };
+        if self.history.merge(&[(t_us, v)], gap).is_empty() {
             return;
         }
         self.last_sample_us = t_us;

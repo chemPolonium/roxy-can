@@ -5,9 +5,11 @@
 //! frame is far larger than a CAN frame. Decode (ARXML) and UI wiring build
 //! on this module.
 
+pub mod arxml_service;
 pub mod db;
 pub mod frame;
 pub mod ring;
+pub mod someip;
 
 pub use frame::EthFrame;
 pub use ring::{EthRing, EthTraceView};

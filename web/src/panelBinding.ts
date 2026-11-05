@@ -220,14 +220,7 @@ export function panelButtonCapability(
 ): PanelCapability {
   if (!ctx.online) return { enabled: false, reason: "No connection to the bus core" };
   if (widget.action === "none") {
-    const writes = widget.writes ?? [];
-    if (!writes.some((write) => write.source.trim())) {
-      return { enabled: false, reason: "No signal writes" };
-    }
-    if (!ctx.measuring) {
-      return { enabled: false, reason: "Start the measurement first" };
-    }
-    return { enabled: true, reason: "" };
+    return { enabled: false, reason: "No action configured" };
   }
   if (widget.action === "send") {
     const frame = widget.frame;
@@ -242,7 +235,7 @@ export function panelButtonCapability(
       if (!(view.frBuses ?? []).some((bus) => bus.index === frame.bus)) {
         return { enabled: false, reason: "No FlexRay bus with that description" };
       }
-    } else {
+    } else if (frame.protocol === "eth") {
       if (!(view.ethBuses ?? []).some((bus) => bus.index === frame.bus)) {
         return { enabled: false, reason: "No Ethernet bus with that matrix" };
       }
@@ -256,6 +249,10 @@ export function panelButtonCapability(
           enabled: false,
           reason: `Frame "${frame.frame}" carries ${def.length} payload bytes`,
         };
+      }
+    } else if (frame.protocol === "someip") {
+      if (!(view.ethBuses ?? []).some((bus) => bus.index === frame.bus)) {
+        return { enabled: false, reason: "No Ethernet bus for SOME/IP" };
       }
     }
     if (!ctx.measuring) {

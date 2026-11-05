@@ -370,12 +370,15 @@ impl App {
             .map(|c| c.name.clone())
             .unwrap_or_else(|| format!("ETH{bus}"));
         self.report_merge_warnings(&format!("ETH{bus}"), warnings);
+        let pdus = db.pdus.len();
+        let endpoints = db.endpoints.len();
         self.eth_sources.entry(bus).or_default().push(source);
+        self.rebuild_someip_services();
         self.eth_buses.insert(bus, std::sync::Arc::new(db));
         self.push_eth_db_to_core();
         let count = self.eth_sources.get(&bus).map_or(0, Vec::len);
         self.status = format!(
-            "ETH{bus}: bound `{label}` ({vlans} VLANs, {frames} frames) from {count} description{}",
+            "ETH{bus}: bound `{label}` ({vlans} VLANs, {frames} frames, {pdus} PDUs, {endpoints} endpoints) from {count} description{}",
             if count == 1 { "" } else { "s" }
         );
         Ok(bus)
@@ -396,11 +399,47 @@ impl App {
             self.eth_buses
                 .insert(bus, std::sync::Arc::new(crate::eth::db::EthDb::default()));
             self.push_eth_db_to_core();
+            self.rebuild_someip_services();
             self.status = format!("ETH{bus}: removed {}", source_label(&source));
             return;
         }
         self.rebuild_eth_from_sources(bus);
+        self.rebuild_someip_services();
         self.status = format!("ETH{bus}: removed {}", source_label(&source));
+    }
+
+    /// Rebuilds the SOME/IP catalog from every bound ARXML source, so
+    /// removing or replacing one description cannot leave stale services.
+    fn rebuild_someip_services(&mut self) {
+        let mut services = std::collections::BTreeMap::new();
+        for (bus, sources) in &self.eth_sources {
+            for source in sources {
+                let crate::model::ClusterSource::Arxml { path, .. } = source else {
+                    continue;
+                };
+                let Ok(text) = std::fs::read_to_string(path) else {
+                    continue;
+                };
+                let Ok(catalog) = crate::eth::arxml_service::scan(&text) else {
+                    continue;
+                };
+                for mut service in catalog.services {
+                    service.buses.push(*bus);
+                    services
+                        .entry(service.id)
+                        .and_modify(|existing: &mut crate::eth::arxml_service::ServiceDef| {
+                            if !existing.buses.contains(bus) {
+                                existing.buses.push(*bus);
+                            }
+                        })
+                        .or_insert(service);
+                }
+            }
+        }
+        self.someip_services.services = services.into_values().collect();
+        self.send(crate::bus::BusCommand::SetSomeIpServices(
+            self.someip_services.clone(),
+        ));
     }
 
     fn rebuild_eth_from_sources(&mut self, bus: u8) {
@@ -703,6 +742,7 @@ impl App {
 
     pub fn remove_eth_bus(&mut self, bus: u8) {
         self.eth_sources.remove(&bus);
+        self.rebuild_someip_services();
         if self.eth_buses.remove(&bus).is_some() {
             self.push_eth_db_to_core();
             self.status = format!("Removed Ethernet bus ETH{bus}");

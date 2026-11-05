@@ -119,6 +119,12 @@ struct NodeRuntime {
     fr_sig: Vec<(u8, u16, String, f64)>,
     /// Frame instances queued by `send_frame`, same lifecycle as `emitted`.
     frames: Vec<crate::script::FrameInstance>,
+    /// SOME/IP datagrams queued by `someip_send`.
+    someip: Vec<crate::script::SomeIpSend>,
+    /// SOME/IP TCP datagrams queued by `someip_tcp_send`.
+    someip_tcp: Vec<crate::script::SomeIpTcpSend>,
+    /// SD offers queued by `someip_offer`.
+    someip_offer: Vec<crate::script::SomeIpOffer>,
     /// One slot per Timer handler, in handler order; named one-shot slots
     /// join on `set_timer`. `next_due_us == 0` means "not armed yet": the
     /// first step after start arms periodic slots one period out.
@@ -483,6 +489,9 @@ impl ScriptNode {
             fr_out: Vec::new(),
             fr_sig: Vec::new(),
             frames: Vec::new(),
+            someip: Vec::new(),
+            someip_tcp: Vec::new(),
+            someip_offer: Vec::new(),
             timers,
         };
         // `on start` handlers, in declaration order.
@@ -1004,6 +1013,65 @@ impl ScriptNode {
         out
     }
 
+    /// Runs every `on someip <service>.<method>` handler. Called by the core
+    /// after a decoded SOME/IP event; the handler sees client/session/return
+    /// and payload through the `someip_*` builtins.
+    #[allow(clippy::too_many_arguments)]
+    pub fn dispatch_someip(
+        &mut self,
+        service: u16,
+        method: u16,
+        client: u16,
+        session: u16,
+        return_code: u8,
+        payload: &[u8],
+        input: &HostInput,
+    ) -> usize {
+        let mut ran = 0;
+        let Some(rt) = self.runtime.as_mut() else {
+            return 0;
+        };
+        if !self.enabled || self.errored {
+            return 0;
+        }
+        rt.vm.frame_present = false;
+        rt.vm.someip_service = service;
+        rt.vm.someip_method = method;
+        rt.vm.someip_client = client;
+        rt.vm.someip_session = session;
+        rt.vm.someip_return = return_code;
+        rt.vm.someip_payload = payload.to_vec();
+        let chunks: Vec<u16> = rt
+            .handlers
+            .iter()
+            .filter(|handler| {
+                matches!(
+                    handler.kind,
+                    HandlerKind::SomeIp {
+                        service: want_service,
+                        method: want_method,
+                    } if want_service == service && want_method == method
+                )
+            })
+            .map(|handler| handler.chunk)
+            .collect();
+        for chunk in chunks {
+            let mut sink = RunSink {
+                log: &mut self.log,
+                log_dirty: &mut self.log_dirty,
+                pending_lines: &mut self.pending_lines,
+                out: &mut Vec::new(),
+            };
+            if let Err(error) = Self::run_chunk(rt, &mut sink, chunk, None, input) {
+                self.errored = true;
+                self.issue = runtime_issue(&error);
+                break;
+            }
+            ran += 1;
+        }
+        ran
+    }
+
     /// Runs every `on panel_action("name")` handler in declaration order.
     /// The web button path uses this instead of calling a user function
     /// directly, so the handler still runs inside the node's step budget and
@@ -1397,6 +1465,9 @@ impl ScriptNode {
         rt.fr_out.append(&mut rt.vm.fr_outbox);
         rt.fr_sig.append(&mut rt.vm.fr_sig_sets);
         rt.frames.append(&mut rt.vm.frame_outbox);
+        rt.someip.append(&mut rt.vm.someip_outbox);
+        rt.someip_tcp.append(&mut rt.vm.someip_tcp_outbox);
+        rt.someip_offer.append(&mut rt.vm.someip_offer_outbox);
     }
 
     /// Hands the bus everything `emit_value` queued since the last call.
@@ -1437,6 +1508,27 @@ impl ScriptNode {
         self.runtime
             .as_mut()
             .map(|rt| std::mem::take(&mut rt.frames))
+            .unwrap_or_default()
+    }
+
+    pub fn take_someip(&mut self) -> Vec<crate::script::SomeIpSend> {
+        self.runtime
+            .as_mut()
+            .map(|rt| std::mem::take(&mut rt.someip))
+            .unwrap_or_default()
+    }
+
+    pub fn take_someip_tcp(&mut self) -> Vec<crate::script::SomeIpTcpSend> {
+        self.runtime
+            .as_mut()
+            .map(|rt| std::mem::take(&mut rt.someip_tcp))
+            .unwrap_or_default()
+    }
+
+    pub fn take_someip_offer(&mut self) -> Vec<crate::script::SomeIpOffer> {
+        self.runtime
+            .as_mut()
+            .map(|rt| std::mem::take(&mut rt.someip_offer))
             .unwrap_or_default()
     }
 
@@ -3147,6 +3239,7 @@ BO_ 256 Real: 2 ECU
                 }],
                 ..Default::default()
             }],
+            ..Default::default()
         };
         let mut dbs = std::collections::BTreeMap::new();
         dbs.insert(0, std::sync::Arc::new(db));

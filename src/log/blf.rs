@@ -53,6 +53,9 @@ const OBJ_CAN_MESSAGE2: u32 = 86;
 const OBJ_CAN_FD_MESSAGE: u32 = 100;
 const OBJ_CAN_FD_MESSAGE_64: u32 = 101;
 const OBJ_CAN_ERROR_EXT: u32 = 73;
+const OBJ_ETHERNET_FRAME: u32 = 71;
+const OBJ_ETHERNET_FRAME_EX: u32 = 120;
+const OBJ_ETHERNET_FRAME_FORWARDED: u32 = 121;
 /// FlexRay receive objects (the vector-blf ObjectType enum): CANoe 12
 /// writes the Ex form.
 const OBJ_FR_RCVMESSAGE: u32 = 50;
@@ -97,6 +100,8 @@ pub struct BlfStream {
     /// CAN frames. Delivered via `poll_fr_rows` as the same containers are
     /// read, in file order.
     fr_pending: VecDeque<crate::trace::FrRow>,
+    /// Ethernet frames encountered in the same containers.
+    eth_pending: VecDeque<crate::eth::EthFrame>,
     /// Sticky: did any scan ever surface a CAN frame?
     saw_can: bool,
     /// Set once a scan reaches EOF having seen no CAN frame. The whole file
@@ -150,6 +155,7 @@ impl BlfStream {
             describe,
             pending: VecDeque::new(),
             fr_pending: VecDeque::new(),
+            eth_pending: VecDeque::new(),
             saw_can: false,
             no_can_frames: false,
             t_base: None,
@@ -229,7 +235,12 @@ impl BlfStream {
                 return true;
             }
         };
-        parse_container_objects(&decoded, &mut self.pending, &mut self.fr_pending);
+        parse_container_objects(
+            &decoded,
+            &mut self.pending,
+            &mut self.fr_pending,
+            &mut self.eth_pending,
+        );
         true
     }
 
@@ -256,6 +267,12 @@ impl FrameStream for BlfStream {
                 self.saw_can = true;
                 let raw = f.t_us;
                 return Some(self.rebase(raw));
+            }
+            // An Ethernet/FlexRay object is due before the next CAN frame:
+            // report no CAN at this instant instead of reading the whole file
+            // into the other queues.
+            if !self.fr_pending.is_empty() || !self.eth_pending.is_empty() {
+                return None;
             }
             if !self.enter_next_container() {
                 if !self.saw_can {
@@ -297,8 +314,11 @@ impl FrameStream for BlfStream {
         // Read containers until an FR row queues — but stop as soon as
         // CAN frames are pending, so a sparse-FR log does not read the
         // whole file into memory hunting for the next row.
-        while self.fr_pending.is_empty() && self.pending.is_empty() && self.enter_next_container() {
-        }
+        while self.fr_pending.is_empty()
+            && self.pending.is_empty()
+            && self.eth_pending.is_empty()
+            && self.enter_next_container()
+        {}
         let raw = self.fr_pending.front().map(|r| r.t_us);
         raw.map(|t| self.rebase(t))
     }
@@ -315,10 +335,30 @@ impl FrameStream for BlfStream {
     }
 
     fn peek_eth_t(&mut self) -> Option<u64> {
-        None
+        while self.eth_pending.is_empty()
+            && self.pending.is_empty()
+            && self.fr_pending.is_empty()
+            && self.enter_next_container()
+        {}
+        let raw = self.eth_pending.front().map(|f| f.t_us);
+        raw.map(|t| self.rebase(t))
     }
 
-    fn poll_eth_frames(&mut self, _upto_t_us: u64, _out: &mut Vec<crate::eth::EthFrame>) {}
+    fn poll_eth_frames(&mut self, upto_t_us: u64, out: &mut Vec<crate::eth::EthFrame>) {
+        while self.eth_pending.is_empty()
+            && self.pending.is_empty()
+            && self.fr_pending.is_empty()
+            && self.enter_next_container()
+        {}
+        while let Some(front) = self.eth_pending.front() {
+            if self.rebase(front.t_us) > upto_t_us {
+                break;
+            }
+            let mut f = self.eth_pending.pop_front().expect("checked above");
+            f.t_us = self.rebase(f.t_us);
+            out.push(f);
+        }
+    }
 }
 
 struct ObjectHeader {
@@ -390,6 +430,7 @@ fn parse_container_objects(
     bytes: &[u8],
     out: &mut VecDeque<CanFrame>,
     fr_out: &mut VecDeque<crate::trace::FrRow>,
+    eth_out: &mut VecDeque<crate::eth::EthFrame>,
 ) {
     let mut pos = match next_object(bytes, 0) {
         Some(at) => at,
@@ -417,11 +458,16 @@ fn parse_container_objects(
                 OBJ_FR_RCVMESSAGE | OBJ_FR_RCVMESSAGE_EX => {
                     decode_fr_rcv(h.object_type == OBJ_FR_RCVMESSAGE_EX, body, t_us)
                 }
+                OBJ_ETHERNET_FRAME => decode_ethernet(body, t_us).map(FrOrCan::Eth),
+                OBJ_ETHERNET_FRAME_EX | OBJ_ETHERNET_FRAME_FORWARDED => {
+                    decode_ethernet_ex(body, t_us).map(FrOrCan::Eth)
+                }
                 _ => None,
             };
             match decoded {
                 Some(FrOrCan::Can(f)) => out.push_back(f),
                 Some(FrOrCan::Fr(r)) => fr_out.push_back(r),
+                Some(FrOrCan::Eth(f)) => eth_out.push_back(f),
                 None => {}
             }
         }
@@ -437,6 +483,91 @@ fn parse_container_objects(
 enum FrOrCan {
     Can(CanFrame),
     Fr(crate::trace::FrRow),
+    Eth(crate::eth::EthFrame),
+}
+
+/// `ETHERNET_FRAME_EX` / `_FORWARDED` (120/121): the frame data includes the
+/// complete L2 header (MACs, optional VLAN, EtherType, payload).
+fn decode_ethernet_ex(body: &[u8], t_us: u64) -> Option<crate::eth::EthFrame> {
+    if body.len() < 32 {
+        return None;
+    }
+    let channel = u16::from_le_bytes([body[4], body[5]]);
+    let dir = u16::from_le_bytes([body[20], body[21]]);
+    let frame_len = usize::from(u16::from_le_bytes([body[22], body[23]]));
+    if body.len() < 32 + frame_len || frame_len < 14 {
+        return None;
+    }
+    let frame = &body[32..32 + frame_len];
+    let mut dst = [0u8; 6];
+    dst.copy_from_slice(&frame[0..6]);
+    let mut src = [0u8; 6];
+    src.copy_from_slice(&frame[6..12]);
+    let mut at = 12usize;
+    let mut vlan_tpid = None;
+    let mut vlan = None;
+    let mut ethertype = u16::from_be_bytes([frame[at], frame[at + 1]]);
+    at += 2;
+    while matches!(ethertype, 0x8100 | 0x88a8 | 0x9100) && frame.len() >= at + 4 {
+        vlan_tpid = Some(ethertype);
+        vlan = Some(u16::from_be_bytes([frame[at], frame[at + 1]]));
+        ethertype = u16::from_be_bytes([frame[at + 2], frame[at + 3]]);
+        at += 4;
+    }
+    Some(crate::eth::EthFrame {
+        t_us,
+        bus: channel as u8,
+        dir: match dir {
+            1 | 2 => Direction::Tx,
+            _ => Direction::Rx,
+        },
+        dst,
+        src,
+        vlan,
+        vlan_tpid,
+        ethertype,
+        payload: std::sync::Arc::from(&frame[at..]),
+        seq: 0,
+        truncated: false,
+    })
+}
+
+/// `ETHERNET_FRAME` (71): source/destination MAC, channel, direction,
+/// EtherType and optional VLAN TPID/TCI, then the payload. Field order is from
+/// vector_blf's `EthernetFrame::read`.
+fn decode_ethernet(body: &[u8], t_us: u64) -> Option<crate::eth::EthFrame> {
+    if body.len() < 32 {
+        return None;
+    }
+    let mut dst = [0u8; 6];
+    dst.copy_from_slice(&body[8..14]);
+    let mut src = [0u8; 6];
+    src.copy_from_slice(&body[0..6]);
+    let channel = u16::from_le_bytes([body[6], body[7]]);
+    let dir = u16::from_le_bytes([body[14], body[15]]);
+    let ethertype = u16::from_le_bytes([body[16], body[17]]);
+    let tpid = u16::from_le_bytes([body[18], body[19]]);
+    let tci = u16::from_le_bytes([body[20], body[21]]);
+    let payload_len = usize::from(u16::from_le_bytes([body[22], body[23]]));
+    if body.len() < 32 + payload_len {
+        return None;
+    }
+    Some(crate::eth::EthFrame {
+        t_us,
+        bus: channel as u8,
+        dir: match dir {
+            1 | 2 => Direction::Tx,
+            _ => Direction::Rx,
+        },
+        dst,
+        src,
+        vlan: (tpid != 0).then_some(tci),
+        vlan_tpid: (tpid != 0).then_some(tpid),
+        ethertype,
+        payload: std::sync::Arc::from(&body[32..32 + payload_len]),
+        seq: 0,
+        truncated: false,
+    })
 }
 
 /// `FlexRayVFrReceiveMsg` (50) and `FlexRayVFrReceiveMsgEx` (66): the
@@ -900,6 +1031,27 @@ fn fr_rcv_event(r: &crate::trace::FrRow, ts_raw: u64) -> Vec<u8> {
     obj_header_v1_bytes(OBJ_FR_RCVMESSAGE, ts_raw, 0, &b)
 }
 
+fn ethernet_event(f: &crate::eth::EthFrame, ts_raw: u64) -> Vec<u8> {
+    let mut b = vec![0u8; 32 + f.payload.len()];
+    b[0..6].copy_from_slice(&f.src);
+    b[6..8].copy_from_slice(&u16::from(f.bus).to_le_bytes());
+    b[8..14].copy_from_slice(&f.dst);
+    b[14..16].copy_from_slice(
+        &(if matches!(f.dir, Direction::Tx) {
+            1u16
+        } else {
+            0
+        })
+        .to_le_bytes(),
+    );
+    b[16..18].copy_from_slice(&f.ethertype.to_le_bytes());
+    b[18..20].copy_from_slice(&f.vlan_tpid.unwrap_or(0x8100).to_le_bytes());
+    b[20..22].copy_from_slice(&f.vlan.unwrap_or(0).to_le_bytes());
+    b[22..24].copy_from_slice(&(f.payload.len() as u16).to_le_bytes());
+    b[32..].copy_from_slice(&f.payload);
+    obj_header_v1_bytes(OBJ_ETHERNET_FRAME, ts_raw, 0, &b)
+}
+
 fn zlib_bytes(data: &[u8]) -> Vec<u8> {
     use flate2::Compression;
     use flate2::write::ZlibEncoder;
@@ -1000,6 +1152,18 @@ impl BlfWriter {
         let ts_raw = r.t_us.saturating_mul(1_000); // nanoseconds
         self.note_ts(ts_raw);
         self.pending.extend_from_slice(&fr_rcv_event(r, ts_raw));
+        if self.pending.len() >= CONTAINER_FLUSH_BYTES {
+            self.flush_container();
+        }
+    }
+
+    /// Ethernet frames join the same container stream. The pcap sidecar is
+    /// still written by the recorder; this object is what CANoe and other BLF
+    /// readers consume.
+    pub fn write_eth(&mut self, f: &crate::eth::EthFrame) {
+        let ts_raw = f.t_us.saturating_mul(1_000);
+        self.note_ts(ts_raw);
+        self.pending.extend_from_slice(&ethernet_event(f, ts_raw));
         if self.pending.len() >= CONTAINER_FLUSH_BYTES {
             self.flush_container();
         }
@@ -1180,6 +1344,74 @@ pub(crate) mod tests {
     /// The production recorder writer: classic (standard/extended/RTR)
     /// and FD frames survive a write → read round trip with ids, flags,
     /// and payloads intact.
+    #[test]
+    fn ethernet_objects_round_trip_through_blf() {
+        let path = std::env::temp_dir().join("roxy_can_eth_roundtrip.blf");
+        let frame = crate::eth::EthFrame::new(
+            1_000,
+            2,
+            Direction::Tx,
+            [0xff; 6],
+            [0x40, 0, 0, 0, 0, 4],
+            Some(7),
+            0x0800,
+            [1u8, 2, 3, 4],
+        );
+        {
+            let path_s = path.to_string_lossy().into_owned();
+            let mut w = BlfWriter::create(&path_s).expect("create");
+            w.write_eth(&frame);
+            w.finish().expect("finish");
+        }
+        let mut stream = BlfStream::open(&path).expect("open");
+        let mut out = Vec::new();
+        stream.poll_eth_frames(u64::MAX, &mut out);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].bus, 2);
+        assert_eq!(out[0].vlan, Some(7));
+        assert_eq!(out[0].ethertype, 0x0800);
+        assert_eq!(out[0].payload.as_ref(), [1, 2, 3, 4]);
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn ethernet_frame_roundtrip_object_is_recognised() {
+        let frame = crate::eth::EthFrame::new(
+            5_000,
+            0,
+            Direction::Rx,
+            [1; 6],
+            [2; 6],
+            None,
+            0x86dd,
+            [9u8, 8],
+        );
+        let obj = ethernet_event(&frame, 5_000_000);
+        let body = &obj[32..];
+        let decoded = decode_ethernet(body, 5_000).expect("decoded");
+        assert_eq!(decoded.ethertype, 0x86dd);
+        assert_eq!(decoded.payload.as_ref(), [9, 8]);
+    }
+
+    #[test]
+    fn ethernet_ex_object_decodes_l2_header_and_vlan() {
+        let mut body = vec![0u8; 32 + 18 + 2];
+        body[4..6].copy_from_slice(&3u16.to_le_bytes());
+        body[20..22].copy_from_slice(&1u16.to_le_bytes());
+        body[22..24].copy_from_slice(&20u16.to_le_bytes());
+        body[32..38].copy_from_slice(&[0xff; 6]);
+        body[38..44].copy_from_slice(&[0x40, 0, 0, 0, 0, 4]);
+        body[44..46].copy_from_slice(&0x8100u16.to_be_bytes());
+        body[46..48].copy_from_slice(&7u16.to_be_bytes());
+        body[48..50].copy_from_slice(&0x0800u16.to_be_bytes());
+        body[50..52].copy_from_slice(&[0xaa, 0xbb]);
+        let frame = decode_ethernet_ex(&body, 1_000).expect("EX frame");
+        assert_eq!(frame.bus, 3);
+        assert_eq!(frame.vlan, Some(7));
+        assert_eq!(frame.ethertype, 0x0800);
+        assert_eq!(frame.payload.as_ref(), [0xaa, 0xbb]);
+    }
+
     #[test]
     fn recorder_writer_round_trips_frames() {
         let path = std::env::temp_dir().join("roxy_can_writer_roundtrip.blf");

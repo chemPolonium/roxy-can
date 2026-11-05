@@ -236,9 +236,22 @@ fn default_cycle() -> u64 {
     100_000
 }
 
+fn default_mask() -> u8 {
+    0xFF
+}
+
+fn default_someip_port() -> u16 {
+    30490
+}
+
+fn default_neg_one() -> i32 {
+    -1
+}
+
 /// One trigger rule with its buses named by cluster id. `kind` is the
 /// condition code (0 signal crossing … 7 derived) interpreted by
-/// `ProjectV2::apply`.
+/// `ProjectV2::apply`. Actions 5/6 carry their payload in
+/// `actionKey`/`actionValue`; older files leave them out.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TriggerCfgV2 {
@@ -260,6 +273,54 @@ pub struct TriggerCfgV2 {
     pub action_cluster: Option<u32>,
     #[serde(default)]
     pub action_id: u32,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub action_key: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub action_value: Option<f64>,
+    /// Action 8: the Ethernet frame payload as hex text.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub action_data: String,
+    /// PayloadMatch: byte offset, mask and expected value.
+    #[serde(default)]
+    pub offset: u8,
+    #[serde(default = "default_mask")]
+    pub mask: u8,
+    #[serde(default)]
+    pub value: u8,
+    /// EthFlow: the optional VLAN tag.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vlan: Option<u16>,
+    /// Action 9: SOME/IP method, client, session and message type.
+    #[serde(default)]
+    pub someip_method: u16,
+    /// SOME/IP condition filters; `None` keeps the wildcard.
+    #[serde(default)]
+    pub cond_someip_method: Option<u16>,
+    #[serde(default)]
+    pub cond_someip_type: Option<u8>,
+    #[serde(default)]
+    pub someip_client: u16,
+    #[serde(default)]
+    pub someip_session: u16,
+    #[serde(default)]
+    pub someip_type: u8,
+    #[serde(default)]
+    pub someip_values: std::collections::BTreeMap<String, f64>,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub someip_transport: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub someip_host: String,
+    #[serde(default = "default_someip_port")]
+    pub someip_port: u16,
+    #[serde(default)]
+    pub cooldown_ms: u32,
+    #[serde(default)]
+    pub max_fires: u32,
+    /// Per-rule recording context; -1 inherits the global limit.
+    #[serde(default = "default_neg_one")]
+    pub pre_frames: i32,
+    #[serde(default = "default_neg_one")]
+    pub post_frames: i32,
     #[serde(default)]
     pub enabled: bool,
 }

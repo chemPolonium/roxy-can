@@ -89,6 +89,7 @@ pub fn compile(program: Program) -> Result<Script, ScriptError> {
     let mut seen_error = false;
     let mut seen_ext_ids: HashSet<u32> = HashSet::new();
     let mut seen_fr: HashSet<(Option<u8>, u16)> = HashSet::new();
+    let mut seen_someip: HashSet<(u16, u16)> = HashSet::new();
     for item in &program.items {
         if let Item::On(on) = item {
             match &on.kind {
@@ -146,6 +147,15 @@ pub fn compile(program: Program) -> Result<Script, ScriptError> {
                     }
                     seen_wildcard = true;
                     c.recv_wildcard = true;
+                }
+                OnKind::SomeIp { service, method } => {
+                    if !seen_someip.insert((*service, *method)) {
+                        return c.err_at(
+                            on.line,
+                            on.col,
+                            &format!("duplicate handler for SOME/IP {service:#06x}.{method:#06x}"),
+                        );
+                    }
                 }
                 OnKind::ErrorFrame => {
                     if seen_error {
@@ -309,6 +319,9 @@ fn handler_label(kind: &HandlerKind) -> String {
         HandlerKind::Stop => "<on stop>".to_string(),
         HandlerKind::PanelAction { name, .. } => format!("<on panel_action \"{name}\">"),
         HandlerKind::Message { id } => format!("<on message {id:#x}>"),
+        HandlerKind::SomeIp { service, method } => {
+            format!("<on someip {service:#06x}.{method:#06x}>")
+        }
         HandlerKind::NamedMessage { name } => format!("<on message {name}>"),
         HandlerKind::ExtendedMessage { id } => format!("<on extended message {id:#x}>"),
         HandlerKind::AnyMessage => WILDCARD_LABEL.to_string(),
@@ -1149,6 +1162,10 @@ impl Comp {
             OnKind::NamedMessage { name } => HandlerKind::NamedMessage { name: name.clone() },
             OnKind::ExtendedMessage { id } => HandlerKind::ExtendedMessage { id: *id },
             OnKind::AnyMessage => HandlerKind::AnyMessage,
+            OnKind::SomeIp { service, method } => HandlerKind::SomeIp {
+                service: *service,
+                method: *method,
+            },
             OnKind::ErrorFrame => HandlerKind::ErrorFrame,
             OnKind::Timer { period_ms } => HandlerKind::Timer {
                 period_ms: *period_ms,

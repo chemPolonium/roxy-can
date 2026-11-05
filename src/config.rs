@@ -56,6 +56,14 @@ pub fn resolve_dbc(p: &str, base: Option<&Path>) -> String {
 fn true_default() -> bool {
     true
 }
+
+fn udp_default() -> String {
+    "udp".to_string()
+}
+
+fn someip_port_default() -> u16 {
+    30490
+}
 fn one_default() -> f64 {
     1.0
 }
@@ -411,6 +419,14 @@ fn grace_default() -> u64 {
     crate::spec::GRACE_CYCLES
 }
 
+fn mask_default() -> u8 {
+    0xFF
+}
+
+fn neg_one() -> i32 {
+    -1
+}
+
 /// The persisted form of one trigger: the condition flattened to a kind
 /// code plus its fields, the action as a code, and the enabled flag.
 /// Runtime edge state (`level`, fire counts) deliberately does not round
@@ -436,6 +452,61 @@ pub struct TriggerCfg {
     pub send_ch: u8,
     #[serde(default)]
     pub send_id: u32,
+    /// Action 5/6: the sysvar key or script action name.
+    #[serde(default)]
+    pub action_key: String,
+    /// Action 5/6: the sysvar value or the script argument.
+    #[serde(default)]
+    pub action_value: Option<f64>,
+    /// Action 8: the Ethernet frame payload as hex text.
+    #[serde(default)]
+    pub action_data: String,
+    /// PayloadMatch: byte offset, mask and expected value.
+    #[serde(default)]
+    pub offset: u8,
+    #[serde(default = "mask_default")]
+    pub mask: u8,
+    #[serde(default)]
+    pub value: u8,
+    /// EthFlow: the optional VLAN tag.
+    #[serde(default)]
+    pub vlan: Option<u16>,
+    /// SOME/IP condition filters; `None` keeps the wildcard.
+    #[serde(default)]
+    pub cond_someip_method: Option<u16>,
+    #[serde(default)]
+    pub cond_someip_type: Option<u8>,
+    /// Action 9: SOME/IP method, client, session and message type.
+    #[serde(default)]
+    pub someip_method: u16,
+    #[serde(default)]
+    pub someip_client: u16,
+    #[serde(default)]
+    pub someip_session: u16,
+    #[serde(default)]
+    pub someip_type: u8,
+    /// Action 9: named ARXML field values; when non-empty they win over
+    /// `action_data`.
+    #[serde(default)]
+    pub someip_values: std::collections::BTreeMap<String, f64>,
+    /// Action 9: `udp` or `tcp`; TCP uses host/port.
+    #[serde(default = "udp_default")]
+    pub someip_transport: String,
+    #[serde(default)]
+    pub someip_host: String,
+    #[serde(default = "someip_port_default")]
+    pub someip_port: u16,
+    /// Minimum gap between two fires of this rule (0 = no gate).
+    #[serde(default)]
+    pub cooldown_ms: u32,
+    /// Stop after this many fires (0 = unlimited).
+    #[serde(default)]
+    pub max_fires: u32,
+    /// Per-rule recording context; -1 inherits the global limit.
+    #[serde(default = "neg_one")]
+    pub pre_frames: i32,
+    #[serde(default = "neg_one")]
+    pub post_frames: i32,
     #[serde(default = "true_default")]
     pub enabled: bool,
 }
@@ -556,6 +627,10 @@ pub struct ProjectSettings {
     /// to the core so the web shell can evolve without a schema bump.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workspace: Option<serde_json::Value>,
+    /// Panel pages referenced by this project, in the `.rxpanel` export
+    /// format. The shell merges them into its book when the project opens.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub panel_pages: Vec<serde_json::Value>,
     /// Derived channels: expression, unit and State bands. The core owns
     /// sampling, so the file carries the definitions, not their samples.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -725,6 +800,7 @@ impl Default for ProjectSettings {
             replay_files: Vec::new(),
             spec: SpecCfg::default(),
             workspace: None,
+            panel_pages: Vec::new(),
             limits: LimitsCfg::default(),
             derived: Vec::new(),
         }
@@ -925,6 +1001,7 @@ impl ProjectSettings {
                 grace_cycles: app.spec_grace,
             },
             workspace: app.web_workspace.clone(),
+            panel_pages: app.panel_pages.clone(),
             derived: app.derived_defs.clone(),
         }
     }
@@ -941,6 +1018,7 @@ impl ProjectSettings {
     /// returns.
     pub fn apply(self, app: &mut App) {
         app.web_workspace = self.workspace;
+        app.panel_pages = self.panel_pages;
         app.set_derived_defs(self.derived);
         // Every window kind is restored as the file states it -- an empty list
         // means the project has none of that kind; letting the default windows
@@ -1587,6 +1665,7 @@ mod tests {
         app.send(crate::bus::BusCommand::AddTrigger {
             cond: cond.clone(),
             action: crate::trigger::TriggerAction::InsertMarker,
+            enabled: true,
         });
         let config = ProjectV2::from_app(&app, None);
         assert_eq!(

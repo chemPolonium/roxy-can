@@ -1769,10 +1769,10 @@ fn panel_setpoints_write_a_flexray_signal() {
     app.stop();
 }
 
-/// A Button preset writes its signals in one command: good entries land, and
-/// bad keys are reported together instead of aborting the whole preset.
+/// A setpoint writes one signal per command; the FR and ETH paths inject one
+/// session frame each, and the command is not a batch anymore.
 #[test]
-fn panel_presets_write_each_signal_and_report_failures() {
+fn panel_setpoints_write_one_signal_per_command() {
     let mut app = App::headless();
     assert_eq!(
         app.load_cluster_description(crate::test_assets::path("PowerTrain.arxml"), Some(0)),
@@ -1797,17 +1797,22 @@ fn panel_presets_write_each_signal_and_report_failures() {
     let fr_cluster = app.snap.cluster_ids.fr.get(&0).copied().expect("FR0");
     let eth_cluster = app.snap.cluster_ids.eth.get(&0).copied().expect("ETH0");
 
-    app.send(crate::bus::BusCommand::PanelWriteSignals {
-        writes: vec![
-            (
-                format!("sig:can:{can_cluster}:256:false:EngineSpeed"),
-                1234.0,
-            ),
-            (format!("sig:fr:{fr_cluster}:25:EngSpeed"), 2000.0),
-            (format!("sig:eth:{eth_cluster}:EthFrame:Sig"), 4.5),
-            ("nope".to_string(), 1.0),
-            ("derived:Test".to_string(), 1.0),
-        ],
+    app.send(crate::bus::BusCommand::PanelWriteSignal {
+        key: crate::observe::SigKey::from_text(&format!("sig:fr:{fr_cluster}:25:EngSpeed"))
+            .expect("FR key"),
+        value: 2000.0,
+    });
+    app.send(crate::bus::BusCommand::PanelWriteSignal {
+        key: crate::observe::SigKey::from_text(&format!("sig:eth:{eth_cluster}:EthFrame:Sig"))
+            .expect("ETH key"),
+        value: 4.5,
+    });
+    app.send(crate::bus::BusCommand::PanelWriteSignal {
+        key: crate::observe::SigKey::from_text(&format!(
+            "sig:can:{can_cluster}:256:false:EngineSpeed"
+        ))
+        .expect("CAN key"),
+        value: 1234.0,
     });
     laps(&mut app, 1, &mut now);
 
@@ -1820,13 +1825,6 @@ fn panel_presets_write_each_signal_and_report_failures() {
         app.snap.eth_trace.len(),
         eth_before + 1,
         "the ETH entry landed"
-    );
-    assert!(
-        app.status.contains("2 write(s) failed")
-            && app.status.contains("nope")
-            && app.status.contains("derived"),
-        "both bad entries are reported together: {}",
-        app.status
     );
     app.stop();
 }

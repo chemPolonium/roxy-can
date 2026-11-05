@@ -6,6 +6,8 @@ roxy-can.autosave.rxproj
 
 # 运行产物：录制未指定路径时默认落在工作目录（文件名带日期后缀）
 record_*.asc
+record_*.eth.pcap
+/node_modules
 
 /target
 

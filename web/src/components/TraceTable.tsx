@@ -176,6 +176,7 @@ export function TraceTable({
   onAddToChart,
   onWatch,
   onShowTime,
+  onTrigger,
 }: {
   rows: Frame[];
   /// Changes only when the filter expression changes, so a filtered view can
@@ -197,6 +198,8 @@ export function TraceTable({
   onAddToChart?: (frame: Frame) => void;
   onWatch?: (frame: Frame) => void;
   onShowTime?: (tUs: number) => void;
+  /// Arms a trigger for this row's bus/ID (CAN) or cluster/slot (FlexRay).
+  onTrigger?: (frame: Frame) => void;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const scrollTopRef = useRef(0);
@@ -747,6 +750,17 @@ export function TraceTable({
             }}
           >
             Watch in Monitor
+          </button>
+          <button
+            type="button"
+            disabled={!onTrigger || menu.frame.kind === "eth"}
+            title="Add a trigger rule watched at this address"
+            onClick={() => {
+              onTrigger?.(menu.frame);
+              setMenu(null);
+            }}
+          >
+            Trigger on this frame
           </button>
           <button
             type="button"

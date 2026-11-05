@@ -96,8 +96,43 @@ pub struct TestResult {
     pub time_s: f64,
 }
 
+/// One SOME/IP datagram queued by `someip_send(…)`. The host owns the
+/// transport and the ARXML field layout; the script supplies the payload.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SomeIpSend {
+    pub bus: u8,
+    pub service: u16,
+    pub method: u16,
+    pub client: u16,
+    pub session: u16,
+    pub message_type: u8,
+    pub payload: Vec<u8>,
+}
+
 /// One instance of a catalog frame: the template path plus the physical
 /// signal values written so far. Plain data, so copies are real copies.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SomeIpTcpSend {
+    pub host: String,
+    pub port: u16,
+    pub service: u16,
+    pub method: u16,
+    pub client: u16,
+    pub session: u16,
+    pub message_type: u8,
+    pub payload: Vec<u8>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct SomeIpOffer {
+    pub bus: u8,
+    pub service: u16,
+    pub instance: u16,
+    pub major: u8,
+    pub minor: u32,
+    pub ttl: u32,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct FrameInstance {
     pub path: String,
@@ -292,6 +327,11 @@ pub enum HandlerKind {
     },
     /// Every frame on the channel (`on message *`).
     AnyMessage,
+    /// A SOME/IP message for one service/method.
+    SomeIp {
+        service: u16,
+        method: u16,
+    },
     /// An error frame arrived (`on errorFrame`).
     ErrorFrame,
     Timer {
@@ -455,6 +495,9 @@ pub const HOST_FNS: &[(&str, usize, usize)] = &[
     ("send", 1, 9),
     ("send_ext", 1, 9),
     ("send_frame", 1, 1),
+    ("someip_send", 7, 7),
+    ("someip_tcp_send", 8, 8),
+    ("someip_offer", 6, 6),
     ("emit_value", 2, 2),
     ("sys_get", 1, 1),
     ("sys_set", 2, 2),
@@ -482,6 +525,13 @@ pub const HOST_FNS: &[(&str, usize, usize)] = &[
     ("frame_slot", 0, 0),
     ("frame_signal", 1, 1),
     ("frame_cycle", 0, 0),
+    ("someip_service", 0, 0),
+    ("someip_method", 0, 0),
+    ("someip_client", 0, 0),
+    ("someip_session", 0, 0),
+    ("someip_return", 0, 0),
+    ("someip_len", 0, 0),
+    ("someip_byte", 1, 1),
     ("fr_cycle", 0, 0),
     ("node_bus", 0, 0),
     ("random", 2, 2),
@@ -524,6 +574,18 @@ pub const SCRIPT_HELP: &[(&str, &str)] = &[
     ("test", "test(\"name\", condition)"),
     ("send", "send(id, byte, …)"),
     ("send_frame", "send_frame(frame_instance)"),
+    (
+        "someip_send",
+        "someip_send(bus, service, method, client, session, type, payload)",
+    ),
+    (
+        "someip_tcp_send",
+        "someip_tcp_send(host, port, service, method, client, session, type, payload)",
+    ),
+    (
+        "someip_offer",
+        "someip_offer(bus, service, instance, ttl, major, minor)",
+    ),
     ("frame", "frame(Bus.Frame)"),
     ("send_ext", "send_ext(id, byte, …)"),
     ("emit_value", "emit_value(\"Name\", value)"),
@@ -556,6 +618,13 @@ pub const SCRIPT_HELP: &[(&str, &str)] = &[
     ("frame_slot", "frame_slot()"),
     ("frame_signal", "frame_signal(\"Name\")"),
     ("frame_cycle", "frame_cycle()"),
+    ("someip_service", "someip_service()"),
+    ("someip_method", "someip_method()"),
+    ("someip_client", "someip_client()"),
+    ("someip_session", "someip_session()"),
+    ("someip_return", "someip_return()"),
+    ("someip_len", "someip_len()"),
+    ("someip_byte", "someip_byte(index)"),
     ("fr_cycle", "fr_cycle()"),
     ("node_bus", "node_bus()"),
     ("random", "random(lo, hi)"),

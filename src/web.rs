@@ -1209,6 +1209,11 @@ fn trigger_kind(cond: &TriggerCond) -> &'static str {
         TriggerCond::FrSignalCross { .. } => "fr_signal",
         TriggerCond::SysVar { .. } => "sysvar",
         TriggerCond::DerivedSignal { .. } => "derived",
+        TriggerCond::PayloadMatch { .. } => "payload",
+        TriggerCond::EthFlow { .. } => "eth_flow",
+        TriggerCond::FrTimeout { .. } => "fr_timeout",
+        TriggerCond::E2eIssue { .. } => "e2e",
+        TriggerCond::SomeIp { .. } => "someip",
     }
 }
 
@@ -1222,6 +1227,11 @@ fn parse_trigger_kind(value: &str) -> Option<TriggerKind> {
         "timeout" => Some(TriggerKind::Timeout),
         "sysvar" => Some(TriggerKind::SysVar),
         "derived" => Some(TriggerKind::Derived),
+        "payload" => Some(TriggerKind::Payload),
+        "eth_flow" => Some(TriggerKind::EthFlow),
+        "fr_timeout" => Some(TriggerKind::FrTimeout),
+        "e2e" => Some(TriggerKind::E2e),
+        "someip" => Some(TriggerKind::SomeIp),
         _ => None,
     }
 }
@@ -1344,11 +1354,29 @@ async fn hardware_handler(State(api): State<ApiState>) -> Json<WebHardware> {
         }
         Err(error) => (Vec::new(), error),
     };
+    let (eth_channels, eth_error) = match crate::hw::Hardware::eth_interfaces() {
+        Ok(list) => (
+            list.into_iter()
+                .map(|iface| WebEthChannel {
+                    name: if iface.description.is_empty() {
+                        iface.device.clone()
+                    } else {
+                        format!("{} · {}", iface.device, iface.description)
+                    },
+                    device: iface.device,
+                })
+                .collect(),
+            String::new(),
+        ),
+        Err(error) => (Vec::new(), error),
+    };
     let data = WebHardware {
         channels,
         fr_channels,
+        eth_channels,
         error,
         fr_error,
+        eth_error,
     };
     if let Ok(mut cache) = api.hardware.lock() {
         cache.generation = generation;
@@ -1799,12 +1827,27 @@ async fn download(Query(query): Query<DownloadQuery>) -> Result<Response, (Statu
 /// Serves the file the recorder finished last. The path comes from the
 /// core's own snapshot, never from the query, and a live recording is
 /// refused until its writer has closed the trailer.
-async fn recording_download(State(api): State<ApiState>) -> Result<Response, (StatusCode, String)> {
-    let (path, recording) = api
+async fn recording_download(
+    State(api): State<ApiState>,
+    Query(query): Query<std::collections::HashMap<String, String>>,
+) -> Result<Response, (StatusCode, String)> {
+    let want_eth = query.get("eth").is_some_and(|value| value == "1");
+    let (path, eth_path, recording) = api
         .shared
         .lock()
-        .map(|state| (state.record_file.clone(), state.recording))
+        .map(|state| {
+            (
+                state.record_file.clone(),
+                state.record_eth_file.clone(),
+                state.recording,
+            )
+        })
         .unwrap_or_default();
+    let path = if want_eth && !eth_path.is_empty() {
+        eth_path
+    } else {
+        path
+    };
     if recording {
         return Err((
             StatusCode::CONFLICT,
@@ -1935,18 +1978,31 @@ async fn upload(
     }))
 }
 
-#[derive(Deserialize)]
-struct PanelWriteEntry {
-    source: String,
-    value: f64,
-}
-
 fn default_true() -> bool {
     true
 }
 
+fn default_mask() -> u8 {
+    0xFF
+}
+
+fn default_someip_port() -> u16 {
+    30490
+}
+
+/// Where one log channel should replay. `"same"` removes the table entry
+/// instead of pinning today's bus, so a project with no deliberate mapping
+/// stays portable; `"drop"` is an explicit no-replay that survives a reopen.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(untagged)]
+enum ReplayChannelChoice {
+    Word(String),
+    Bus(u8),
+}
+
 #[derive(Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
+#[allow(clippy::large_enum_variant)]
 enum WebCommand {
     Start,
     Stop,
@@ -1968,7 +2024,7 @@ enum WebCommand {
     SetReplayChannel {
         kind: String,
         raw: u8,
-        target: Option<u8>,
+        target: ReplayChannelChoice,
     },
     RecordToggle {
         name: Option<String>,
@@ -2000,11 +2056,6 @@ enum WebCommand {
         source: String,
         value: f64,
     },
-    /// A Button preset: write several signals in one command. Each entry is
-    /// attempted; failures come back together in the status line.
-    PanelWriteSignals {
-        writes: Vec<PanelWriteEntry>,
-    },
     /// Send one raw CAN frame once from a Panel button. `physical` encodes
     /// `signals` against the catalog message instead; `data` is ignored then.
     PanelSendFrame {
@@ -2034,6 +2085,25 @@ enum WebCommand {
         physical: bool,
         #[serde(default)]
         signals: std::collections::BTreeMap<String, f64>,
+    },
+    PanelSendSomeIp {
+        bus: u8,
+        service: u16,
+        method: u16,
+        client: u16,
+        session: u16,
+        message_type: u8,
+        data: Vec<u8>,
+        #[serde(default)]
+        values: std::collections::BTreeMap<String, f64>,
+        #[serde(default)]
+        texts: std::collections::BTreeMap<String, String>,
+        #[serde(default)]
+        transport: String,
+        #[serde(default)]
+        host: String,
+        #[serde(default = "default_someip_port")]
+        port: u16,
     },
     OpenProject {
         path: String,
@@ -2126,6 +2196,13 @@ enum WebCommand {
     DetachHardware {
         bus: u8,
     },
+    AttachEthPort {
+        bus: u8,
+        device: String,
+    },
+    DetachEthPort {
+        bus: u8,
+    },
     AttachFrHardware {
         bus: u8,
         index: i32,
@@ -2188,6 +2265,9 @@ enum WebCommand {
     },
     SaveProject {
         path: Option<String>,
+        /// Panel pages to store inside the project, in `.rxpanel` format.
+        #[serde(default)]
+        panels: Vec<serde_json::Value>,
     },
     AddScript {
         name: String,
@@ -2436,6 +2516,19 @@ enum WebCommand {
     },
     AddTrigger {
         kind: String,
+        /// Optional seed fields from the Trace/chart context menus.
+        #[serde(default)]
+        ch: Option<u8>,
+        #[serde(default)]
+        id: Option<u32>,
+        #[serde(default)]
+        bus: Option<u8>,
+        #[serde(default)]
+        slot: Option<u16>,
+        /// `SigKey::text()` for a chart-lane signal; the backend resolves
+        /// the cluster to a bus index.
+        #[serde(default)]
+        signal_key: Option<String>,
     },
     SetTriggerEnabled {
         index: usize,
@@ -2445,6 +2538,9 @@ enum WebCommand {
         index: usize,
     },
     RearmTriggers,
+    RearmTrigger {
+        index: usize,
+    },
     EditTrigger {
         index: usize,
         kind: String,
@@ -2461,6 +2557,55 @@ enum WebCommand {
         action: String,
         send_ch: u8,
         send_id: u32,
+        #[serde(default)]
+        sys_var_key: String,
+        #[serde(default)]
+        sys_var_value: Option<f64>,
+        #[serde(default)]
+        script_name: String,
+        #[serde(default)]
+        script_value: Option<f64>,
+        #[serde(default)]
+        send_frame: String,
+        #[serde(default)]
+        send_data: String,
+        #[serde(default)]
+        someip_method: u16,
+        #[serde(default)]
+        someip_client: u16,
+        #[serde(default)]
+        someip_session: u16,
+        #[serde(default)]
+        someip_type: u8,
+        /// SOME/IP condition filters; absent = wildcard.
+        #[serde(default)]
+        cond_someip_method: Option<u16>,
+        #[serde(default)]
+        cond_someip_type: Option<u8>,
+        #[serde(default)]
+        someip_values: std::collections::BTreeMap<String, f64>,
+        #[serde(default)]
+        someip_transport: String,
+        #[serde(default)]
+        someip_host: String,
+        #[serde(default = "default_someip_port")]
+        someip_port: u16,
+        #[serde(default)]
+        offset: u8,
+        #[serde(default = "default_mask")]
+        mask: u8,
+        #[serde(default)]
+        value: u8,
+        #[serde(default)]
+        vlan: Option<u16>,
+        #[serde(default)]
+        cooldown_ms: u32,
+        #[serde(default)]
+        max_fires: u32,
+        #[serde(default)]
+        pre_frames: Option<u32>,
+        #[serde(default)]
+        post_frames: Option<u32>,
     },
     SetTriggerLimits {
         pre_frames: usize,
@@ -2598,25 +2743,30 @@ fn app_loop(
                         app.status = format!("unknown replay bus kind: {kind}");
                         continue;
                     };
-                    let mut map = app.snap.replay_map.clone();
-                    // The frontend picks a bus; the map stores the cluster it
-                    // names, so the choice survives channel renumbering.
-                    let target = target.and_then(|bus| app.cluster_of_bus(kind, bus));
-                    map.set(kind, raw, target);
-                    app.send(BusCommand::SetReplayMap(map));
+                    if let Err(message) = apply_replay_channel(&mut app, kind, raw, target) {
+                        app.status = message;
+                    }
                 }
                 WebCommand::RecordToggle { name, format } => {
                     if let Some(name) = name {
                         app.record_path_buf = name;
                     }
                     if let Some(format) = format {
-                        app.record_format = if format == 1 { 1 } else { 0 };
+                        app.record_format = match format {
+                            1 => 1,
+                            2 => 2,
+                            _ => 0,
+                        };
                     }
                     app.toggle_record();
                 }
                 WebCommand::SetRecordSettings { name, format } => {
                     app.record_path_buf = name;
-                    app.record_format = if format == 1 { 1 } else { 0 };
+                    app.record_format = match format {
+                        1 => 1,
+                        2 => 2,
+                        _ => 0,
+                    };
                     app.sync_record_path();
                 }
                 WebCommand::SetRecordFilter { text } => {
@@ -2667,23 +2817,6 @@ fn app_loop(
                         }
                     }
                 }
-                WebCommand::PanelWriteSignals { writes } => {
-                    if writes.is_empty() {
-                        app.status = "[panel] no signal writes".to_string();
-                    } else if writes.len() > crate::bus::PANEL_WRITE_BATCH_MAX {
-                        app.status = format!(
-                            "[panel] too many signal writes (limit {})",
-                            crate::bus::PANEL_WRITE_BATCH_MAX
-                        );
-                    } else {
-                        app.send(BusCommand::PanelWriteSignals {
-                            writes: writes
-                                .into_iter()
-                                .map(|entry| (entry.source, entry.value))
-                                .collect(),
-                        });
-                    }
-                }
                 WebCommand::PanelSendFrame {
                     channel,
                     id,
@@ -2714,6 +2847,35 @@ fn app_loop(
                         data,
                         physical,
                         signals,
+                    });
+                }
+                WebCommand::PanelSendSomeIp {
+                    bus,
+                    service,
+                    method,
+                    client,
+                    session,
+                    message_type,
+                    data,
+                    values,
+                    texts,
+                    transport,
+                    host,
+                    port,
+                } => {
+                    app.send(BusCommand::PanelSendSomeIp {
+                        bus,
+                        service,
+                        method,
+                        client,
+                        session,
+                        message_type,
+                        data,
+                        values,
+                        texts,
+                        transport,
+                        host,
+                        port,
                     });
                 }
                 WebCommand::PanelSendEthFrame {
@@ -2970,6 +3132,12 @@ fn app_loop(
                 WebCommand::DetachHardware { bus } => {
                     app.detach_hardware(bus);
                 }
+                WebCommand::AttachEthPort { bus, device } => {
+                    app.send(BusCommand::AttachEthPort { bus, device });
+                }
+                WebCommand::DetachEthPort { bus } => {
+                    app.send(BusCommand::DetachEthPort { bus });
+                }
                 WebCommand::AttachFrHardware { bus, index } => {
                     app.attach_fr_watch_on(bus, index);
                 }
@@ -3099,7 +3267,8 @@ fn app_loop(
                         other => app.status = format!("unknown bus kind: {other}"),
                     }
                 }
-                WebCommand::SaveProject { path } => {
+                WebCommand::SaveProject { path, panels } => {
+                    app.panel_pages = panels;
                     let target = path
                         .filter(|value| !value.trim().is_empty())
                         .map(|value| std::path::PathBuf::from(download_file_path(&value)))
@@ -3578,9 +3747,84 @@ fn app_loop(
                 WebCommand::RemoveEntry { ch, id } => {
                     app.send(BusCommand::RemoveEntry { ch, id });
                 }
-                WebCommand::AddTrigger { kind } => {
-                    if let Some(kind) = parse_trigger_kind(&kind) {
-                        app.apply_trigger_cmds(vec![TriggerCmd::Add(kind)]);
+                WebCommand::AddTrigger {
+                    kind,
+                    ch,
+                    id,
+                    bus,
+                    slot,
+                    signal_key,
+                } => {
+                    // Chart lanes hand over the canonical signal key; the
+                    // backend owns the cluster -> bus resolution.
+                    let mut cond: Option<TriggerCond> = None;
+                    if let Some(text) = signal_key.as_deref() {
+                        match crate::observe::SigKey::from_text(text) {
+                            Some(key) => match app.key_bus(&key) {
+                                Some(bus_index) => {
+                                    cond = match key {
+                                        crate::observe::SigKey::Can { id, ext, name, .. } => {
+                                            Some(TriggerCond::SignalCross {
+                                                ch: bus_index,
+                                                id,
+                                                ext,
+                                                signal: name,
+                                                threshold: 0.0,
+                                                rising: true,
+                                            })
+                                        }
+                                        crate::observe::SigKey::Fr { slot, name, .. } => {
+                                            Some(TriggerCond::FrSignalCross {
+                                                bus: bus_index,
+                                                slot,
+                                                signal: name,
+                                                threshold: 0.0,
+                                                rising: true,
+                                            })
+                                        }
+                                        crate::observe::SigKey::Eth { .. } => {
+                                            app.status =
+                                                "Ethernet signals have no trigger condition yet"
+                                                    .to_string();
+                                            None
+                                        }
+                                        crate::observe::SigKey::Derived { .. } => None,
+                                    };
+                                }
+                                None => {
+                                    app.status =
+                                        "that signal's bus is not in this project".to_string();
+                                }
+                            },
+                            None => {
+                                app.status = format!("unrecognised signal key: {text}");
+                            }
+                        }
+                    }
+                    if cond.is_none() {
+                        match kind.as_str() {
+                            "id" => {
+                                cond = Some(TriggerCond::IdPresent {
+                                    ch: ch.unwrap_or(0),
+                                    id: id.unwrap_or(0x100),
+                                });
+                            }
+                            "fr_frame" => {
+                                cond = Some(TriggerCond::FrFramePresent {
+                                    bus: bus.unwrap_or(0),
+                                    slot: slot.unwrap_or(1),
+                                });
+                            }
+                            _ => {}
+                        }
+                    }
+                    match cond {
+                        Some(cond) => app.apply_trigger_cmds(vec![TriggerCmd::AddCond(cond)]),
+                        None => {
+                            if let Some(kind) = parse_trigger_kind(&kind) {
+                                app.apply_trigger_cmds(vec![TriggerCmd::Add(kind)]);
+                            }
+                        }
                     }
                 }
                 WebCommand::SetTriggerEnabled { index, on } => {
@@ -3591,6 +3835,9 @@ fn app_loop(
                 }
                 WebCommand::RearmTriggers => {
                     app.apply_trigger_cmds(vec![TriggerCmd::Rearm]);
+                }
+                WebCommand::RearmTrigger { index } => {
+                    app.apply_trigger_cmds(vec![TriggerCmd::RearmOne(index)]);
                 }
                 WebCommand::EditTrigger {
                     index,
@@ -3608,6 +3855,30 @@ fn app_loop(
                     action,
                     send_ch,
                     send_id,
+                    sys_var_key,
+                    sys_var_value,
+                    script_name,
+                    script_value,
+                    send_frame,
+                    send_data,
+                    someip_method,
+                    someip_client,
+                    someip_session,
+                    someip_type,
+                    cond_someip_method,
+                    cond_someip_type,
+                    someip_values,
+                    someip_transport,
+                    someip_host,
+                    someip_port,
+                    offset,
+                    mask,
+                    value,
+                    vlan,
+                    cooldown_ms,
+                    max_fires,
+                    pre_frames,
+                    post_frames,
                 } => {
                     let cond = match kind.as_str() {
                         "signal" => TriggerCond::SignalCross {
@@ -3639,6 +3910,27 @@ fn app_loop(
                             threshold,
                             rising,
                         },
+                        "payload" => TriggerCond::PayloadMatch {
+                            ch,
+                            id,
+                            ext,
+                            offset,
+                            mask,
+                            value,
+                        },
+                        "eth_flow" => TriggerCond::EthFlow {
+                            bus,
+                            ethertype: id.min(u32::from(u16::MAX)) as u16,
+                            vlan,
+                        },
+                        "fr_timeout" => TriggerCond::FrTimeout { bus, slot },
+                        "e2e" => TriggerCond::E2eIssue { ch, id, ext },
+                        "someip" => TriggerCond::SomeIp {
+                            bus,
+                            service: id.min(u32::from(u16::MAX)) as u16,
+                            method: cond_someip_method,
+                            message_type: cond_someip_type,
+                        },
                         _ => {
                             app.status = format!("unknown trigger kind: {kind}");
                             continue;
@@ -3651,8 +3943,56 @@ fn app_loop(
                             ch: send_ch,
                             id: send_id,
                         },
+                        "send_fr" => TriggerAction::SendFr {
+                            bus: send_ch,
+                            slot: send_id.min(u32::from(u16::MAX)) as u16,
+                        },
+                        "send_eth" => {
+                            let Some(data) = crate::generator::parse_hex_bytes(&send_data) else {
+                                app.status = "Ethernet payload must be hex bytes".to_string();
+                                return;
+                            };
+                            TriggerAction::SendEth {
+                                bus: send_ch,
+                                frame: send_frame,
+                                data,
+                            }
+                        }
+                        "send_someip" => {
+                            let data = if someip_values.is_empty() {
+                                let Some(data) = crate::generator::parse_hex_bytes(&send_data)
+                                else {
+                                    app.status = "SOME/IP payload must be hex bytes".to_string();
+                                    return;
+                                };
+                                data
+                            } else {
+                                Vec::new()
+                            };
+                            TriggerAction::SendSomeIp {
+                                bus: send_ch,
+                                service: send_id.min(u32::from(u16::MAX)) as u16,
+                                method: someip_method,
+                                client: someip_client,
+                                session: someip_session,
+                                message_type: someip_type,
+                                data,
+                                values: someip_values,
+                                transport: someip_transport,
+                                host: someip_host,
+                                port: someip_port,
+                            }
+                        }
                         "clear_trace" => TriggerAction::ClearTrace,
                         "insert_marker" => TriggerAction::InsertMarker,
+                        "set_sysvar" => TriggerAction::SetSysVar {
+                            key: sys_var_key,
+                            value: sys_var_value.unwrap_or(0.0),
+                        },
+                        "script" => TriggerAction::RunScript {
+                            name: script_name,
+                            value: script_value,
+                        },
                         _ => {
                             app.status = format!("unknown trigger action: {action}");
                             continue;
@@ -3663,6 +4003,10 @@ fn app_loop(
                             index,
                             cond,
                             action,
+                            cooldown_us: u64::from(cooldown_ms) * 1_000,
+                            max_fires,
+                            pre_frames: pre_frames.map(|n| n as usize),
+                            post_frames,
                         }]);
                     }
                 }
@@ -4774,10 +5118,25 @@ fn channel_signature(app: &App) -> String {
             )
         })
         .collect();
+    let someip: Vec<String> = app
+        .someip_services
+        .services
+        .iter()
+        .map(|service| {
+            format!(
+                "someip{}:{}:{}:{}",
+                service.id,
+                service.methods.len(),
+                service.events.len(),
+                service.instances.len()
+            )
+        })
+        .collect();
     parts
         .into_iter()
         .chain(fr)
         .chain(eth)
+        .chain(someip)
         .collect::<Vec<_>>()
         .join(";")
 }
@@ -4952,6 +5311,83 @@ fn catalog_aliases(comm: &crate::model::Comm) -> Vec<String> {
     names
 }
 
+fn someip_signal_names(prefix: &str, ty: &crate::eth::arxml_service::ServiceType) -> Vec<String> {
+    use crate::eth::arxml_service::ServiceType;
+    match ty {
+        ServiceType::Record(fields) => fields
+            .iter()
+            .flat_map(|field| someip_signal_names(&format!("{prefix}.{}", field.name), &field.ty))
+            .collect(),
+        ServiceType::Array { element, count } => (0..*count)
+            .flat_map(|index| someip_signal_names(&format!("{prefix}[{index}]"), element))
+            .collect(),
+        _ => vec![prefix.to_string()],
+    }
+}
+
+fn someip_catalog_messages(app: &App, bus: u8) -> Vec<WebCatalogMessage> {
+    let mut out = Vec::new();
+    for service in &app.someip_services.services {
+        if !service.buses.is_empty() && !service.buses.contains(&bus) {
+            continue;
+        }
+        let mut add =
+            |name: &str, method: u16, fields: &[crate::eth::arxml_service::ServiceField]| {
+                if fields.is_empty() {
+                    return;
+                }
+                let frame = format!("SOMEIP 0x{:04X}/0x{:04X}", service.id, method);
+                let signals = fields
+                    .iter()
+                    .filter(|field| !field.name.is_empty())
+                    .flat_map(|field| {
+                        someip_signal_names(&field.name, &field.ty)
+                            .into_iter()
+                            .map(|signal| WebCatalogSignal {
+                                key: series_key(&app.eth_key(bus, frame.clone(), signal.clone())),
+                                name: signal,
+                                unit: field.props.unit.clone(),
+                                min: field
+                                    .props
+                                    .min
+                                    .as_deref()
+                                    .and_then(|value| value.parse().ok())
+                                    .unwrap_or(0.0),
+                                max: field
+                                    .props
+                                    .max
+                                    .as_deref()
+                                    .and_then(|value| value.parse().ok())
+                                    .unwrap_or(0.0),
+                                initial: None,
+                                comment: String::new(),
+                                group: None,
+                            })
+                    })
+                    .collect();
+                out.push(WebCatalogMessage {
+                    id: (u32::from(service.id) << 16) | u32::from(method),
+                    extended: true,
+                    name: name.to_string(),
+                    frame: Some(frame),
+                    comment: format!("SOME/IP service 0x{:04X}", service.id),
+                    fd: false,
+                    length: None,
+                    signals,
+                });
+            };
+        for event in &service.events {
+            add(&event.name, event.id, &event.fields);
+        }
+        for method in &service.methods {
+            let mut fields = method.input.clone();
+            fields.extend(method.output.iter().cloned());
+            add(&method.name, method.id, &fields);
+        }
+    }
+    out
+}
+
 fn build_catalog(app: &App) -> WebCatalog {
     let mut channels: Vec<WebCatalogChannel> = app
         .snap
@@ -5006,10 +5442,46 @@ fn build_catalog(app: &App) -> WebCatalog {
             index: *bus,
             name: app.eth_bus_label(*bus),
             aliases,
-            messages,
+            messages: {
+                let mut messages = messages;
+                messages.extend(someip_catalog_messages(app, *bus));
+                messages
+            },
         });
     }
     WebCatalog { channels }
+}
+
+#[derive(Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WebSomeIpService {
+    id: u16,
+    name: String,
+    bus: u8,
+    bus_name: String,
+    major: u8,
+    source: String,
+    methods: Vec<WebSomeIpMember>,
+    events: Vec<WebSomeIpMember>,
+    instances: Vec<WebSomeIpInstance>,
+}
+
+#[derive(Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WebSomeIpMember {
+    id: u16,
+    name: String,
+    fields: Vec<String>,
+}
+
+#[derive(Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WebSomeIpInstance {
+    id: u16,
+    major: u8,
+    minor: u32,
+    eventgroups: Vec<u16>,
+    endpoint: String,
 }
 
 #[derive(Clone, Default, Serialize)]
@@ -5029,6 +5501,7 @@ struct WebState {
     trace_paused: bool,
     recording: bool,
     record_file: String,
+    record_eth_file: String,
     record_filter: String,
     mode: String,
     /// Bus-event marker times in seconds, oldest first.
@@ -5055,6 +5528,11 @@ struct WebState {
     /// Workspace adopted from the saved project plus the revision that owns
     /// it; the browser applies it once per revision.
     workspace: Option<serde_json::Value>,
+    panel_pages: Vec<serde_json::Value>,
+    someip: Vec<crate::eth::someip::SomeIpEvent>,
+    someip_subscriptions: Vec<crate::bus::SomeIpSubscriptionView>,
+    someip_issues: Vec<String>,
+    someip_services: Vec<WebSomeIpService>,
     workspace_rev: u64,
     reference: Option<crate::reference::ReferenceRun>,
     reference_rev: u64,
@@ -5074,6 +5552,8 @@ struct WebState {
     fr_tx: Vec<WebFrTx>,
     blocks: Vec<WebReplayBlock>,
     triggers: Vec<WebTrigger>,
+    /// Recent trigger edges, oldest first; the replay bar walks these.
+    trigger_fires: Vec<WebTriggerFire>,
     trigger_limits: WebTriggerLimits,
     sysvars: Vec<WebSysVar>,
     monitor: Vec<WebMonitorRow>,
@@ -5115,6 +5595,23 @@ struct WebFrBus {
 #[serde(rename_all = "camelCase")]
 struct WebEthBus {
     clusters: usize,
+    pdus: usize,
+    endpoints: usize,
+    pdu_names: Vec<String>,
+    endpoint_list: Vec<WebEthEndpoint>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    attached: Option<String>,
+}
+
+#[derive(Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WebEthEndpoint {
+    name: String,
+    ip: String,
+    port: u16,
+    protocol: String,
+    connector: String,
+    pdu: String,
 }
 
 #[derive(Clone, Default, Serialize)]
@@ -5187,6 +5684,9 @@ struct WebNode {
     name: String,
     simulated: bool,
     entries: usize,
+    /// Unified ECU identity when the ARXML model names the same node.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    ecu: Option<u32>,
 }
 
 #[derive(Clone, Default, Serialize)]
@@ -5194,7 +5694,12 @@ struct WebNode {
 struct WebReplayRow {
     raw: u8,
     count: u64,
+    /// The bus the core would actually use; `None` = these frames are dropped.
     target: Option<u8>,
+    /// Whether the table has a deliberate choice for this channel. Without
+    /// it, "As-is" and "No replay" both look like `target: None` for a
+    /// channel whose number names no bus.
+    configured: bool,
 }
 
 #[derive(Clone, Default, Serialize)]
@@ -5209,11 +5714,13 @@ struct WebReplayMap {
 /// the target the core would actually use (`None` = no replay).
 fn replay_rows(
     census: &[(u8, u64)],
-    configured: Vec<(u8, Option<u8>)>,
+    map: &crate::replay_map::ReplayMap,
+    kind: crate::replay_map::LogBusKind,
     effective: impl Fn(u8) -> Option<u8>,
 ) -> Vec<WebReplayRow> {
+    use crate::replay_map::ReplayTarget;
     let mut rows: std::collections::BTreeMap<u8, u64> = census.iter().copied().collect();
-    for (raw, _) in configured {
+    for (raw, _) in map.configured(kind) {
         rows.entry(raw).or_insert(0);
     }
     rows.into_iter()
@@ -5221,8 +5728,38 @@ fn replay_rows(
             raw,
             count,
             target: effective(raw),
+            configured: !matches!(map.target(kind, raw), ReplayTarget::Same),
         })
         .collect()
+}
+
+/// Applies one channel-map choice. The frontend picks a bus; the map stores
+/// the cluster it names, so the choice survives channel renumbering. Errors
+/// are user-facing status text, not a failed request.
+fn apply_replay_channel(
+    app: &mut App,
+    kind: crate::replay_map::LogBusKind,
+    raw: u8,
+    target: ReplayChannelChoice,
+) -> Result<(), String> {
+    let mut map = app.snap.replay_map.clone();
+    match target {
+        ReplayChannelChoice::Word(word) if word == "same" => map.forget(kind, raw),
+        ReplayChannelChoice::Word(word) if word == "drop" => map.set(kind, raw, None),
+        ReplayChannelChoice::Word(word) => {
+            return Err(format!("unknown replay target: {word}"));
+        }
+        ReplayChannelChoice::Bus(bus) => {
+            let Some(cluster) = app.cluster_of_bus(kind, bus) else {
+                return Err(format!(
+                    "replay target bus {bus} has no cluster in this project"
+                ));
+            };
+            map.set(kind, raw, Some(cluster));
+        }
+    }
+    app.send(BusCommand::SetReplayMap(map));
+    Ok(())
 }
 
 #[derive(Clone, Default, Serialize)]
@@ -5337,6 +5874,41 @@ struct WebTrigger {
     action_kind: String,
     send_ch: u8,
     send_id: u32,
+    cooldown_ms: u32,
+    max_fires: u32,
+    pre_frames: Option<u32>,
+    post_frames: Option<u32>,
+    sys_var_key: String,
+    sys_var_value: f64,
+    script_name: String,
+    script_value: Option<f64>,
+    send_frame: String,
+    send_data: String,
+    someip_method: u16,
+    someip_client: u16,
+    someip_session: u16,
+    someip_type: u8,
+    cond_someip_method: Option<u16>,
+    cond_someip_type: Option<u8>,
+    someip_values: std::collections::BTreeMap<String, f64>,
+    someip_transport: String,
+    someip_host: String,
+    someip_port: u16,
+    offset: u8,
+    mask: u8,
+    value: u8,
+    vlan: Option<u16>,
+}
+
+#[derive(Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WebTriggerFire {
+    index: usize,
+    at_us: u64,
+    text: String,
+    action: String,
+    result: String,
+    ok: bool,
 }
 
 #[derive(Clone, Default, Serialize)]
@@ -5567,8 +6139,17 @@ struct WebHwChannel {
 struct WebHardware {
     channels: Vec<WebHwChannel>,
     fr_channels: Vec<WebHwChannel>,
+    eth_channels: Vec<WebEthChannel>,
     error: String,
     fr_error: String,
+    eth_error: String,
+}
+
+#[derive(Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WebEthChannel {
+    device: String,
+    name: String,
 }
 
 #[derive(Default)]
@@ -5762,6 +6343,7 @@ fn build_state(app: &App, series: &VecDeque<WebSeriesPoint>, fps: f64) -> WebSta
                                 .map(|node| WebNode {
                                     name: node.clone(),
                                     simulated: ch.role_of(node) == crate::app::NodeRole::Simulated,
+                                    ecu: ch.node_ecus.get(node).copied(),
                                     entries: snap
                                         .tx
                                         .iter()
@@ -5875,7 +6457,43 @@ fn build_state(app: &App, series: &VecDeque<WebSeriesPoint>, fps: f64) -> WebSta
             descriptions,
             can: None,
             flexray: None,
-            ethernet: Some(WebEthBus { clusters }),
+            ethernet: Some(WebEthBus {
+                clusters,
+                pdus: app.eth_db(*bus).map(|db| db.pdus.len()).unwrap_or(0),
+                endpoints: app.eth_db(*bus).map(|db| db.endpoints.len()).unwrap_or(0),
+                pdu_names: app
+                    .eth_db(*bus)
+                    .map(|db| {
+                        db.pdus
+                            .iter()
+                            .map(|pdu| {
+                                if pdu.signals.is_empty() {
+                                    pdu.name.clone()
+                                } else {
+                                    format!("{} · {} signals", pdu.name, pdu.signals.len())
+                                }
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default(),
+                endpoint_list: app
+                    .eth_db(*bus)
+                    .map(|db| {
+                        db.endpoints
+                            .iter()
+                            .map(|endpoint| WebEthEndpoint {
+                                name: endpoint.name.clone(),
+                                ip: endpoint.ip.clone(),
+                                port: endpoint.port,
+                                protocol: endpoint.protocol.clone(),
+                                connector: endpoint.connector.clone(),
+                                pdu: endpoint.pdu.clone(),
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default(),
+                attached: snap.eth_attached.get(bus).cloned(),
+            }),
         });
     }
     buses.sort_by_key(|bus| bus.id);
@@ -6057,30 +6675,89 @@ fn build_state(app: &App, series: &VecDeque<WebSeriesPoint>, fps: f64) -> WebSta
         .iter()
         .enumerate()
         .map(|(index, trigger)| {
+            let (send_frame, send_data) = match &trigger.action {
+                TriggerAction::SendEth { frame, data, .. } => {
+                    (frame.clone(), crate::generator::hex_of(data))
+                }
+                _ => (String::new(), String::new()),
+            };
+            let (
+                someip_method,
+                someip_client,
+                someip_session,
+                someip_type,
+                someip_values,
+                someip_transport,
+                someip_host,
+                someip_port,
+            ) = match &trigger.action {
+                TriggerAction::SendSomeIp {
+                    method,
+                    client,
+                    session,
+                    message_type,
+                    values,
+                    transport,
+                    host,
+                    port,
+                    ..
+                } => (
+                    *method,
+                    *client,
+                    *session,
+                    *message_type,
+                    values.clone(),
+                    transport.clone(),
+                    host.clone(),
+                    *port,
+                ),
+                _ => (
+                    0,
+                    0,
+                    0,
+                    0,
+                    std::collections::BTreeMap::new(),
+                    "udp".to_string(),
+                    String::new(),
+                    30490,
+                ),
+            };
             let mut view = WebTrigger {
                 summary: app.trigger_summary(index),
-                action: match &trigger.action {
-                    TriggerAction::StartRecording => "start recording".to_string(),
-                    TriggerAction::StopRecording => "stop recording".to_string(),
-                    TriggerAction::Send { id, .. } => format!("send 0x{id:X}"),
-                    TriggerAction::ClearTrace => "clear trace".to_string(),
-                    TriggerAction::InsertMarker => "insert marker".to_string(),
-                },
+                action: trigger.action.label(),
                 kind: trigger_kind(&trigger.cond).to_string(),
                 enabled: trigger.enabled,
                 fired: trigger.fired,
                 level: trigger.level,
                 last_fire_us: trigger.last_fire_t_us,
-                action_kind: match trigger.action {
-                    TriggerAction::StartRecording => "start_recording",
-                    TriggerAction::StopRecording => "stop_recording",
-                    TriggerAction::Send { .. } => "send",
-                    TriggerAction::ClearTrace => "clear_trace",
-                    TriggerAction::InsertMarker => "insert_marker",
-                }
-                .to_string(),
+                action_kind: trigger.action.kind().to_string(),
+                cooldown_ms: (trigger.cooldown_us / 1_000).min(u64::from(u32::MAX)) as u32,
+                max_fires: trigger.max_fires,
+                pre_frames: trigger.pre_frames.map(|n| n.min(u32::MAX as usize) as u32),
+                post_frames: trigger.post_frames,
+                send_frame,
+                send_data,
+                someip_method,
+                someip_client,
+                someip_session,
+                someip_type,
+                someip_values,
+                someip_transport,
+                someip_host,
+                someip_port,
                 ..Default::default()
             };
+            match &trigger.action {
+                TriggerAction::SetSysVar { key, value } => {
+                    view.sys_var_key.clone_from(key);
+                    view.sys_var_value = *value;
+                }
+                TriggerAction::RunScript { name, value } => {
+                    view.script_name.clone_from(name);
+                    view.script_value = *value;
+                }
+                _ => {}
+            }
             match &trigger.cond {
                 TriggerCond::SignalCross {
                     ch,
@@ -6143,10 +6820,58 @@ fn build_state(app: &App, series: &VecDeque<WebSeriesPoint>, fps: f64) -> WebSta
                     view.threshold = *threshold;
                     view.rising = *rising;
                 }
+                TriggerCond::PayloadMatch {
+                    ch,
+                    id,
+                    ext,
+                    offset: at,
+                    mask: bits,
+                    value: wanted,
+                } => {
+                    view.ch = *ch;
+                    view.id = *id;
+                    view.ext = *ext;
+                    view.offset = *at;
+                    view.mask = *bits;
+                    view.value = *wanted;
+                }
+                TriggerCond::EthFlow {
+                    bus,
+                    ethertype,
+                    vlan,
+                } => {
+                    view.bus = *bus;
+                    view.id = u32::from(*ethertype);
+                    view.vlan = *vlan;
+                }
+                TriggerCond::FrTimeout { bus, slot } => {
+                    view.bus = *bus;
+                    view.slot = *slot;
+                }
+                TriggerCond::E2eIssue { ch, id, ext } => {
+                    view.ch = *ch;
+                    view.id = *id;
+                    view.ext = *ext;
+                }
+                TriggerCond::SomeIp {
+                    bus,
+                    service,
+                    method,
+                    message_type,
+                } => {
+                    view.bus = *bus;
+                    view.id = u32::from(*service);
+                    view.cond_someip_method = *method;
+                    view.cond_someip_type = *message_type;
+                }
             }
             if let TriggerAction::Send { ch, id } = trigger.action {
                 view.send_ch = ch;
                 view.send_id = id;
+            }
+            if let TriggerAction::SendFr { bus, slot } = trigger.action {
+                view.send_ch = bus;
+                view.send_id = u32::from(slot);
             }
             view
         })
@@ -6156,33 +6881,16 @@ fn build_state(app: &App, series: &VecDeque<WebSeriesPoint>, fps: f64) -> WebSta
         use crate::replay_map::LogBusKind;
         let map = &snap.replay_map;
         WebReplayMap {
-            can: replay_rows(
-                &snap.replay_census_can,
-                map.configured(LogBusKind::Can)
-                    .into_iter()
-                    .map(|(raw, _)| (raw, None))
-                    .collect(),
-                |raw| {
-                    app.replay_bus(LogBusKind::Can, raw)
-                        .filter(|bus| (*bus as usize) < snap.channels.len())
-                },
-            ),
-            fr: replay_rows(
-                &snap.replay_census_fr,
-                map.configured(LogBusKind::Fr)
-                    .into_iter()
-                    .map(|(raw, _)| (raw, None))
-                    .collect(),
-                |raw| app.replay_bus(LogBusKind::Fr, raw),
-            ),
-            eth: replay_rows(
-                &snap.replay_census_eth,
-                map.configured(LogBusKind::Eth)
-                    .into_iter()
-                    .map(|(raw, _)| (raw, None))
-                    .collect(),
-                |raw| app.replay_bus(LogBusKind::Eth, raw),
-            ),
+            can: replay_rows(&snap.replay_census_can, map, LogBusKind::Can, |raw| {
+                app.replay_bus(LogBusKind::Can, raw)
+                    .filter(|bus| (*bus as usize) < snap.channels.len())
+            }),
+            fr: replay_rows(&snap.replay_census_fr, map, LogBusKind::Fr, |raw| {
+                app.replay_bus(LogBusKind::Fr, raw)
+            }),
+            eth: replay_rows(&snap.replay_census_eth, map, LogBusKind::Eth, |raw| {
+                app.replay_bus(LogBusKind::Eth, raw)
+            }),
         }
     };
 
@@ -6673,6 +7381,7 @@ fn build_state(app: &App, series: &VecDeque<WebSeriesPoint>, fps: f64) -> WebSta
         trace_paused: snap.trace_paused,
         recording: snap.recording,
         record_file: snap.last_record.clone(),
+        record_eth_file: snap.last_eth_record.clone(),
         record_filter: app.record_filter_text.clone(),
         markers: snap
             .markers
@@ -6735,6 +7444,131 @@ fn build_state(app: &App, series: &VecDeque<WebSeriesPoint>, fps: f64) -> WebSta
             })
             .collect(),
         workspace: app.web_workspace.clone(),
+        panel_pages: app.panel_pages.clone(),
+        someip: snap
+            .someip
+            .iter()
+            .map(|event| {
+                let mut event = event.clone();
+                if event.sd.is_none() && event.decoded.is_empty() {
+                    match app.someip_services.service(event.service) {
+                        None => {
+                            event.decode_error =
+                                Some(format!("no ARXML service 0x{:04X}", event.service));
+                        }
+                        Some(service) => {
+                            let fields = service
+                                .events
+                                .iter()
+                                .find(|entry| entry.id == event.method)
+                                .map(|entry| entry.fields.as_slice())
+                                .or_else(|| {
+                                    service
+                                        .methods
+                                        .iter()
+                                        .find(|entry| entry.id == event.method)
+                                        .map(|entry| {
+                                            if event.message_type == 0x80 {
+                                                entry.output.as_slice()
+                                            } else {
+                                                entry.input.as_slice()
+                                            }
+                                        })
+                                });
+                            match fields {
+                                None => {
+                                    event.decode_error = Some(format!(
+                                        "no ARXML method/event 0x{:04X}",
+                                        event.method
+                                    ));
+                                }
+                                Some(fields) => match crate::eth::arxml_service::decode_values(
+                                    fields,
+                                    &event.payload,
+                                ) {
+                                    Some(values) => event.decoded = values,
+                                    None => {
+                                        event.decode_error =
+                                            Some("payload shorter than ARXML layout".to_string());
+                                    }
+                                },
+                            }
+                        }
+                    }
+                }
+                event
+            })
+            .collect(),
+        someip_subscriptions: snap.someip_subscriptions.clone(),
+        someip_issues: app
+            .someip_services
+            .services
+            .iter()
+            .flat_map(|service| service.issues.iter().cloned())
+            .collect(),
+        someip_services: app
+            .someip_services
+            .services
+            .iter()
+            .flat_map(|service| {
+                let buses = if service.buses.is_empty() {
+                    vec![0]
+                } else {
+                    service.buses.clone()
+                };
+                buses.into_iter().map(|bus| WebSomeIpService {
+                    id: service.id,
+                    name: service.name.clone(),
+                    bus,
+                    bus_name: app.eth_bus_label(bus),
+                    major: service.major,
+                    source: app
+                        .eth_sources
+                        .get(&bus)
+                        .and_then(|sources| sources.first())
+                        .map(|source| source.path().unwrap_or("").to_string())
+                        .unwrap_or_default(),
+                    methods: service
+                        .methods
+                        .iter()
+                        .map(|method| WebSomeIpMember {
+                            id: method.id,
+                            name: method.name.clone(),
+                            fields: method
+                                .input
+                                .iter()
+                                .chain(method.output.iter())
+                                .flat_map(|field| someip_signal_names(&field.name, &field.ty))
+                                .collect(),
+                        })
+                        .collect(),
+                    events: service
+                        .events
+                        .iter()
+                        .map(|event| WebSomeIpMember {
+                            id: event.id,
+                            name: event.name.clone(),
+                            fields: event
+                                .fields
+                                .iter()
+                                .flat_map(|field| someip_signal_names(&field.name, &field.ty))
+                                .collect(),
+                        })
+                        .collect(),
+                    instances: service
+                        .instances
+                        .iter()
+                        .map(|instance| WebSomeIpInstance {
+                            id: instance.instance,
+                            major: instance.major,
+                            minor: instance.minor,
+                            eventgroups: instance.eventgroups.clone(),
+                            endpoint: instance.endpoint.clone(),
+                        })
+                        .collect(),
+                })
+            })
+            .collect(),
         workspace_rev: app.workspace_rev,
         reference: app.reference.clone(),
         reference_rev: app.reference_rev,
@@ -6776,6 +7610,18 @@ fn build_state(app: &App, series: &VecDeque<WebSeriesPoint>, fps: f64) -> WebSta
         fr_tx,
         blocks,
         triggers,
+        trigger_fires: snap
+            .trigger_fires
+            .iter()
+            .map(|fire| WebTriggerFire {
+                index: fire.index,
+                at_us: fire.at_us,
+                text: fire.text.clone(),
+                action: fire.action.clone(),
+                result: fire.result.clone(),
+                ok: fire.ok,
+            })
+            .collect(),
         trigger_limits: WebTriggerLimits {
             pre_frames: app.limits.pre_frames,
             post_frames: app.limits.post_frames,
@@ -8004,14 +8850,24 @@ mod tests {
 
     #[test]
     fn replay_rows_merge_census_and_configured_channels() {
-        let rows = replay_rows(&[(2, 5), (0, 9)], vec![(2, None), (4, Some(1))], |raw| {
+        use crate::replay_map::{LogBusKind, ReplayMap};
+        let mut map = ReplayMap::default();
+        map.set(LogBusKind::Can, 2, None);
+        map.set(LogBusKind::Can, 4, Some(crate::model::ClusterId(1)));
+        map.set(LogBusKind::Can, 5, Some(crate::model::ClusterId(2)));
+        let rows = replay_rows(&[(2, 5), (0, 9)], &map, LogBusKind::Can, |raw| {
             if raw == 2 { None } else { Some(1) }
         });
         assert_eq!(
             rows.iter()
-                .map(|row| (row.raw, row.count, row.target))
+                .map(|row| (row.raw, row.count, row.target, row.configured))
                 .collect::<Vec<_>>(),
-            [(0, 9, Some(1)), (2, 5, None), (4, 0, Some(1))],
+            [
+                (0, 9, Some(1), false),
+                (2, 5, None, true),
+                (4, 0, Some(1), true),
+                (5, 0, Some(1), true),
+            ],
             "census and remembered rows share one sorted table"
         );
         assert_eq!(
@@ -8019,6 +8875,73 @@ mod tests {
             Some(crate::replay_map::LogBusKind::Fr)
         );
         assert!(crate::replay_map::LogBusKind::parse("lin").is_none());
+    }
+
+    #[test]
+    fn replay_channel_commands_accept_same_drop_and_a_bus() {
+        let parse = |target: serde_json::Value| -> ReplayChannelChoice {
+            let cmd: WebCommand = serde_json::from_value(serde_json::json!({
+                "type": "set_replay_channel",
+                "kind": "can",
+                "raw": 3,
+                "target": target,
+            }))
+            .expect("replay channel command");
+            match cmd {
+                WebCommand::SetReplayChannel { target, .. } => target,
+                _ => panic!("wrong command variant"),
+            }
+        };
+        assert!(matches!(
+            parse(serde_json::json!("same")),
+            ReplayChannelChoice::Word(word) if word == "same"
+        ));
+        assert!(matches!(
+            parse(serde_json::json!("drop")),
+            ReplayChannelChoice::Word(word) if word == "drop"
+        ));
+        assert!(matches!(
+            parse(serde_json::json!(2)),
+            ReplayChannelChoice::Bus(2)
+        ));
+    }
+
+    #[test]
+    fn replay_channel_choices_forget_and_drop() {
+        use crate::replay_map::{LogBusKind, ReplayTarget};
+        let mut app = App::headless();
+        apply_replay_channel(
+            &mut app,
+            LogBusKind::Can,
+            3,
+            ReplayChannelChoice::Word("drop".into()),
+        )
+        .expect("drop accepted");
+        assert_eq!(
+            app.snap.replay_map.target(LogBusKind::Can, 3),
+            ReplayTarget::Drop
+        );
+        apply_replay_channel(
+            &mut app,
+            LogBusKind::Can,
+            3,
+            ReplayChannelChoice::Word("same".into()),
+        )
+        .expect("same accepted");
+        assert_eq!(
+            app.snap.replay_map.target(LogBusKind::Can, 3),
+            ReplayTarget::Same,
+            "as-is removes the entry instead of pinning today's bus"
+        );
+        assert!(
+            apply_replay_channel(
+                &mut app,
+                LogBusKind::Can,
+                3,
+                ReplayChannelChoice::Word("bogus".into()),
+            )
+            .is_err()
+        );
     }
 
     #[test]
@@ -8169,6 +9092,70 @@ mod tests {
         );
     }
 
+    /// Context menus and the editor use the same snake_case command shape as
+    /// the rest of the API; a renamed field would fail silently at runtime.
+    #[test]
+    fn trigger_seed_and_edit_commands_deserialize() {
+        let seed: WebCommand = serde_json::from_value(serde_json::json!({
+            "type": "add_trigger",
+            "kind": "id",
+            "ch": 1,
+            "id": 256,
+        }))
+        .expect("seed command");
+        match seed {
+            WebCommand::AddTrigger { ch, id, .. } => {
+                assert_eq!(ch, Some(1));
+                assert_eq!(id, Some(256));
+            }
+            _ => panic!("wrong command variant"),
+        }
+
+        let edit: WebCommand = serde_json::from_value(serde_json::json!({
+            "type": "edit_trigger",
+            "index": 0,
+            "kind": "sysvar",
+            "ch": 0,
+            "id": 0,
+            "ext": false,
+            "signal": "",
+            "threshold": 0.0,
+            "rising": true,
+            "bus": 0,
+            "slot": 0,
+            "key": "Bench::Ready",
+            "derived_id": "",
+            "action": "set_sysvar",
+            "send_ch": 0,
+            "send_id": 0,
+            "sys_var_key": "Bench::Ready",
+            "sys_var_value": 3.5,
+            "script_name": "",
+            "script_value": null,
+            "writes": [],
+            "cooldown_ms": 250,
+            "max_fires": 4,
+        }))
+        .expect("edit command");
+        match edit {
+            WebCommand::EditTrigger {
+                action,
+                sys_var_key,
+                sys_var_value,
+                cooldown_ms,
+                max_fires,
+                ..
+            } => {
+                assert_eq!(action, "set_sysvar");
+                assert_eq!(sys_var_key, "Bench::Ready");
+                assert_eq!(sys_var_value, Some(3.5));
+                assert_eq!(cooldown_ms, 250);
+                assert_eq!(max_fires, 4);
+            }
+            _ => panic!("wrong command variant"),
+        }
+    }
+
     /// The Triggers panel reads the live rule list and its fire state.
     #[test]
     fn the_state_lists_triggers() {
@@ -8179,6 +9166,10 @@ mod tests {
                 index: 0,
                 cond: TriggerCond::ErrorFrame { ch: 1 },
                 action: TriggerAction::InsertMarker,
+                cooldown_us: 0,
+                max_fires: 0,
+                pre_frames: None,
+                post_frames: None,
             },
             TriggerCmd::SetPreFrames(128),
             TriggerCmd::SetPostFrames(16),
@@ -8186,7 +9177,7 @@ mod tests {
         ]);
         let state = build_state(&app, &VecDeque::new(), 0.0);
         assert_eq!(state.triggers.len(), 1);
-        assert!(state.triggers[0].enabled);
+        assert!(!state.triggers[0].enabled, "new rules start disarmed");
         assert_eq!(state.triggers[0].kind, "error");
         assert_eq!(state.triggers[0].ch, 1);
         assert_eq!(state.triggers[0].action_kind, "insert_marker");

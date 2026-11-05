@@ -77,6 +77,14 @@ pub struct Vm {
     /// Frame instances queued by `send_frame(instance)`. The host resolves
     /// the catalog path, encodes the physical fields and sends one frame.
     pub frame_outbox: Vec<super::FrameInstance>,
+    /// SOME/IP datagrams queued by `someip_send(…)`; the host builds the
+    /// UDP/TCP frame and applies the transport.
+    pub someip_outbox: Vec<super::SomeIpSend>,
+    /// TCP SOME/IP datagrams queued by `someip_tcp_send`; the host owns the
+    /// socket.
+    pub someip_tcp_outbox: Vec<super::SomeIpTcpSend>,
+    /// SD offers queued by `someip_offer`.
+    pub someip_offer_outbox: Vec<super::SomeIpOffer>,
     /// Signal writes queued by `set_fr_sig(路, 槽, "Name", 值)`. The host holds
     /// the cluster description that says where the signal sits, so the encoding
     /// happens there, not in the kernel.
@@ -122,6 +130,13 @@ pub struct Vm {
     pub node_channel: u8,
     /// The owning script node, used to match debugger breakpoints.
     pub node_id: u64,
+    /// SOME/IP event context, set while an `on someip` handler runs.
+    pub someip_service: u16,
+    pub someip_method: u16,
+    pub someip_client: u16,
+    pub someip_session: u16,
+    pub someip_return: u8,
+    pub someip_payload: Vec<u8>,
     /// Assertions recorded by `test(...)` since the node started.
     pub tests: Vec<crate::script::TestResult>,
     /// The communication cycle of a FlexRay arrival, set for `on fr slot`
@@ -161,6 +176,9 @@ impl Vm {
             outbox: Vec::new(),
             fr_outbox: Vec::new(),
             frame_outbox: Vec::new(),
+            someip_outbox: Vec::new(),
+            someip_tcp_outbox: Vec::new(),
+            someip_offer_outbox: Vec::new(),
             fr_sig_sets: Vec::new(),
             emitted: Vec::new(),
             sys_sets: Vec::new(),
@@ -174,6 +192,12 @@ impl Vm {
             frame_is_fr: false,
             node_channel: 0,
             node_id: 0,
+            someip_service: 0,
+            someip_method: 0,
+            someip_client: 0,
+            someip_session: 0,
+            someip_return: 0,
+            someip_payload: Vec::new(),
             tests: Vec::new(),
             fr_cycle: 0,
             rng: 0x9E37_79B9_7F4A_7C15,
@@ -1027,6 +1051,154 @@ impl Vm {
                 };
                 self.frame_outbox.push(frame.clone());
             }
+            "someip_send" => {
+                let ints: Vec<i64> = args[..6]
+                    .iter()
+                    .map(|arg| match arg {
+                        Value::Int(value) => Ok(*value),
+                        other => Err(VmError(format!(
+                            "someip_send: expected int, got {}",
+                            kind(other)
+                        ))),
+                    })
+                    .collect::<Result<_, _>>()?;
+                let payload = match &args[6] {
+                    Value::Bytes(bytes) => bytes.lock().expect("buffer poisoned").clone(),
+                    Value::Array(values) => values
+                        .lock()
+                        .expect("array poisoned")
+                        .iter()
+                        .map(|value| match value {
+                            Value::Int(n) => Ok(*n as u8),
+                            Value::Float(f) if f.is_finite() => Ok(f.trunc() as u8),
+                            other => Err(VmError(format!(
+                                "someip_send: payload element must be a byte, got {}",
+                                kind(other)
+                            ))),
+                        })
+                        .collect::<Result<Vec<u8>, _>>()?,
+                    other => {
+                        return Err(VmError(format!(
+                            "someip_send: payload must be bytes() or array(), got {}",
+                            kind(other)
+                        )));
+                    }
+                };
+                let bus = u8::try_from(ints[0])
+                    .map_err(|_| VmError("someip_send: bus out of range".into()))?;
+                let service = u16::try_from(ints[1])
+                    .map_err(|_| VmError("someip_send: service out of range".into()))?;
+                let method = u16::try_from(ints[2])
+                    .map_err(|_| VmError("someip_send: method out of range".into()))?;
+                let client = u16::try_from(ints[3])
+                    .map_err(|_| VmError("someip_send: client out of range".into()))?;
+                let session = u16::try_from(ints[4])
+                    .map_err(|_| VmError("someip_send: session out of range".into()))?;
+                let message_type = u8::try_from(ints[5])
+                    .map_err(|_| VmError("someip_send: type out of range".into()))?;
+                self.someip_outbox.push(super::SomeIpSend {
+                    bus,
+                    service,
+                    method,
+                    client,
+                    session,
+                    message_type,
+                    payload,
+                });
+            }
+            "someip_offer" => {
+                let mut ints = Vec::new();
+                for index in 0..6 {
+                    match &args[index] {
+                        Value::Int(value) => ints.push(*value),
+                        other => {
+                            return Err(VmError(format!(
+                                "someip_offer: expected int, got {}",
+                                kind(other)
+                            )));
+                        }
+                    }
+                }
+                let bus = u8::try_from(ints[0])
+                    .map_err(|_| VmError("someip_offer: bus out of range".into()))?;
+                let service = u16::try_from(ints[1])
+                    .map_err(|_| VmError("someip_offer: service out of range".into()))?;
+                let instance = u16::try_from(ints[2])
+                    .map_err(|_| VmError("someip_offer: instance out of range".into()))?;
+                let ttl = u32::try_from(ints[3])
+                    .map_err(|_| VmError("someip_offer: ttl out of range".into()))?;
+                let major = u8::try_from(ints[4])
+                    .map_err(|_| VmError("someip_offer: major out of range".into()))?;
+                let minor = u32::try_from(ints[5])
+                    .map_err(|_| VmError("someip_offer: minor out of range".into()))?;
+                self.someip_offer_outbox.push(super::SomeIpOffer {
+                    bus,
+                    service,
+                    instance,
+                    major,
+                    minor,
+                    ttl,
+                });
+            }
+            "someip_tcp_send" => {
+                let Value::Str(host) = &args[0] else {
+                    return Err(VmError("someip_tcp_send: host must be a string".into()));
+                };
+                let ints: Vec<i64> = args[1..7]
+                    .iter()
+                    .map(|arg| match arg {
+                        Value::Int(value) => Ok(*value),
+                        other => Err(VmError(format!(
+                            "someip_tcp_send: expected int, got {}",
+                            kind(other)
+                        ))),
+                    })
+                    .collect::<Result<_, _>>()?;
+                let payload = match &args[7] {
+                    Value::Bytes(bytes) => bytes.lock().expect("buffer poisoned").clone(),
+                    Value::Array(values) => values
+                        .lock()
+                        .expect("array poisoned")
+                        .iter()
+                        .map(|value| match value {
+                            Value::Int(n) => Ok(*n as u8),
+                            Value::Float(f) if f.is_finite() => Ok(f.trunc() as u8),
+                            other => Err(VmError(format!(
+                                "someip_tcp_send: payload element must be a byte, got {}",
+                                kind(other)
+                            ))),
+                        })
+                        .collect::<Result<Vec<u8>, _>>()?,
+                    other => {
+                        return Err(VmError(format!(
+                            "someip_tcp_send: payload must be bytes() or array(), got {}",
+                            kind(other)
+                        )));
+                    }
+                };
+                let port = u16::try_from(ints[0])
+                    .map_err(|_| VmError("someip_tcp_send: port out of range".into()))?;
+                let service = u16::try_from(ints[1])
+                    .map_err(|_| VmError("someip_tcp_send: service out of range".into()))?;
+                let method = u16::try_from(ints[2])
+                    .map_err(|_| VmError("someip_tcp_send: method out of range".into()))?;
+                let client = u16::try_from(ints[3])
+                    .map_err(|_| VmError("someip_tcp_send: client out of range".into()))?;
+                let session = u16::try_from(ints[4])
+                    .map_err(|_| VmError("someip_tcp_send: session out of range".into()))?;
+                let message_type = u8::try_from(ints[5])
+                    .map_err(|_| VmError("someip_tcp_send: type out of range".into()))?;
+                self.someip_tcp_outbox.push(super::SomeIpTcpSend {
+                    host: host.clone(),
+                    port,
+                    service,
+                    method,
+                    client,
+                    session,
+                    message_type,
+                    payload,
+                });
+            }
             // `fr_send(bus, slot, b0, ...)` or `fr_send(bus, slot, buf)`: the
             // FlexRay twin of `send`. Only the numbers and the payload's extent
             // are checked here -- how wide this slot is, and what its bytes mean,
@@ -1461,6 +1633,43 @@ impl Vm {
             }
             "node_bus" => {
                 self.stack.push(Value::Int(i64::from(self.node_channel)));
+                return Ok(());
+            }
+            "someip_service" => {
+                self.stack.push(Value::Int(i64::from(self.someip_service)));
+                return Ok(());
+            }
+            "someip_method" => {
+                self.stack.push(Value::Int(i64::from(self.someip_method)));
+                return Ok(());
+            }
+            "someip_client" => {
+                self.stack.push(Value::Int(i64::from(self.someip_client)));
+                return Ok(());
+            }
+            "someip_session" => {
+                self.stack.push(Value::Int(i64::from(self.someip_session)));
+                return Ok(());
+            }
+            "someip_return" => {
+                self.stack.push(Value::Int(i64::from(self.someip_return)));
+                return Ok(());
+            }
+            "someip_len" => {
+                self.stack
+                    .push(Value::Int(self.someip_payload.len() as i64));
+                return Ok(());
+            }
+            "someip_byte" => {
+                let Value::Int(index) = args[0] else {
+                    return Err(VmError("someip_byte(index) needs an int".into()));
+                };
+                let byte = self
+                    .someip_payload
+                    .get(usize::try_from(index).unwrap_or(usize::MAX))
+                    .copied()
+                    .ok_or_else(|| VmError(format!("someip_byte: index {index} out of range")))?;
+                self.stack.push(Value::Int(i64::from(byte)));
                 return Ok(());
             }
             "fr_cycle" => {
@@ -2269,6 +2478,53 @@ mod tests {
 
         let mut vm = Vm::new(compile("send_frame(1);").unwrap());
         assert!(vm.run().unwrap_err().to_string().contains("frame instance"));
+    }
+
+    #[test]
+    fn someip_tcp_send_queues_host_and_port() {
+        let mut vm = Vm::new(
+            compile(
+                "let b = bytes(1); b[0] = 0x33; \
+             someip_tcp_send(\"127.0.0.1\", 30501, 0x1234, 0x8001, 7, 1, 0x00, b);",
+            )
+            .unwrap(),
+        );
+        vm.run().unwrap();
+        let send = &vm.someip_tcp_outbox[0];
+        assert_eq!((send.host.as_str(), send.port), ("127.0.0.1", 30501));
+        assert_eq!((send.service, send.method), (0x1234, 0x8001));
+        assert_eq!(send.payload, [0x33]);
+    }
+
+    #[test]
+    fn someip_handler_reads_event_context() {
+        let script = compile(
+            "on someip 0x1234 0x8001 { print(someip_client(), someip_session(), someip_len(), someip_byte(0)); }",
+        )
+        .unwrap();
+        let mut vm = Vm::new(script);
+        vm.someip_client = 7;
+        vm.someip_session = 3;
+        vm.someip_payload = vec![0xAA];
+        vm.run_handler(1).unwrap();
+        assert_eq!(vm.output, ["7 3 1 170"]);
+    }
+
+    #[test]
+    fn someip_send_queues_the_service_address_and_payload() {
+        let mut vm = Vm::new(
+            compile(
+                "let b = bytes(2); b[0] = 0x11; b[1] = 0x22; \
+             someip_send(0, 0x1234, 0x8001, 7, 3, 0x02, b);",
+            )
+            .unwrap(),
+        );
+        vm.run().unwrap();
+        assert_eq!(vm.someip_outbox.len(), 1);
+        let send = &vm.someip_outbox[0];
+        assert_eq!((send.service, send.method), (0x1234, 0x8001));
+        assert_eq!((send.client, send.session, send.message_type), (7, 3, 2));
+        assert_eq!(send.payload, [0x11, 0x22]);
     }
 
     #[test]

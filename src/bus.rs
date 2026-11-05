@@ -170,12 +170,6 @@ pub enum BusCommand {
         key: SigKey,
         value: f64,
     },
-    /// Applies a Button's preset: every entry is attempted in order and the
-    /// failures are reported together, because session frames cannot be
-    /// rolled back and one bad key must not hide the good writes.
-    PanelWriteSignals {
-        writes: Vec<(String, f64)>,
-    },
     /// A Button preset that sends one CAN frame once: raw bytes on the wire
     /// (and into this session), not through a generator entry. `physical`
     /// encodes `signals` against the catalog message and ignores `data`.
@@ -203,8 +197,24 @@ pub enum BusCommand {
         physical: bool,
         signals: std::collections::BTreeMap<String, f64>,
     },
+    PanelSendSomeIp {
+        bus: u8,
+        service: u16,
+        method: u16,
+        client: u16,
+        session: u16,
+        message_type: u8,
+        data: Vec<u8>,
+        values: std::collections::BTreeMap<String, f64>,
+        texts: std::collections::BTreeMap<String, String>,
+        transport: String,
+        host: String,
+        port: u16,
+    },
     /// Resets the per-message counters the Messages / Statistics windows
     /// read. Load, spec memory and the trace are untouched.
+    /// Replace the SOME/IP service catalog used to decode service fields.
+    SetSomeIpServices(crate::eth::arxml_service::ServiceCatalog),
     ClearAggregates,
     /// Select the bus kind the next start will run (Simulation / Replay).
     SetRunMode(crate::app::Mode),
@@ -453,6 +463,14 @@ pub enum BusCommand {
     DetachHardware {
         bus: u8,
     },
+    /// Attach/detach a live Npcap Ethernet port.
+    AttachEthPort {
+        bus: u8,
+        device: String,
+    },
+    DetachEthPort {
+        bus: u8,
+    },
     /// Recovery after a USB replug: close Vector ports, reopen the XL
     /// driver so it rescans the adapter, and let the frontend re-enumerate.
     /// Other drivers' attachments are untouched.
@@ -597,6 +615,8 @@ pub enum BusCommand {
     AddTrigger {
         cond: crate::trigger::TriggerCond,
         action: crate::trigger::TriggerAction,
+        /// New rules start disarmed so a half-edited condition cannot act.
+        enabled: bool,
     },
     /// Drop trigger `index`.
     RemoveTrigger {
@@ -614,6 +634,15 @@ pub enum BusCommand {
         index: usize,
         cond: crate::trigger::TriggerCond,
         action: crate::trigger::TriggerAction,
+        cooldown_us: u64,
+        max_fires: u32,
+        pre_frames: Option<usize>,
+        post_frames: Option<u32>,
+    },
+    /// Re-arm one rule: clear its latch and fire count without touching
+    /// the other rules.
+    RearmTrigger {
+        index: usize,
     },
     /// Define a system variable, or replace an existing definition with
     /// the same `namespace::name` (the live value resets to `init`).
@@ -650,9 +679,17 @@ pub(crate) const SYSVAR_STREAM_ID: u64 = u64::MAX;
 /// Oldest Write-window lines fall off once the list outgrows this.
 pub(crate) const WRITE_LOG_CAP: usize = 1000;
 
-/// Upper bound on one Button preset's signal writes.
-pub(crate) const PANEL_WRITE_BATCH_MAX: usize = 32;
+/// How many trigger edges the replay bar can walk back. Runtime only.
+pub(crate) const TRIGGER_FIRE_CAP: usize = 64;
 
+/// One edge that passed the cooldown/limit gate and is about to run.
+struct FiredTrigger {
+    index: usize,
+    action: TriggerAction,
+    at_us: u64,
+}
+
+/// Upper bound on one Button preset's signal writes.
 /// CAN FD payload lengths a one-shot frame may carry: classic sizes plus the
 /// FD DLC ladder. A length in between is refused rather than silently padded.
 fn panel_frame_length_ok(len: usize) -> bool {
@@ -760,6 +797,45 @@ pub struct NodeView {
     pub log: Vec<String>,
 }
 
+fn build_someip_tcp_message(
+    service: u16,
+    method: u16,
+    client: u16,
+    session: u16,
+    message_type: u8,
+    payload: &[u8],
+) -> Vec<u8> {
+    crate::eth::someip::build_message(service, method, client, session, message_type, payload)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn send_someip_tcp(
+    host: &str,
+    port: u16,
+    service: u16,
+    method: u16,
+    client: u16,
+    session: u16,
+    message_type: u8,
+    payload: &[u8],
+) -> Result<(), String> {
+    use std::io::Write;
+    let address = format!("{host}:{port}");
+    let mut stream = std::net::TcpStream::connect(&address)
+        .map_err(|error| format!("SOME/IP TCP {address}: {error}"))?;
+    let _ = stream.set_write_timeout(Some(std::time::Duration::from_millis(500)));
+    stream
+        .write_all(&build_someip_tcp_message(
+            service,
+            method,
+            client,
+            session,
+            message_type,
+            payload,
+        ))
+        .map_err(|error| format!("SOME/IP TCP {address}: {error}"))
+}
+
 /// What the frontend may see of the bus: one immutable, frame-shaped
 /// bundle of the read-only facts, published behind an Arc swap.
 #[derive(Clone, Debug, Default)]
@@ -852,6 +928,10 @@ pub struct Snapshot {
     /// The user's trigger rules, judged on the bus; the frontend saves
     /// them with the project.
     pub triggers: Vec<crate::trigger::Trigger>,
+    /// Recent trigger edges (runtime only, oldest first). The replay bar's
+    /// previous/next navigation walks these; each also became one Write
+    /// line.
+    pub trigger_fires: Vec<crate::trigger::TriggerFire>,
     /// Derived lanes whose expression could not be sampled, by definition
     /// id. The editor shows the core's reason instead of leaving an empty
     /// curve unexplained.
@@ -859,6 +939,9 @@ pub struct Snapshot {
     /// The file the recorder derived its last output from; the replay
     /// start button falls back to it.
     pub last_record: String,
+    /// Matching Ethernet PCAP written alongside the main recording (or the
+    /// main file itself when the recording format is PCAP).
+    pub last_eth_record: String,
     /// One entry per bus: identity, timing declarations and the shared
     /// (immutable) database. Static configuration as of this frame.
     pub channels: Vec<ChannelView>,
@@ -891,6 +974,12 @@ pub struct Snapshot {
     pub fr_trace: std::sync::Arc<crate::trace::FrTraceView>,
     /// Ethernet frames as of the last publish, oldest first, byte-capped.
     pub eth_trace: std::sync::Arc<crate::eth::EthTraceView>,
+    /// Decoded SOME/IP service events, oldest first.
+    pub someip: Vec<crate::eth::someip::SomeIpEvent>,
+    /// Remote eventgroup subscriptions accepted by the local IL.
+    pub someip_subscriptions: Vec<SomeIpSubscriptionView>,
+    /// Live Npcap device names by Ethernet bus.
+    pub eth_attached: std::collections::BTreeMap<u8, String>,
     /// FR rows the ring trimmed from its head since the run began.
     #[cfg(test)]
     pub fr_dropped: u64,
@@ -967,20 +1056,41 @@ pub struct E2eView {
     pub jumps: u64,
 }
 
-fn note_e2e(entry: &mut E2eView, reading: crate::model::E2eReading) {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum E2eChange {
+    First,
+    Ok,
+    Repeat,
+    Gap,
+    Jump,
+}
+
+fn note_e2e(entry: &mut E2eView, reading: crate::model::E2eReading) -> E2eChange {
     entry.profile = reading.profile;
     entry.data_id = reading.data_id;
     entry.frames += 1;
-    if let Some(last) = entry.counter {
+    let change = if let Some(last) = entry.counter {
         let delta = (reading.counter + 16 - last) % 16;
         match delta {
-            0 => entry.repeats += 1,
-            1 => {}
-            2 | 3 => entry.gaps += 1,
-            _ => entry.jumps += 1,
+            0 => {
+                entry.repeats += 1;
+                E2eChange::Repeat
+            }
+            1 => E2eChange::Ok,
+            2 | 3 => {
+                entry.gaps += 1;
+                E2eChange::Gap
+            }
+            _ => {
+                entry.jumps += 1;
+                E2eChange::Jump
+            }
         }
-    }
+    } else {
+        E2eChange::First
+    };
     entry.counter = Some(reading.counter);
+    change
 }
 
 /// What the unified model says about one CAN frame, for the Messages and
@@ -1001,6 +1111,10 @@ pub struct ChannelView {
     pub bitrate_kbps: u32,
     pub fd_data_kbps: u32,
     pub node_roles: std::collections::BTreeMap<String, crate::app::NodeRole>,
+    /// DBC node name -> unified `EcuId` when the ARXML model names the same
+    /// ECU. The role map stays the simulation truth; this is the identity
+    /// bridge so DBC nodes and ARXML ECUs meet.
+    pub node_ecus: std::collections::BTreeMap<String, u32>,
     pub dbc: Option<std::sync::Arc<crate::dbc::SymbolTable>>,
 }
 
@@ -1026,6 +1140,7 @@ impl std::fmt::Debug for ChannelView {
             .field("bitrate_kbps", &self.bitrate_kbps)
             .field("fd_data_kbps", &self.fd_data_kbps)
             .field("node_roles", &self.node_roles)
+            .field("node_ecus", &self.node_ecus)
             .field("dbc_loaded", &self.dbc.is_some())
             .finish()
     }
@@ -1184,6 +1299,125 @@ impl<D> std::ops::Deref for ProtocolRuntime<D> {
     }
 }
 
+/// One bus coordinate with the protocol kept explicit. Commands, events and
+/// exports should carry this instead of overloading `ch`/`bus`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[allow(dead_code)] // Boundary vocabulary for the next trigger/export slices.
+pub enum BusRef {
+    Can(u8),
+    Fr(u8),
+    Eth(u8),
+}
+
+#[allow(dead_code)]
+impl BusRef {
+    pub fn bus(self) -> u8 {
+        match self {
+            BusRef::Can(bus) | BusRef::Fr(bus) | BusRef::Eth(bus) => bus,
+        }
+    }
+}
+
+/// The raw wire event shared by recorder/trigger/export boundaries. Decoding
+/// still uses the per-protocol plan; this only gives one envelope.
+#[derive(Clone, Debug)]
+pub enum BusEvent<'a> {
+    Can(&'a CanFrame),
+    Fr(&'a crate::trace::FrRow),
+    Eth(&'a crate::eth::EthFrame),
+}
+
+#[allow(dead_code)]
+impl BusEvent<'_> {
+    pub fn bus_ref(&self) -> BusRef {
+        match self {
+            BusEvent::Can(frame) => BusRef::Can(frame.channel),
+            BusEvent::Fr(row) => BusRef::Fr(row.bus),
+            BusEvent::Eth(frame) => BusRef::Eth(frame.bus),
+        }
+    }
+
+    pub fn t_us(&self) -> u64 {
+        match self {
+            BusEvent::Can(frame) => frame.t_us,
+            BusEvent::Fr(row) => row.t_us,
+            BusEvent::Eth(frame) => frame.t_us,
+        }
+    }
+
+    pub fn payload_len(&self) -> usize {
+        match self {
+            BusEvent::Can(frame) => frame.payload().len(),
+            BusEvent::Fr(row) => row.payload.len(),
+            BusEvent::Eth(frame) => frame.payload.len(),
+        }
+    }
+}
+
+/// One in-flight SOME/IP request. Only the correlation fields are kept; the
+/// response payload is reported to Write, not stored.
+struct SomeIpPending {
+    bus: u8,
+    service: u16,
+    method: u16,
+    client: u16,
+    session: u16,
+    deadline_us: u64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum NmState {
+    Unknown,
+    RepeatMessage,
+    NormalOperation,
+    ReadySleep,
+    PrepareBusSleep,
+    BusSleep,
+}
+
+impl NmState {
+    fn label(self) -> &'static str {
+        match self {
+            NmState::Unknown => "Unknown",
+            NmState::RepeatMessage => "RepeatMessage",
+            NmState::NormalOperation => "NormalOperation",
+            NmState::ReadySleep => "ReadySleep",
+            NmState::PrepareBusSleep => "PrepareBusSleep",
+            NmState::BusSleep => "BusSleep",
+        }
+    }
+}
+
+struct NmTrack {
+    state: NmState,
+    since_us: u64,
+    last_seen_us: u64,
+}
+
+/// One remote eventgroup subscription accepted by the local IL.
+#[derive(Clone)]
+struct SomeIpSubscription {
+    bus: u8,
+    service: u16,
+    instance: u16,
+    eventgroup: u16,
+    ip: String,
+    port: u16,
+    ttl: u32,
+}
+
+#[derive(Clone, Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SomeIpSubscriptionView {
+    pub bus: u8,
+    pub service: u16,
+    pub instance: u16,
+    pub eventgroup: u16,
+    pub ip: String,
+    pub port: u16,
+    pub ttl: u32,
+}
+
 pub struct BusCore {
     /// Which timeline the bus runs on: Virtual generates against the sim
     /// clock, Replay follows a loaded log's own stamps.
@@ -1284,6 +1518,34 @@ pub struct BusCore {
     pub(crate) published_fr: Arc<crate::trace::FrTraceView>,
     /// Ethernet frames received this run, in their own byte-capped ring.
     pub(crate) eth_trace: crate::eth::EthRing,
+    /// Decoded SOME/IP service events from captured Ethernet frames, newest
+    /// last. Bounded like the trace; the full payload stays in the trace.
+    pub(crate) someip_events: std::collections::VecDeque<crate::eth::someip::SomeIpEvent>,
+    /// In-order TCP reassembly feeding the same event ring.
+    pub(crate) someip_tcp: crate::eth::someip::SomeIpTcp,
+    /// SOME/IP-TP segment reassembly feeding the same event ring.
+    pub(crate) someip_tp: crate::eth::someip::SomeIpTp,
+    /// IPv4 fragment reassembly feeding the same event ring.
+    pub(crate) someip_ip: crate::eth::someip::SomeIpIp,
+    /// ARXML service layouts used to decode SOME/IP fields for observers.
+    pub(crate) someip_services: crate::eth::arxml_service::ServiceCatalog,
+    /// Next session id per (bus, service, method, client) when the caller
+    /// leaves session at 0 (auto).
+    someip_sessions: std::collections::BTreeMap<(u8, u16, u16, u16), u16>,
+    /// Requests waiting for a matching response. The response is reported in
+    /// Write; timeout is checked on the core's regular publish tick.
+    someip_pending: Vec<SomeIpPending>,
+    /// Local IL offers: (bus, service, instance) -> TTL. Subscribe requests
+    /// for these are acknowledged automatically.
+    someip_offers: std::collections::BTreeMap<(u8, u16, u16), u32>,
+    someip_subscriptions: Vec<SomeIpSubscription>,
+    /// Last decoded NM signal summary per (bus, PDU); suppresses repeated
+    /// identical Write lines when a cyclic NM frame does not change.
+    nm_last: std::collections::BTreeMap<String, String>,
+    nm_states: std::collections::BTreeMap<String, NmTrack>,
+    /// Set while a SOME/IP action injects its own frame; prevents the
+    /// injected message from firing the same rule again recursively.
+    someip_send_guard: bool,
     /// The Ethernet ring as of the last publish, shared with snapshots.
     pub(crate) published_eth: Arc<crate::eth::EthTraceView>,
     /// Per-(bus, slot) FlexRay tallies behind the Messages window's FR rows.
@@ -1386,6 +1648,8 @@ pub struct BusCore {
     pub(crate) recorder: crate::recorder::Recorder,
     /// User rules judged per frame (edges) and per step (aggregate sweeps).
     pub(crate) triggers: Vec<crate::trigger::Trigger>,
+    /// Recent trigger edges, capped oldest-out. Runtime only.
+    pub(crate) trigger_fires: std::collections::VecDeque<crate::trigger::TriggerFire>,
     /// Observed-versus-declared violations, recomputed on every step from
     /// `aggs` and the loaded databases.
     pub(crate) spec: crate::spec::Spec,
@@ -1639,6 +1903,18 @@ impl BusCore {
             fr_trace: crate::trace::FrRing::default(),
             published_fr: Arc::new(crate::trace::FrTraceView::default()),
             eth_trace: crate::eth::EthRing::default(),
+            someip_events: std::collections::VecDeque::new(),
+            someip_tcp: crate::eth::someip::SomeIpTcp::default(),
+            someip_tp: crate::eth::someip::SomeIpTp::default(),
+            someip_ip: crate::eth::someip::SomeIpIp::default(),
+            someip_services: Default::default(),
+            someip_sessions: Default::default(),
+            someip_pending: Vec::new(),
+            someip_offers: Default::default(),
+            someip_subscriptions: Vec::new(),
+            nm_last: Default::default(),
+            nm_states: Default::default(),
+            someip_send_guard: false,
             published_eth: Arc::new(crate::eth::EthTraceView::default()),
             fr_aggs: HashMap::new(),
             eth_aggs: HashMap::new(),
@@ -1679,6 +1955,7 @@ impl BusCore {
             buf: Vec::new(),
             recorder: crate::recorder::Recorder::new(),
             triggers: Vec::new(),
+            trigger_fires: std::collections::VecDeque::new(),
             spec: crate::spec::Spec::default(),
             laps: 0,
             nodes: Vec::new(),
@@ -1743,40 +2020,6 @@ impl BusCore {
                     *status = "[panel] writing a signal needs a running measurement".to_string();
                 } else if let Err(error) = self.apply_panel_write(key, value) {
                     *status = format!("[panel] {error}");
-                }
-            }
-            BusCommand::PanelWriteSignals { writes } => {
-                if !self.measuring {
-                    *status = "[panel] writing signals needs a running measurement".to_string();
-                } else if writes.len() > PANEL_WRITE_BATCH_MAX {
-                    *status =
-                        format!("[panel] too many signal writes (limit {PANEL_WRITE_BATCH_MAX})");
-                } else {
-                    let mut failed: Vec<String> = Vec::new();
-                    for (source, value) in writes {
-                        let result = match self.resolve_key_text(source.trim()) {
-                            None => Err("unknown signal key".to_string()),
-                            Some(_) if !value.is_finite() => {
-                                Err("value must be a number".to_string())
-                            }
-                            Some(key) => self.apply_panel_write(key, value),
-                        };
-                        if let Err(error) = result {
-                            failed.push(format!("{source}: {error}"));
-                        }
-                    }
-                    if !failed.is_empty() {
-                        *status = format!(
-                            "[panel] {} write(s) failed: {}",
-                            failed.len(),
-                            failed
-                                .iter()
-                                .take(3)
-                                .cloned()
-                                .collect::<Vec<_>>()
-                                .join("; ")
-                        );
-                    }
                 }
             }
             BusCommand::PanelSendFrame {
@@ -1872,7 +2115,7 @@ impl BusCore {
             } => {
                 if !self.measuring {
                     *status = "[panel] sending a frame needs a running measurement".to_string();
-                } else {
+                } else if physical {
                     let Some(db) = self.eth_dbs.get(&bus).cloned() else {
                         *status = format!("[panel] ETH{bus} has no matrix description");
                         return;
@@ -1881,37 +2124,105 @@ impl BusCore {
                         *status = format!("[panel] unknown Ethernet frame \"{frame}\"");
                         return;
                     };
-                    let payload = if physical {
-                        match self.panel_eth_signal_payload(bus, &db, &frame, &signals) {
-                            Ok(payload) => payload,
-                            Err(error) => {
-                                *status = format!("[panel] {error}");
-                                return;
-                            }
-                        }
-                    } else {
-                        let expected = if self.eth_length_includes_header {
-                            def.length.saturating_sub(14)
-                        } else {
-                            def.length
-                        };
-                        if data.len() != expected {
-                            *status = format!(
-                                "[panel] frame \"{frame}\" carries {expected} payload bytes"
-                            );
+                    let payload = match self.panel_eth_signal_payload(bus, &db, &frame, &signals) {
+                        Ok(payload) => payload,
+                        Err(error) => {
+                            *status = format!("[panel] {error}");
                             return;
                         }
-                        data
                     };
-                    let vlan = def.vlan;
-                    let ethertype = def
-                        .ethertype_hint
-                        .unwrap_or(crate::eth::EthFrame::SESSION_ETHERTYPE);
-                    let injected =
-                        crate::eth::EthFrame::session(self.sim_t_us, bus, vlan, ethertype, payload);
-                    self.ingest_eth(injected);
+                    let injected = crate::eth::EthFrame::session(
+                        self.sim_t_us,
+                        bus,
+                        def.vlan,
+                        def.ethertype_hint
+                            .unwrap_or(crate::eth::EthFrame::SESSION_ETHERTYPE),
+                        payload,
+                    );
+                    if let Err(error) = self.emit_eth(injected) {
+                        *status = format!("[panel] {error}");
+                    }
+                } else if let Err(error) = self.send_eth_frame(bus, &frame, &data) {
+                    *status = format!("[panel] {error}");
                 }
             }
+            BusCommand::PanelSendSomeIp {
+                bus,
+                service,
+                method,
+                client,
+                session,
+                message_type,
+                data,
+                values,
+                texts,
+                transport,
+                host,
+                port,
+            } => {
+                if !self.measuring {
+                    *status =
+                        "[panel] sending a SOME/IP message needs a running measurement".to_string();
+                } else {
+                    let payload = if values.is_empty() && texts.is_empty() {
+                        Ok(data)
+                    } else {
+                        self.encode_someip_payload_with_text(
+                            service,
+                            method,
+                            message_type,
+                            &values,
+                            &texts,
+                        )
+                    };
+                    match payload {
+                        Ok(payload) => {
+                            let session =
+                                self.next_someip_session(bus, service, method, client, session);
+                            self.note_someip_request(
+                                bus,
+                                service,
+                                method,
+                                client,
+                                session,
+                                message_type,
+                            );
+                            let frame = crate::eth::someip::build_udp_frame(
+                                self.sim_t_us,
+                                bus,
+                                service,
+                                method,
+                                client,
+                                session,
+                                message_type,
+                                &payload,
+                            );
+                            if transport.eq_ignore_ascii_case("tcp") {
+                                if let Err(error) = send_someip_tcp(
+                                    &host,
+                                    port,
+                                    service,
+                                    method,
+                                    client,
+                                    session,
+                                    message_type,
+                                    &payload,
+                                ) {
+                                    *status = format!("[panel] {error}");
+                                }
+                            } else {
+                                self.someip_send_guard = true;
+                                if let Err(error) = self.emit_eth(frame) {
+                                    *status = format!("[panel] {error}");
+                                }
+                                self.someip_send_guard = false;
+                            }
+                        }
+                        Err(error) => *status = format!("[panel] {error}"),
+                    }
+                }
+            }
+            BusCommand::SetSomeIpServices(catalog) => self.adopt_someip_services(catalog),
             BusCommand::ClearAggregates => self.clear_aggregates(status),
             BusCommand::SetRunMode(mode) => self.run_mode = mode,
             BusCommand::AddChannel => self.add_channel(status),
@@ -2510,6 +2821,14 @@ impl BusCore {
                 self.hw.detach(bus);
                 *status = format!("hardware detached from bus {}", bus + 1);
             }
+            BusCommand::AttachEthPort { bus, device } => match self.hw.attach_eth(bus, &device) {
+                Ok(()) => *status = format!("ETH{bus} live port: {device}"),
+                Err(error) => *status = format!("ETH{bus} attach failed: {error}"),
+            },
+            BusCommand::DetachEthPort { bus } => {
+                self.hw.detach_eth(bus);
+                *status = format!("ETH{bus} live port detached");
+            }
             BusCommand::RefreshHardware => {
                 self.hw.detach_vector_ports();
                 let result = crate::hw::vector::reset_driver();
@@ -2612,9 +2931,14 @@ impl BusCore {
                 }
             }
             BusCommand::SetTriggers(triggers) => self.triggers = triggers,
-            BusCommand::AddTrigger { cond, action } => {
-                self.triggers
-                    .push(crate::trigger::Trigger::new(cond, action));
+            BusCommand::AddTrigger {
+                cond,
+                action,
+                enabled,
+            } => {
+                let mut trigger = crate::trigger::Trigger::new(cond, action);
+                trigger.enabled = enabled;
+                self.triggers.push(trigger);
             }
             BusCommand::RemoveTrigger { index } => {
                 if index < self.triggers.len() {
@@ -2630,11 +2954,25 @@ impl BusCore {
                 index,
                 cond,
                 action,
+                cooldown_us,
+                max_fires,
+                pre_frames,
+                post_frames,
             } => {
                 if let Some(t) = self.triggers.get_mut(index) {
                     t.cond = cond;
                     t.action = action;
+                    t.cooldown_us = cooldown_us;
+                    t.max_fires = max_fires;
+                    t.pre_frames = pre_frames;
+                    t.post_frames = post_frames;
                     t.level = false;
+                }
+            }
+            BusCommand::RearmTrigger { index } => {
+                if let Some(t) = self.triggers.get_mut(index) {
+                    t.rearm_rule();
+                    *status = format!("re-armed trigger {}", index + 1);
                 }
             }
         }
@@ -2652,7 +2990,37 @@ impl BusCore {
     /// Republishes the shared ring view. Called on steps that ingested
     /// frames (and on resets); the copy is one sealed tail plus chunk
     /// refcounts -- the ring itself is shared, never deep-copied.
+    fn expire_nm_states(&mut self, now_us: u64) {
+        let mut transitions = Vec::new();
+        for (key, track) in &mut self.nm_states {
+            let next = if now_us.saturating_sub(track.last_seen_us) > 5_000_000 {
+                NmState::BusSleep
+            } else if track.state == NmState::ReadySleep
+                && now_us.saturating_sub(track.since_us) > 3_000_000
+            {
+                NmState::PrepareBusSleep
+            } else if track.state == NmState::PrepareBusSleep
+                && now_us.saturating_sub(track.since_us) > 2_000_000
+            {
+                NmState::BusSleep
+            } else {
+                continue;
+            };
+            if next != track.state {
+                track.state = next;
+                track.since_us = now_us;
+                transitions.push((key.clone(), next));
+            }
+        }
+        for (key, state) in transitions {
+            self.write_push(WriteKind::Info, format!("NM {key} state {}", state.label()));
+        }
+    }
+
     pub(crate) fn publish_trace(&mut self) {
+        let now = self.sim_t_us;
+        self.expire_someip_requests(now);
+        self.expire_nm_states(now);
         self.published_trace = self.trace.publish();
         self.published_fr = self.fr_trace.publish();
         self.published_eth = self.eth_trace.publish();
@@ -2696,7 +3064,7 @@ impl BusCore {
         // that replays and re-exports.
         self.frame_counter += 1;
         if self.recorder.recording {
-            self.recorder.write_fr(&row);
+            self.recorder.write_event(&BusEvent::Fr(&row));
         }
         let ix = self.tally_fr_row(&row);
         if let Some(frame_ix) = ix {
@@ -2745,9 +3113,7 @@ impl BusCore {
                     entry.type_tag = d.type_tag;
                     entry.label = d.label;
                     entry.last_update_us = t_us;
-                    if t_us >= entry.last_sample_us + stride || entry.history.is_empty() {
-                        entry.push_sample(t_us, d.phys, stride);
-                    }
+                    entry.push_sample(t_us, d.phys, stride);
                 }
             }
         }
@@ -2988,6 +3354,9 @@ impl BusCore {
         let mut fr_sig_writes: Vec<(u64, u8, u16, String, f64)> = Vec::new();
         let mut node_lines: Vec<(String, String)> = Vec::new();
         let mut node_frames: Vec<(u64, u8, bool, crate::script::FrameInstance)> = Vec::new();
+        let mut someip_sends: Vec<crate::script::SomeIpSend> = Vec::new();
+        let mut someip_tcp_sends: Vec<crate::script::SomeIpTcpSend> = Vec::new();
+        let mut someip_offers: Vec<crate::script::SomeIpOffer> = Vec::new();
         for node in &mut self.nodes {
             let input = inputs.get(&node.channel).cloned().unwrap_or_default();
             // 绑定脚本的发帧受所属 DBC 节点的角色开关：节点离线时脚本同样
@@ -3014,6 +3383,9 @@ impl BusCore {
                     .into_iter()
                     .map(|frame| (node.id, node.channel, script_allowed, frame)),
             );
+            someip_sends.extend(node.take_someip());
+            someip_tcp_sends.extend(node.take_someip_tcp());
+            someip_offers.extend(node.take_someip_offer());
             for (name, v) in node.take_emitted() {
                 derived.push((node.channel, node.id, node.name.clone(), name, v));
             }
@@ -3028,6 +3400,9 @@ impl BusCore {
                 self.nodes_dirty = true;
             }
         }
+        self.apply_script_someip(someip_sends);
+        self.apply_script_someip_tcp(someip_tcp_sends);
+        self.apply_script_someip_offers(someip_offers);
         for (ch, node_id, node_name, name, v) in derived {
             self.ingest_emitted(ch, node_id, &node_name, &name, v);
         }
@@ -3143,6 +3518,9 @@ impl BusCore {
         let mut fr_sends: Vec<(u64, u8, u16, Vec<u8>)> = Vec::new();
         let mut fr_sig_writes: Vec<(u64, u8, u16, String, f64)> = Vec::new();
         let mut node_frames: Vec<(u64, u8, bool, crate::script::FrameInstance)> = Vec::new();
+        let mut someip_sends: Vec<crate::script::SomeIpSend> = Vec::new();
+        let mut someip_tcp_sends: Vec<crate::script::SomeIpTcpSend> = Vec::new();
+        let mut someip_offers: Vec<crate::script::SomeIpOffer> = Vec::new();
         let data = &f.data[..f.len as usize];
         for node in &mut self.nodes {
             // 绑定脚本的发帧受所属 DBC 节点的角色开关（见 run_node_timers）。
@@ -3171,6 +3549,9 @@ impl BusCore {
                     .into_iter()
                     .map(|frame| (node.id, node.channel, script_allowed, frame)),
             );
+            someip_sends.extend(node.take_someip());
+            someip_tcp_sends.extend(node.take_someip_tcp());
+            someip_offers.extend(node.take_someip_offer());
             for (name, v) in node.take_emitted() {
                 derived.push((node.channel, node.id, node.name.clone(), name, v));
             }
@@ -3185,6 +3566,9 @@ impl BusCore {
                 self.nodes_dirty = true;
             }
         }
+        self.apply_script_someip(someip_sends);
+        self.apply_script_someip_tcp(someip_tcp_sends);
+        self.apply_script_someip_offers(someip_offers);
         for (ch, node_id, node_name, name, v) in derived {
             self.ingest_emitted(ch, node_id, &node_name, &name, v);
         }
@@ -3428,9 +3812,7 @@ impl BusCore {
         entry.latest = v;
         entry.last_raw = v as i64;
         entry.last_update_us = t_us;
-        if t_us >= entry.last_sample_us + stride || entry.history.is_empty() {
-            entry.push_sample(t_us, v, stride);
-        }
+        entry.push_sample(t_us, v, stride);
     }
 
     /// Builds one [`HostInput`] per channel that has nodes: the bus clock
@@ -3593,10 +3975,253 @@ impl BusCore {
         snap
     }
 
+    fn accept_someip_event(&mut self, event: crate::eth::someip::SomeIpEvent, status: &mut String) {
+        const SOMEIP_CAP: usize = 512;
+        let Some(mut event) = self.someip_tp.feed(&event) else {
+            return;
+        };
+        if event.message_type == 0x80
+            && let Some(index) = self.someip_pending.iter().position(|request| {
+                request.bus == event.bus
+                    && request.service == event.service
+                    && request.method == event.method
+                    && request.client == event.client
+                    && request.session == event.session
+            })
+        {
+            let request = self.someip_pending.remove(index);
+            self.write_push(
+                WriteKind::Info,
+                format!(
+                    "SOME/IP response 0x{:04X}.0x{:04X} session {}: {} B",
+                    request.service,
+                    request.method,
+                    request.session,
+                    event.payload.len()
+                ),
+            );
+        }
+        if event.decoded.is_empty()
+            && let Some(service) = self.someip_services.service(event.service)
+        {
+            let fields = service
+                .events
+                .iter()
+                .find(|entry| entry.id == event.method)
+                .map(|entry| entry.fields.as_slice())
+                .or_else(|| {
+                    service
+                        .methods
+                        .iter()
+                        .find(|entry| entry.id == event.method)
+                        .map(|entry| {
+                            if event.message_type == 0x80 {
+                                entry.output.as_slice()
+                            } else {
+                                entry.input.as_slice()
+                            }
+                        })
+                });
+            if let Some(fields) = fields {
+                event.decoded = crate::eth::arxml_service::decode_values(fields, &event.payload)
+                    .unwrap_or_default();
+            }
+        }
+        self.eval_someip_triggers(
+            event.bus,
+            event.service,
+            event.method,
+            event.message_type,
+            event.t_us,
+            status,
+        );
+        self.observe_someip_fields(&event);
+        if !self.someip_send_guard {
+            self.ack_someip_subscribes(&event);
+            self.auto_reply_someip_method(&event);
+            self.dispatch_someip_nodes(&event);
+        }
+        if self.someip_events.len() >= SOMEIP_CAP {
+            self.someip_events.pop_front();
+        }
+        self.someip_events.push_back(event);
+    }
+
+    /// Publishes decoded SOME/IP fields through the existing signal observer
+    /// path. They are addressed as synthetic Ethernet frames so Signals /
+    /// Graphics / Monitor / State do not need a fourth key space.
+    fn dispatch_someip_nodes(&mut self, event: &crate::eth::someip::SomeIpEvent) {
+        if self.nodes.is_empty() {
+            return;
+        }
+        let inputs = self.build_node_inputs(self.sim_t_us);
+        let mut node_frames = Vec::new();
+        let mut someip_sends = Vec::new();
+        let mut someip_tcp_sends: Vec<crate::script::SomeIpTcpSend> = Vec::new();
+        let mut someip_offers: Vec<crate::script::SomeIpOffer> = Vec::new();
+        let mut derived = Vec::new();
+        let mut sys_writes = Vec::new();
+        let mut lines = Vec::new();
+        for node in &mut self.nodes {
+            let input = inputs.get(&node.channel).cloned().unwrap_or_default();
+            if node.dispatch_someip(
+                event.service,
+                event.method,
+                event.client,
+                event.session,
+                event.return_code,
+                &event.payload,
+                &input,
+            ) == 0
+            {
+                continue;
+            }
+            node_frames.extend(
+                node.take_frames()
+                    .into_iter()
+                    .map(|frame| (node.id, node.channel, true, frame)),
+            );
+            someip_sends.extend(node.take_someip());
+            someip_tcp_sends.extend(node.take_someip_tcp());
+            someip_offers.extend(node.take_someip_offer());
+            for (name, value) in node.take_emitted() {
+                derived.push((node.channel, node.id, node.name.clone(), name, value));
+            }
+            for (key, value) in node.take_sys_sets() {
+                sys_writes.push((node.id, key, value));
+            }
+            let name = node.name.clone();
+            for line in node.take_new_lines() {
+                lines.push((name.clone(), line));
+            }
+        }
+        self.send_node_frames(node_frames);
+        self.apply_script_someip(someip_sends);
+        self.apply_script_someip_tcp(someip_tcp_sends);
+        self.apply_script_someip_offers(someip_offers);
+        self.apply_sys_writes(sys_writes);
+        for (ch, id, name, signal, value) in derived {
+            self.ingest_emitted(ch, id, &name, &signal, value);
+        }
+        for (name, line) in lines {
+            self.write_node_line(&name, &line);
+        }
+    }
+
+    fn observe_someip_fields(&mut self, event: &crate::eth::someip::SomeIpEvent) {
+        if event.sd.is_some() || event.decoded.is_empty() {
+            return;
+        }
+        let frame = format!("SOMEIP 0x{:04X}/0x{:04X}", event.service, event.method);
+        let stride = self.applied_stride_us;
+        for value in &event.decoded {
+            let Some(numeric) = value.numeric.or_else(|| value.text.parse::<f64>().ok()) else {
+                continue;
+            };
+            let key = self.eth_key(event.bus, frame.clone(), value.name.clone());
+            if let Some(entry) = self.subs.get_mut(&key) {
+                entry.latest = numeric;
+                entry.last_raw = numeric.round() as i64;
+                entry.unit.clear();
+                entry.type_tag.clear();
+                entry.label = None;
+                entry.last_update_us = event.t_us;
+                entry.push_sample(event.t_us, numeric, stride);
+            }
+        }
+    }
+
     /// Appends an Ethernet frame to the run's ring and folds it into the
     /// per-flow tally. The next publish hands both to every observer; no
     /// CAN/FlexRay aggregate is touched.
+    fn ingest_eth_nm(&mut self, frame: &crate::eth::EthFrame) {
+        if frame.ethertype != 0x0800 {
+            return;
+        }
+        let ip = frame.payload.as_ref();
+        if ip.len() < 28 || ip[0] >> 4 != 4 {
+            return;
+        }
+        let ihl = usize::from(ip[0] & 0x0f) * 4;
+        if ihl < 20 || ip.len() < ihl + 8 || ip[9] != 17 {
+            return;
+        }
+        let src = format!("{}.{}.{}.{}", ip[12], ip[13], ip[14], ip[15]);
+        let dst = format!("{}.{}.{}.{}", ip[16], ip[17], ip[18], ip[19]);
+        let udp = &ip[ihl..];
+        let src_port = u16::from_be_bytes([udp[0], udp[1]]);
+        let dst_port = u16::from_be_bytes([udp[2], udp[3]]);
+        let data = &udp[8..];
+        let Some((pdu, signals)) = self
+            .eth_dbs
+            .get(&frame.bus)
+            .and_then(|db| db.decode_nm(&src, &dst, src_port, dst_port, data))
+        else {
+            return;
+        };
+        if signals.is_empty() {
+            return;
+        }
+        let summary = signals
+            .iter()
+            .map(|(name, value)| format!("{name}={value:.3}"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        let key = format!("{}:{pdu}", frame.bus);
+        let value_of = |needle: &str| {
+            signals
+                .iter()
+                .find(|(name, _)| name.eq_ignore_ascii_case(needle))
+                .map(|(_, value)| *value)
+                .unwrap_or(0.0)
+        };
+        let repeat = value_of("RepeatMessageRequest") != 0.0;
+        let sleep_ready = value_of("NMCoordinatorSleepReadyBit") != 0.0
+            || value_of("NMCoordinatorSleeptReadyBit") != 0.0
+            || value_of("NMCoordinatorSleepReady") != 0.0;
+        let next = if repeat {
+            NmState::RepeatMessage
+        } else if sleep_ready {
+            NmState::ReadySleep
+        } else {
+            NmState::NormalOperation
+        };
+        let track = self.nm_states.entry(key.clone()).or_insert(NmTrack {
+            state: NmState::Unknown,
+            since_us: frame.t_us,
+            last_seen_us: frame.t_us,
+        });
+        track.last_seen_us = frame.t_us;
+        if track.state != next {
+            track.state = next;
+            track.since_us = frame.t_us;
+            self.write_push(WriteKind::Info, format!("NM {pdu} state {}", next.label()));
+        }
+        if self.nm_last.get(&key) == Some(&summary) {
+            return;
+        }
+        self.nm_last.insert(key, summary.clone());
+        self.write_push(
+            WriteKind::Info,
+            format!("NM {pdu} {src}:{src_port}→{dst}:{dst_port} {summary}"),
+        );
+    }
+
     pub(crate) fn ingest_eth(&mut self, frame: crate::eth::EthFrame) {
+        if self.recorder.recording {
+            self.recorder.write_event(&BusEvent::Eth(&frame));
+        }
+        let mut status = String::new();
+        if let Some(decode_frame) = self.someip_ip.feed(&frame) {
+            if let Some(event) = crate::eth::someip::decode(&decode_frame) {
+                self.accept_someip_event(event, &mut status);
+            }
+            for event in self.someip_tcp.feed(&decode_frame) {
+                self.accept_someip_event(event, &mut status);
+            }
+        }
+        self.ingest_eth_nm(&frame);
+        self.eval_eth_triggers(&frame, &mut status);
         let key = crate::aggregate::EthFlowKey {
             bus: frame.bus,
             vlan: frame.vlan,
@@ -3662,9 +4287,7 @@ impl BusCore {
                             entry.type_tag = d.type_tag;
                             entry.label = d.label;
                             entry.last_update_us = t_us;
-                            if t_us >= entry.last_sample_us + stride || entry.history.is_empty() {
-                                entry.push_sample(t_us, d.phys, stride);
-                            }
+                            entry.push_sample(t_us, d.phys, stride);
                         }
                     }
                 }
@@ -3916,6 +4539,29 @@ impl BusCore {
             trace: Arc::clone(&self.published_trace),
             fr_trace: Arc::clone(&self.published_fr),
             eth_trace: Arc::clone(&self.published_eth),
+            someip: self.someip_events.iter().cloned().collect(),
+            someip_subscriptions: self
+                .someip_subscriptions
+                .iter()
+                .map(|subscription| SomeIpSubscriptionView {
+                    bus: subscription.bus,
+                    service: subscription.service,
+                    instance: subscription.instance,
+                    eventgroup: subscription.eventgroup,
+                    ip: subscription.ip.clone(),
+                    port: subscription.port,
+                    ttl: subscription.ttl,
+                })
+                .collect(),
+            eth_attached: self
+                .eth_dbs
+                .keys()
+                .filter_map(|bus| {
+                    self.hw
+                        .eth_device(*bus)
+                        .map(|device| (*bus, device.to_string()))
+                })
+                .collect(),
             #[cfg(test)]
             fr_dropped: self.fr_trace.dropped(),
             fr_watches: {
@@ -3985,6 +4631,7 @@ impl BusCore {
                 .collect(),
             real_bus: self.hw.live,
             triggers: self.triggers.clone(),
+            trigger_fires: self.trigger_fires.iter().cloned().collect(),
             derived_errors: self
                 .derived
                 .iter()
@@ -3996,6 +4643,7 @@ impl BusCore {
                 })
                 .collect(),
             last_record: self.recorder.last_record.clone(),
+            last_eth_record: self.recorder.last_eth_record.clone(),
             channels: (0..self.can_count())
                 .map(|index| {
                     let (bitrate_kbps, fd_data_kbps) = self.can_bitrates(index);
@@ -4005,6 +4653,17 @@ impl BusCore {
                         bitrate_kbps,
                         fd_data_kbps,
                         node_roles: self.can_node_roles(index),
+                        node_ecus: self
+                            .model_comms
+                            .get(index)
+                            .and_then(Option::as_ref)
+                            .map(|comm| {
+                                comm.ecus
+                                    .values()
+                                    .map(|ecu| (ecu.name.clone(), ecu.id.0))
+                                    .collect()
+                            })
+                            .unwrap_or_default(),
                         dbc: self.model_dbs.get(index).and_then(|db| db.clone()),
                     }
                 })
@@ -4781,9 +5440,7 @@ impl BusCore {
                     sub.latest = value;
                     sub.last_raw = value.round() as i64;
                     sub.last_update_us = t;
-                    if t >= sub.last_sample_us + stride || sub.history.is_empty() {
-                        sub.push_sample(t, value, stride);
-                    }
+                    sub.push_sample(t, value, stride);
                 }
             }
             let runtime = &mut self.derived[index];
@@ -5258,6 +5915,12 @@ impl BusCore {
                 }),
             );
         }
+        // A service catalog imported before its matrices must survive a later
+        // ETH model rebuild as Comm entities, not just in the flat catalog.
+        if !self.someip_services.services.is_empty() {
+            let catalog = self.someip_services.clone();
+            self.adopt_someip_services(catalog);
+        }
     }
 
     /// The model plan for one CAN frame, when the channel's model is still
@@ -5292,12 +5955,16 @@ impl BusCore {
         let Some(reading) = crate::model::decode_e2e(&plan, payload).into_iter().next() else {
             return;
         };
-        note_e2e(
+        let change = note_e2e(
             self.e2e_tracks
                 .entry((f.channel, f.id, f.extended))
                 .or_default(),
             reading,
         );
+        if matches!(change, E2eChange::Gap | E2eChange::Jump) {
+            let mut status = String::new();
+            self.eval_e2e_triggers(f.channel, f.id, f.extended, f.t_us, &mut status);
+        }
     }
 
     fn track_fr_e2e(&mut self, row: &crate::trace::FrRow, frame_ix: usize) {
@@ -5852,12 +6519,17 @@ impl BusCore {
                 TriggerCond::SignalCross { ch, .. }
                 | TriggerCond::IdPresent { ch, .. }
                 | TriggerCond::ErrorFrame { ch }
-                | TriggerCond::CycleTimeout { ch, .. } => ch,
-                // Global, or aiming at a FlexRay bus: no CAN index to shift.
+                | TriggerCond::CycleTimeout { ch, .. }
+                | TriggerCond::PayloadMatch { ch, .. }
+                | TriggerCond::E2eIssue { ch, .. } => ch,
+                // Global, or aiming at a FlexRay/Ethernet bus: no CAN index.
                 TriggerCond::SysVar { .. }
                 | TriggerCond::DerivedSignal { .. }
                 | TriggerCond::FrFramePresent { .. }
-                | TriggerCond::FrSignalCross { .. } => continue,
+                | TriggerCond::FrSignalCross { .. }
+                | TriggerCond::FrTimeout { .. }
+                | TriggerCond::EthFlow { .. }
+                | TriggerCond::SomeIp { .. } => continue,
             };
             if *cond_ch > removed {
                 *cond_ch -= 1;
@@ -6616,8 +7288,7 @@ impl BusCore {
             .ethertype_hint
             .unwrap_or(crate::eth::EthFrame::SESSION_ETHERTYPE);
         let injected = crate::eth::EthFrame::session(self.sim_t_us, bus, vlan, ethertype, data);
-        self.ingest_eth(injected);
-        Ok(())
+        self.emit_eth(injected)
     }
 
     /// Writes one signal through the path its protocol owns. The single
@@ -6775,8 +7446,7 @@ impl BusCore {
             .unwrap_or(crate::eth::EthFrame::SESSION_ETHERTYPE);
         let vlan = def.vlan;
         let frame = crate::eth::EthFrame::session(self.sim_t_us, bus, vlan, ethertype, payload);
-        self.ingest_eth(frame);
-        Ok(())
+        self.emit_eth(frame)
     }
 
     /// Writes a physical value into the base payload and pins that signal
@@ -7012,6 +7682,16 @@ impl BusCore {
         self.trace.clear();
         self.fr_trace.clear();
         self.eth_trace.clear();
+        self.someip_events.clear();
+        self.someip_tcp = crate::eth::someip::SomeIpTcp::default();
+        self.someip_tp = crate::eth::someip::SomeIpTp::default();
+        self.someip_ip = crate::eth::someip::SomeIpIp::default();
+        self.someip_sessions.clear();
+        self.someip_pending.clear();
+        self.someip_offers.clear();
+        self.someip_subscriptions.clear();
+        self.nm_last.clear();
+        self.nm_states.clear();
         self.publish_trace();
         self.frame_counter = 0;
         self.aggs.clear();
@@ -7032,6 +7712,7 @@ impl BusCore {
         // enormous measured period.
         self.spec = crate::spec::Spec::default();
         self.markers.clear();
+        self.trigger_fires.clear();
         self.pre_buffer.clear();
         self.post_roll = None;
         // Send-now intents recorded while the old run was winding down
@@ -7157,7 +7838,18 @@ impl BusCore {
                 let opened = self.recorder.open();
                 self.recorder.recording = opened.is_ok();
                 match opened {
-                    Ok(path) => *status = format!("recording to {path}"),
+                    Ok(path) => {
+                        *status = if self.recorder.last_eth_record.is_empty()
+                            || self.recorder.last_eth_record == path
+                        {
+                            format!("recording to {path}")
+                        } else {
+                            format!(
+                                "recording to {path} (Ethernet: {})",
+                                self.recorder.last_eth_record
+                            )
+                        };
+                    }
                     Err(e) => *status = format!("record failed: {e}"),
                 }
             }
@@ -7188,6 +7880,16 @@ impl BusCore {
         self.trace.clear();
         self.fr_trace.clear();
         self.eth_trace.clear();
+        self.someip_events.clear();
+        self.someip_tcp = crate::eth::someip::SomeIpTcp::default();
+        self.someip_tp = crate::eth::someip::SomeIpTp::default();
+        self.someip_ip = crate::eth::someip::SomeIpIp::default();
+        self.someip_sessions.clear();
+        self.someip_pending.clear();
+        self.someip_offers.clear();
+        self.someip_subscriptions.clear();
+        self.nm_last.clear();
+        self.nm_states.clear();
         self.publish_trace();
         *status = "trace cleared".to_string();
     }
@@ -7391,7 +8093,7 @@ impl BusCore {
             for raw in unaimed {
                 if self.drop_news_done.insert(raw) {
                     *status = format!(
-                        "log channel {} has no matching bus in this project and is not replayed; Buses > Replay Channel Map can point it at one",
+                        "log channel {} has no matching bus in this project and is not replayed; Setup > Replay > Channel map can point it at one",
                         raw + 1
                     );
                 }
@@ -7580,6 +8282,9 @@ impl BusCore {
                 for row in fr_rx {
                     self.accept_fr_row(row, now_us, fr_listeners, &mut fr_queued, status);
                 }
+            }
+            for frame in self.hw.poll_eth(sim) {
+                self.ingest_eth(frame);
             }
         }
         // FlexRay generator entries fill their slot on the same clock and with
@@ -7770,7 +8475,7 @@ impl BusCore {
             // Trace, aggregates, and the spec always see the whole bus.
             let record_this = self.recorder.admits(&f);
             if record_this {
-                self.recorder.write(&f);
+                self.recorder.write_event(&BusEvent::Can(&f));
                 // Pre-trigger memory: a trigger that starts a recording drains
                 // this ring into the file first, so the event keeps its past.
                 self.pre_buffer.push_back(f);
@@ -8212,9 +8917,7 @@ impl BusCore {
             entry.type_tag = d.type_tag;
             entry.label = d.label;
             entry.last_update_us = f.t_us;
-            if f.t_us >= entry.last_sample_us + stride || entry.history.is_empty() {
-                entry.push_sample(f.t_us, d.phys, stride);
-            }
+            entry.push_sample(f.t_us, d.phys, stride);
         }
         self.trace.push(f);
         self.trace.enforce_limit(self.trace_limit);
@@ -8240,7 +8943,7 @@ impl BusCore {
         if self.triggers.is_empty() {
             return;
         }
-        let mut fired: Vec<(TriggerAction, u64)> = Vec::new();
+        let mut fired: Vec<FiredTrigger> = Vec::new();
         for i in 0..self.triggers.len() {
             let now = {
                 let t = &self.triggers[i];
@@ -8295,16 +8998,445 @@ impl BusCore {
             let t = &mut self.triggers[i];
             let was = t.level;
             t.level = now;
-            if now && !was {
-                t.fired += 1;
-                t.last_fire_t_us = row.t_us;
-                fired.push((t.action, row.t_us));
+            if now && !was && t.can_fire(row.t_us) {
+                t.note_fire(row.t_us);
+                fired.push(FiredTrigger {
+                    index: i,
+                    action: t.action.clone(),
+                    at_us: row.t_us,
+                });
             }
         }
         // A FlexRay edge has no CAN frame to mirror into a reaction send, and
         // the actions a send could aim at are CAN generator entries: the
         // payload map stays empty, so a `Send` rule is a no-op here.
         self.run_actions(fired, &HashMap::new(), status);
+    }
+
+    /// Mirrors the ARXML service catalog into each Ethernet cluster's unified
+    /// `Comm`, so service/method/event/instance have the same stable identity
+    /// as frames, PDUs and ECUs. Field layouts stay in the catalog.
+    fn adopt_someip_services(&mut self, catalog: crate::eth::arxml_service::ServiceCatalog) {
+        let services = catalog.services.clone();
+        for (bus, runtime) in &mut self.eth_models {
+            let mut comm = (*runtime.comm).clone();
+            comm.services.clear();
+            let cluster = comm
+                .clusters
+                .keys()
+                .next()
+                .copied()
+                .unwrap_or(crate::model::ClusterId(0));
+            for service in &services {
+                if !service.buses.contains(bus) {
+                    continue;
+                }
+                comm.services.push(crate::model::Service {
+                    id: crate::model::ServiceId(u32::from(service.id)),
+                    cluster,
+                    name: service.name.clone(),
+                    major: service.major,
+                    methods: service
+                        .methods
+                        .iter()
+                        .map(|method| crate::model::ServiceMember {
+                            id: method.id,
+                            name: method.name.clone(),
+                        })
+                        .collect(),
+                    events: service
+                        .events
+                        .iter()
+                        .map(|event| crate::model::ServiceMember {
+                            id: event.id,
+                            name: event.name.clone(),
+                        })
+                        .collect(),
+                    instances: service
+                        .instances
+                        .iter()
+                        .map(|instance| crate::model::ServiceInstance {
+                            id: instance.instance,
+                            major: instance.major,
+                            minor: instance.minor,
+                            eventgroups: instance.eventgroups.clone(),
+                        })
+                        .collect(),
+                });
+            }
+            *runtime = std::sync::Arc::new(ProtocolRuntime {
+                comm: std::sync::Arc::new(comm),
+                plans: runtime.plans.clone(),
+                db: runtime.db.clone(),
+            });
+        }
+        self.someip_services = catalog;
+    }
+
+    fn note_someip_request(
+        &mut self,
+        bus: u8,
+        service: u16,
+        method: u16,
+        client: u16,
+        session: u16,
+        message_type: u8,
+    ) {
+        if message_type != 0x00 {
+            return;
+        }
+        self.someip_pending.push(SomeIpPending {
+            bus,
+            service,
+            method,
+            client,
+            session,
+            deadline_us: self.sim_t_us.saturating_add(5_000_000),
+        });
+    }
+
+    fn auto_reply_someip_method(&mut self, event: &crate::eth::someip::SomeIpEvent) {
+        if event.message_type != 0x00 || event.transport != "UDP" {
+            return;
+        }
+        if !self
+            .someip_offers
+            .keys()
+            .any(|(bus, service, _)| *bus == event.bus && *service == event.service)
+        {
+            return;
+        }
+        let Some(service) = self.someip_services.service(event.service) else {
+            return;
+        };
+        let Some(method) = service
+            .methods
+            .iter()
+            .find(|method| method.id == event.method)
+        else {
+            return;
+        };
+        let Ok(payload) =
+            crate::eth::arxml_service::encode_values(&method.output, &Default::default())
+        else {
+            return;
+        };
+        let dst = event
+            .src
+            .parse::<std::net::Ipv4Addr>()
+            .map(|ip| ip.octets())
+            .unwrap_or([10, 0, 0, 2]);
+        let frame = crate::eth::someip::build_udp_frame_to(
+            self.sim_t_us,
+            event.bus,
+            [10, 0, 0, 1],
+            dst,
+            30501,
+            event.src_port.max(1),
+            event.service,
+            event.method,
+            event.client,
+            event.session,
+            0x80,
+            &payload,
+        );
+        self.someip_send_guard = true;
+        self.emit_eth(frame).ok();
+        self.someip_send_guard = false;
+        self.write_push(
+            WriteKind::Info,
+            format!(
+                "SOME/IP auto reply 0x{:04X}.0x{:04X} session {}",
+                event.service, event.method, event.session
+            ),
+        );
+    }
+
+    fn ack_someip_subscribes(&mut self, event: &crate::eth::someip::SomeIpEvent) {
+        let Some(entries) = &event.sd else {
+            return;
+        };
+        for entry in entries {
+            if entry.kind != 0x06 {
+                continue;
+            }
+            let Some(eventgroup) = entry.eventgroup else {
+                continue;
+            };
+            if entry.ttl == 0 {
+                self.someip_subscriptions.retain(|subscription| {
+                    !(subscription.bus == event.bus
+                        && subscription.service == entry.service
+                        && subscription.instance == entry.instance
+                        && subscription.eventgroup == eventgroup)
+                });
+                continue;
+            }
+            if !self
+                .someip_offers
+                .contains_key(&(event.bus, entry.service, entry.instance))
+            {
+                continue;
+            }
+            let (ip, port) = entry
+                .endpoints
+                .first()
+                .map(|endpoint| (endpoint.address.clone(), endpoint.port))
+                .unwrap_or_else(|| ("10.0.0.2".to_string(), 30490));
+            if let Some(existing) = self.someip_subscriptions.iter_mut().find(|subscription| {
+                subscription.bus == event.bus
+                    && subscription.service == entry.service
+                    && subscription.instance == entry.instance
+                    && subscription.eventgroup == eventgroup
+            }) {
+                existing.ip = ip;
+                existing.port = port;
+                existing.ttl = entry.ttl;
+            } else {
+                self.someip_subscriptions.push(SomeIpSubscription {
+                    bus: event.bus,
+                    service: entry.service,
+                    instance: entry.instance,
+                    eventgroup,
+                    ip,
+                    port,
+                    ttl: entry.ttl,
+                });
+            }
+            let session = self.next_someip_session(event.bus, 0xFFFF, 0x8100, 0, 0);
+            let frame = crate::eth::someip::build_sd_subscribe_ack_frame(
+                self.sim_t_us,
+                event.bus,
+                entry.service,
+                entry.instance,
+                entry.major,
+                eventgroup,
+                3,
+                [10, 0, 0, 1],
+                30490,
+                session,
+            );
+            self.someip_send_guard = true;
+            self.emit_eth(frame).ok();
+            self.someip_send_guard = false;
+        }
+    }
+
+    fn expire_someip_requests(&mut self, now_us: u64) {
+        let mut keep = Vec::new();
+        let mut expired = Vec::new();
+        for request in self.someip_pending.drain(..) {
+            if now_us <= request.deadline_us {
+                keep.push(request);
+            } else {
+                expired.push(request);
+            }
+        }
+        self.someip_pending = keep;
+        for request in expired {
+            self.write_push(
+                WriteKind::Warning,
+                format!(
+                    "SOME/IP request 0x{:04X}.0x{:04X} session {} timed out",
+                    request.service, request.method, request.session
+                ),
+            );
+        }
+    }
+
+    fn next_someip_session(
+        &mut self,
+        bus: u8,
+        service: u16,
+        method: u16,
+        client: u16,
+        requested: u16,
+    ) -> u16 {
+        if requested != 0 {
+            return requested;
+        }
+        let entry = self
+            .someip_sessions
+            .entry((bus, service, method, client))
+            .or_insert(0);
+        *entry = entry.wrapping_add(1).max(1);
+        *entry
+    }
+
+    fn encode_someip_payload(
+        &self,
+        service: u16,
+        method: u16,
+        message_type: u8,
+        values: &std::collections::BTreeMap<String, f64>,
+    ) -> Result<Vec<u8>, String> {
+        self.encode_someip_payload_with_text(
+            service,
+            method,
+            message_type,
+            values,
+            &std::collections::BTreeMap::new(),
+        )
+    }
+
+    fn encode_someip_payload_with_text(
+        &self,
+        service: u16,
+        method: u16,
+        message_type: u8,
+        values: &std::collections::BTreeMap<String, f64>,
+        texts: &std::collections::BTreeMap<String, String>,
+    ) -> Result<Vec<u8>, String> {
+        let definition = self
+            .someip_services
+            .service(service)
+            .ok_or_else(|| format!("no ARXML service 0x{service:04X}"))?;
+        let fields = definition
+            .events
+            .iter()
+            .find(|entry| entry.id == method)
+            .map(|entry| entry.fields.as_slice())
+            .or_else(|| {
+                definition
+                    .methods
+                    .iter()
+                    .find(|entry| entry.id == method)
+                    .map(|entry| {
+                        if message_type == 0x80 {
+                            entry.output.as_slice()
+                        } else {
+                            entry.input.as_slice()
+                        }
+                    })
+            })
+            .ok_or_else(|| format!("no ARXML fields for 0x{service:04X}.0x{method:04X}"))?;
+        crate::eth::arxml_service::encode_values_with_text(fields, values, texts)
+    }
+
+    /// SOME/IP messages are events: every matching message can fire, gated
+    /// by the rule's own cooldown/max.
+    pub(crate) fn eval_someip_triggers(
+        &mut self,
+        bus: u8,
+        service: u16,
+        method: u16,
+        message_type: u8,
+        at_us: u64,
+        status: &mut String,
+    ) {
+        if self.someip_send_guard || self.triggers.is_empty() {
+            return;
+        }
+        let mut fired: Vec<FiredTrigger> = Vec::new();
+        for i in 0..self.triggers.len() {
+            let t = &self.triggers[i];
+            if !t.enabled {
+                continue;
+            }
+            if !t.cond.someip_matches(bus, service, method, message_type) {
+                continue;
+            }
+            if t.can_fire(at_us) {
+                let action = t.action.clone();
+                let t = &mut self.triggers[i];
+                t.note_fire(at_us);
+                fired.push(FiredTrigger {
+                    index: i,
+                    action,
+                    at_us,
+                });
+            }
+        }
+        if !fired.is_empty() {
+            self.run_actions(fired, &HashMap::new(), status);
+        }
+    }
+
+    /// E2E anomalies are events, not levels: each gap/jump fires immediately.
+    pub(crate) fn eval_e2e_triggers(
+        &mut self,
+        ch: u8,
+        id: u32,
+        ext: bool,
+        at_us: u64,
+        status: &mut String,
+    ) {
+        if self.triggers.is_empty() {
+            return;
+        }
+        let mut fired: Vec<FiredTrigger> = Vec::new();
+        for i in 0..self.triggers.len() {
+            let t = &self.triggers[i];
+            if !t.enabled {
+                continue;
+            }
+            match &t.cond {
+                TriggerCond::E2eIssue {
+                    ch: want_ch,
+                    id: want_id,
+                    ext: want_ext,
+                } if *want_ch == ch && *want_id == id && *want_ext == ext => {}
+                _ => continue,
+            }
+            if t.can_fire(at_us) {
+                let action = t.action.clone();
+                let t = &mut self.triggers[i];
+                t.note_fire(at_us);
+                fired.push(FiredTrigger {
+                    index: i,
+                    action,
+                    at_us,
+                });
+            }
+        }
+        if !fired.is_empty() {
+            self.run_actions(fired, &HashMap::new(), status);
+        }
+    }
+
+    /// The Ethernet side of [`BusCore::eval_triggers`]: a captured flow is
+    /// presence-style, so the first matching frame latches the rule for this
+    /// run. It runs before the flow folds into the aggregates, so a rule that
+    /// starts a recording still captures the frame that fired it.
+    pub(crate) fn eval_eth_triggers(&mut self, frame: &crate::eth::EthFrame, status: &mut String) {
+        if self.triggers.is_empty() {
+            return;
+        }
+        let mut fired: Vec<FiredTrigger> = Vec::new();
+        for i in 0..self.triggers.len() {
+            let now = {
+                let t = &self.triggers[i];
+                if !t.enabled {
+                    continue;
+                }
+                match &t.cond {
+                    TriggerCond::EthFlow {
+                        bus,
+                        ethertype,
+                        vlan,
+                    } => {
+                        frame.bus == *bus
+                            && frame.ethertype == *ethertype
+                            && vlan.is_none_or(|wanted| frame.vlan == Some(wanted))
+                    }
+                    _ => continue,
+                }
+            };
+            let t = &mut self.triggers[i];
+            let was = t.level;
+            t.level = now;
+            if now && !was && t.can_fire(frame.t_us) {
+                t.note_fire(frame.t_us);
+                fired.push(FiredTrigger {
+                    index: i,
+                    action: t.action.clone(),
+                    at_us: frame.t_us,
+                });
+            }
+        }
+        if !fired.is_empty() {
+            self.run_actions(fired, &HashMap::new(), status);
+        }
     }
 
     /// Folds one frame into every enabled trigger and acts on edges.
@@ -8316,7 +9448,7 @@ impl BusCore {
         if self.triggers.is_empty() {
             return;
         }
-        let mut fired: Vec<(TriggerAction, u64)> = Vec::new();
+        let mut fired: Vec<FiredTrigger> = Vec::new();
         for i in 0..self.triggers.len() {
             // Observe under shared borrows first: acting on an edge
             // needs `self` exclusively, and the two cannot overlap.
@@ -8368,6 +9500,20 @@ impl BusCore {
                         }
                         true
                     }
+                    TriggerCond::PayloadMatch {
+                        ch,
+                        id,
+                        ext,
+                        offset,
+                        mask,
+                        value,
+                    } => {
+                        if f.channel != *ch || f.id != *id || f.extended != *ext || f.is_error() {
+                            continue;
+                        }
+                        let at = usize::from(*offset);
+                        at < usize::from(f.len) && (f.data[at] & *mask) == (*value & *mask)
+                    }
                     // Not frame conditions: swept once per step in
                     // `eval_timeout_triggers` (cycle silence, system vars),
                     // or per FlexRay row in `eval_fr_triggers`.
@@ -8375,16 +9521,23 @@ impl BusCore {
                     | TriggerCond::SysVar { .. }
                     | TriggerCond::DerivedSignal { .. }
                     | TriggerCond::FrFramePresent { .. }
-                    | TriggerCond::FrSignalCross { .. } => continue,
+                    | TriggerCond::FrSignalCross { .. }
+                    | TriggerCond::FrTimeout { .. }
+                    | TriggerCond::EthFlow { .. }
+                    | TriggerCond::E2eIssue { .. }
+                    | TriggerCond::SomeIp { .. } => continue,
                 }
             };
             let t = &mut self.triggers[i];
             let was = t.level;
             t.level = now;
-            if now && !was {
-                t.fired += 1;
-                t.last_fire_t_us = f.t_us;
-                fired.push((t.action, f.t_us));
+            if now && !was && t.can_fire(f.t_us) {
+                t.note_fire(f.t_us);
+                fired.push(FiredTrigger {
+                    index: i,
+                    action: t.action.clone(),
+                    at_us: f.t_us,
+                });
             }
         }
         // A reaction send mirrors the triggering frame: decode it once, and
@@ -8393,7 +9546,7 @@ impl BusCore {
         let mut mirror: HashMap<String, f64> = HashMap::new();
         if fired
             .iter()
-            .any(|(a, _)| matches!(a, TriggerAction::Send { .. }))
+            .any(|f| matches!(f.action, TriggerAction::Send { .. }))
         {
             for d in self.model_can_decoded(f, false).unwrap_or_default() {
                 mirror.insert(d.name, d.phys);
@@ -8412,7 +9565,7 @@ impl BusCore {
         if self.triggers.is_empty() {
             return;
         }
-        let mut fired: Vec<(TriggerAction, u64)> = Vec::new();
+        let mut fired: Vec<FiredTrigger> = Vec::new();
         for i in 0..self.triggers.len() {
             // Level conditions swept once per step: cycle silence against
             // the aggregates, system variables against the live registry.
@@ -8422,6 +9575,12 @@ impl BusCore {
                         continue;
                     }
                     Some(self.timeout_silent(*ch, *id, now_us, grace))
+                }
+                TriggerCond::FrTimeout { bus, slot } => {
+                    if !self.triggers[i].enabled {
+                        continue;
+                    }
+                    Some(self.fr_timeout_silent(*bus, *slot, now_us, grace))
                 }
                 TriggerCond::DerivedSignal {
                     id,
@@ -8486,10 +9645,13 @@ impl BusCore {
             let t = &mut self.triggers[i];
             let was = t.level;
             t.level = level;
-            if level && !was {
-                t.fired += 1;
-                t.last_fire_t_us = now_us;
-                fired.push((t.action, now_us));
+            if level && !was && t.can_fire(now_us) {
+                t.note_fire(now_us);
+                fired.push(FiredTrigger {
+                    index: i,
+                    action: t.action.clone(),
+                    at_us: now_us,
+                });
             }
         }
         // A timeout has no triggering frame, so a reaction send it fires
@@ -8511,60 +9673,229 @@ impl BusCore {
         crate::spec::missing_offender(now_us, agg.last_t_us, declared, grace)
     }
 
+    /// FlexRay silence is judged against the slot's fastest declared
+    /// repetition: a slot scheduled every cycle convicts sooner than one
+    /// scheduled every fourth.
+    fn fr_timeout_silent(&self, bus: u8, slot: u16, now_us: u64, grace: u64) -> bool {
+        let Some(last) = self
+            .fr_aggs
+            .values()
+            .filter(|agg| agg.bus == bus && agg.slot == slot)
+            .map(|agg| agg.last_t_us)
+            .max()
+        else {
+            return false; // never seen: no opinion
+        };
+        let Some(period) = self.fr_slot_period_us(bus, slot) else {
+            return false; // no description or no schedule for the slot
+        };
+        crate::spec::missing_offender(now_us, last, period, grace)
+    }
+
+    fn fr_slot_period_us(&self, bus: u8, slot: u16) -> Option<u64> {
+        let db = self.fr_dbs.get(&bus)?;
+        let cycle_us = (db.params.cycle_time_ms * 1_000.0).round() as u64;
+        if cycle_us == 0 {
+            return None;
+        }
+        db.frames
+            .iter()
+            .filter(|frame| {
+                frame.triggering.slot_id == u32::from(slot) && frame.triggering.cycle_repetition > 0
+            })
+            .map(|frame| cycle_us * u64::from(frame.triggering.cycle_repetition))
+            .min()
+    }
+
     fn run_actions(
         &mut self,
-        fired: Vec<(TriggerAction, u64)>,
+        fired: Vec<FiredTrigger>,
         mirror: &HashMap<String, f64>,
         status: &mut String,
     ) {
-        for (action, at_us) in fired {
-            match action {
+        for FiredTrigger {
+            index,
+            action,
+            at_us,
+        } in fired
+        {
+            let text = self
+                .triggers
+                .get(index)
+                .map(|t| t.cond.short())
+                .unwrap_or_default();
+            let (pre_override, post_override) = self
+                .triggers
+                .get(index)
+                .map(|t| (t.pre_frames, t.post_frames))
+                .unwrap_or((None, None));
+            let label = action.label();
+            let (ok, result) = match action {
                 TriggerAction::StartRecording => {
-                    if !self.recorder.recording {
+                    if self.recorder.recording {
+                        (true, "already recording".to_string())
+                    } else {
                         self.recorder.recording = true;
                         if self.measuring {
                             let opened_path = self.recorder.open();
                             self.recorder.recording = opened_path.is_ok();
-                            *status = match &opened_path {
-                                Ok(path) => format!("trigger started recording to {path}"),
-                                Err(e) => format!("trigger record failed: {e}"),
-                            };
-                            if opened_path.is_ok() {
-                                // A fresh recording cancels any pending roll.
-                                self.post_roll = None;
-                                // Oldest first: the file opens with the frames
-                                // that came before the trigger fired.
-                                for pre in self.pre_buffer.drain(..) {
-                                    self.recorder.write(&pre);
+                            match &opened_path {
+                                Ok(path) => {
+                                    *status = if self.recorder.last_eth_record.is_empty()
+                                        || self.recorder.last_eth_record == *path
+                                    {
+                                        format!("trigger started recording to {path}")
+                                    } else {
+                                        format!(
+                                            "trigger started recording to {path} (Ethernet: {})",
+                                            self.recorder.last_eth_record
+                                        )
+                                    };
+                                    // A fresh recording cancels any pending roll.
+                                    self.post_roll = None;
+                                    // Oldest first: the file opens with the
+                                    // frames that came before the trigger.
+                                    let total = self.pre_buffer.len();
+                                    let take = pre_override.unwrap_or(total).min(total);
+                                    for pre in self.pre_buffer.drain(..).skip(total - take) {
+                                        self.recorder.write_event(&BusEvent::Can(&pre));
+                                    }
+                                    (true, format!("recording to {path}"))
+                                }
+                                Err(e) => {
+                                    *status = format!("trigger record failed: {e}");
+                                    (false, format!("record failed: {e}"))
                                 }
                             }
                         } else {
                             *status = "trigger enabled recording for the next start".to_string();
+                            (true, "armed for next start".to_string())
                         }
                     }
                 }
                 TriggerAction::StopRecording => {
-                    if self.recorder.recording {
-                        if self.measuring {
-                            // Roll on: the file stays open for the post-roll,
-                            // then the step loop closes it once the countdown
-                            // is spent.
-                            self.post_roll = Some(self.post_frames);
-                            *status = "trigger stopping after post-roll".to_string();
-                        } else {
-                            self.recorder.recording = false;
-                            *status = "trigger disabled recording".to_string();
-                        }
+                    if !self.recorder.recording {
+                        (true, "not recording".to_string())
+                    } else if self.measuring {
+                        // Roll on: the file stays open for the post-roll, then
+                        // the step loop closes it once the countdown is spent.
+                        self.post_roll = Some(post_override.unwrap_or(self.post_frames));
+                        *status = "trigger stopping after post-roll".to_string();
+                        (true, "stopping after post-roll".to_string())
+                    } else {
+                        self.recorder.recording = false;
+                        *status = "trigger disabled recording".to_string();
+                        (true, "recording off".to_string())
                     }
                 }
                 TriggerAction::Send { ch, id } => {
-                    self.send_one_shot(ch, id, at_us, mirror);
+                    if self.send_one_shot(ch, id, at_us, mirror) {
+                        (true, format!("sent 0x{id:X}"))
+                    } else {
+                        (false, format!("no generator entry for 0x{id:X}"))
+                    }
+                }
+                TriggerAction::SendFr { bus, slot } => {
+                    if self.send_fr_one_shot(bus, slot, at_us) {
+                        (true, format!("queued FR{bus} slot {slot}"))
+                    } else {
+                        (false, format!("no FR entry for bus {bus} slot {slot}"))
+                    }
+                }
+                TriggerAction::SendEth { bus, frame, data } => {
+                    match self.send_eth_frame(bus, &frame, &data) {
+                        Ok(()) => (true, format!("sent ETH{bus} {frame}")),
+                        Err(error) => (false, error),
+                    }
+                }
+                TriggerAction::SendSomeIp {
+                    bus,
+                    service,
+                    method,
+                    client,
+                    session,
+                    message_type,
+                    data,
+                    values,
+                    transport,
+                    host,
+                    port,
+                } => {
+                    if !self.measuring {
+                        (
+                            false,
+                            "SOME/IP send needs a running measurement".to_string(),
+                        )
+                    } else {
+                        let payload = if values.is_empty() {
+                            Ok(data.clone())
+                        } else {
+                            self.encode_someip_payload(service, method, message_type, &values)
+                        };
+                        match payload {
+                            Ok(payload) => {
+                                let session =
+                                    self.next_someip_session(bus, service, method, client, session);
+                                self.note_someip_request(
+                                    bus,
+                                    service,
+                                    method,
+                                    client,
+                                    session,
+                                    message_type,
+                                );
+                                if transport.eq_ignore_ascii_case("tcp") {
+                                    match send_someip_tcp(
+                                        &host,
+                                        port,
+                                        service,
+                                        method,
+                                        client,
+                                        session,
+                                        message_type,
+                                        &payload,
+                                    ) {
+                                        Ok(()) => (
+                                            true,
+                                            format!(
+                                                "sent SOME/IP TCP 0x{service:04X}.0x{method:04X}"
+                                            ),
+                                        ),
+                                        Err(error) => (false, error),
+                                    }
+                                } else {
+                                    let frame = crate::eth::someip::build_udp_frame(
+                                        at_us,
+                                        bus,
+                                        service,
+                                        method,
+                                        client,
+                                        session,
+                                        message_type,
+                                        &payload,
+                                    );
+                                    self.someip_send_guard = true;
+                                    let sent = self.emit_eth(frame);
+                                    self.someip_send_guard = false;
+                                    match sent {
+                                        Ok(()) => (
+                                            true,
+                                            format!("sent SOME/IP 0x{service:04X}.0x{method:04X}"),
+                                        ),
+                                        Err(error) => (false, error),
+                                    }
+                                }
+                            }
+                            Err(error) => (false, error),
+                        }
+                    }
                 }
                 TriggerAction::InsertMarker => {
                     self.markers.push(at_us);
                     if self.markers.len() > self.marker_cap {
                         self.markers.remove(0);
                     }
+                    (true, "marker inserted".to_string())
                 }
                 TriggerAction::ClearTrace => {
                     self.trace.clear();
@@ -8577,8 +9908,45 @@ impl BusCore {
                         t.rearm();
                     }
                     *status = "trigger cleared the trace".to_string();
+                    (true, "trace cleared".to_string())
                 }
+                TriggerAction::SetSysVar { key, value } => {
+                    if self.sysvar_write(&key, value) {
+                        (true, format!("set {key} = {value}"))
+                    } else {
+                        (false, format!("unknown variable {key}"))
+                    }
+                }
+                TriggerAction::RunScript { name, value } => {
+                    if !self.measuring {
+                        (false, format!("\"{name}\" needs a running measurement"))
+                    } else if self.pending_panel_actions.len() >= 32 {
+                        (false, "too many queued script actions".to_string())
+                    } else {
+                        self.pending_panel_actions.push((name.clone(), value));
+                        (true, format!("queued \"{name}\""))
+                    }
+                }
+            };
+            self.trigger_fires.push_back(crate::trigger::TriggerFire {
+                index,
+                at_us,
+                text: text.clone(),
+                action: label.clone(),
+                result: result.clone(),
+                ok,
+            });
+            if self.trigger_fires.len() > TRIGGER_FIRE_CAP {
+                self.trigger_fires.pop_front();
             }
+            self.write_push(
+                if ok {
+                    WriteKind::Info
+                } else {
+                    WriteKind::Warning
+                },
+                format!("trigger {}: {text} -> {label}: {result}", index + 1),
+            );
         }
     }
 
@@ -8594,13 +9962,211 @@ impl BusCore {
     /// over the payload, turning a reaction send into a gateway hop. A
     /// periodic send of the same entry passes an empty map and keeps its
     /// own base bytes and waveforms.
-    fn send_one_shot(&mut self, ch: u8, id: u32, at_us: u64, mirror: &HashMap<String, f64>) {
+    /// Queues one whole FlexRay entry, encoded at the firing instant. It
+    /// lands with the next step's generator block, exactly like a script's
+    /// `fr_send`, so a reaction cannot outrun the frame that caused it.
+    fn send_fr_one_shot(&mut self, bus: u8, slot: u16, at_us: u64) -> bool {
+        let Some(i) = self
+            .fr_tx_list
+            .iter()
+            .position(|t| t.bus == bus && t.slot == slot)
+        else {
+            return false;
+        };
+        let tx = &self.fr_tx_list[i];
+        let payload = self
+            .fr_models
+            .get(&bus)
+            .and_then(|runtime| {
+                let cluster = *self.fr_cluster_ids.get(&bus)?;
+                crate::generator::fr_tx_payload_with_model(
+                    cluster,
+                    &runtime.comm,
+                    &runtime.plans,
+                    tx,
+                    at_us,
+                )
+            })
+            .unwrap_or_else(|| tx.data.clone());
+        self.fr_from_scripts.push((0, bus, slot, payload));
+        true
+    }
+
+    /// Injects one whole Ethernet frame through the matrix definition. The
+    /// trigger and the Panel button share this: name gives VLAN/EtherType/
+    /// length, bytes are the payload.
+    /// Delivers one locally built Ethernet frame: wire first when a live port
+    /// is attached, otherwise session-only injection.
+    fn apply_script_someip_offers(&mut self, offers: Vec<crate::script::SomeIpOffer>) {
+        for offer in offers {
+            let key = (offer.bus, offer.service, offer.instance);
+            if offer.ttl == 0 {
+                self.someip_offers.remove(&key);
+            } else {
+                self.someip_offers.insert(key, offer.ttl);
+            }
+            let session = self.next_someip_session(offer.bus, 0xFFFF, 0x8100, 0, 0);
+            let frame = crate::eth::someip::build_sd_offer_frame(
+                self.sim_t_us,
+                offer.bus,
+                offer.service,
+                offer.instance,
+                offer.major,
+                offer.minor,
+                offer.ttl,
+                [10, 0, 0, 1],
+                30490,
+                session,
+            );
+            self.emit_eth(frame).ok();
+        }
+    }
+
+    fn apply_script_someip_tcp(&mut self, sends: Vec<crate::script::SomeIpTcpSend>) {
+        use std::io::Write;
+        for send in sends {
+            let session =
+                self.next_someip_session(0, send.service, send.method, send.client, send.session);
+            let message = crate::eth::someip::build_message(
+                send.service,
+                send.method,
+                send.client,
+                session,
+                send.message_type,
+                &send.payload,
+            );
+            let address = format!("{}:{}", send.host, send.port);
+            match std::net::TcpStream::connect(&address) {
+                Ok(mut stream) => {
+                    let _ = stream.set_write_timeout(Some(std::time::Duration::from_millis(500)));
+                    if let Err(error) = stream.write_all(&message) {
+                        self.write_push(
+                            WriteKind::Warning,
+                            format!("SOME/IP TCP {address}: {error}"),
+                        );
+                    }
+                }
+                Err(error) => self.write_push(
+                    WriteKind::Warning,
+                    format!("SOME/IP TCP {address}: {error}"),
+                ),
+            }
+        }
+    }
+
+    fn apply_script_someip(&mut self, sends: Vec<crate::script::SomeIpSend>) {
+        for send in sends {
+            let session = self.next_someip_session(
+                send.bus,
+                send.service,
+                send.method,
+                send.client,
+                send.session,
+            );
+            let frame = crate::eth::someip::build_udp_frame(
+                self.sim_t_us,
+                send.bus,
+                send.service,
+                send.method,
+                send.client,
+                session,
+                send.message_type,
+                &send.payload,
+            );
+            self.someip_send_guard = true;
+            self.emit_eth(frame).ok();
+            self.someip_send_guard = false;
+            if send.message_type == 0x02 {
+                let subscribers: Vec<SomeIpSubscription> = self
+                    .someip_subscriptions
+                    .iter()
+                    .filter(|subscription| {
+                        subscription.bus == send.bus && subscription.service == send.service
+                    })
+                    .cloned()
+                    .collect();
+                for subscription in subscribers {
+                    let dst = subscription
+                        .ip
+                        .parse::<std::net::Ipv4Addr>()
+                        .map(|ip| ip.octets())
+                        .unwrap_or([10, 0, 0, 2]);
+                    let reply = crate::eth::someip::build_udp_frame_to(
+                        self.sim_t_us,
+                        send.bus,
+                        [10, 0, 0, 1],
+                        dst,
+                        30501,
+                        subscription.port,
+                        send.service,
+                        send.method,
+                        send.client,
+                        session,
+                        send.message_type,
+                        &send.payload,
+                    );
+                    self.someip_send_guard = true;
+                    self.emit_eth(reply).ok();
+                    self.someip_send_guard = false;
+                }
+            }
+        }
+    }
+
+    fn emit_eth(&mut self, frame: crate::eth::EthFrame) -> Result<(), String> {
+        if self.hw.eth_device(frame.bus).is_some() {
+            self.hw.send_eth(frame.bus, &frame)
+        } else {
+            self.ingest_eth(frame);
+            Ok(())
+        }
+    }
+
+    fn send_eth_frame(&mut self, bus: u8, frame: &str, data: &[u8]) -> Result<(), String> {
+        if !self.measuring {
+            return Err("sending a frame needs a running measurement".to_string());
+        }
+        let Some(db) = self.eth_dbs.get(&bus).cloned() else {
+            return Err(format!("ETH{bus} has no matrix description"));
+        };
+        let Some(def) = db.frames.iter().find(|entry| entry.name == frame) else {
+            return Err(format!("unknown Ethernet frame \"{frame}\""));
+        };
+        let expected = if self.eth_length_includes_header {
+            def.length.saturating_sub(14)
+        } else {
+            def.length
+        };
+        if data.len() != expected {
+            return Err(format!(
+                "frame \"{frame}\" carries {expected} payload bytes"
+            ));
+        }
+        let injected = crate::eth::EthFrame::session(
+            self.sim_t_us,
+            bus,
+            def.vlan,
+            def.ethertype_hint
+                .unwrap_or(crate::eth::EthFrame::SESSION_ETHERTYPE),
+            data.to_vec(),
+        );
+        self.ingest_eth(injected);
+        Ok(())
+    }
+
+    fn send_one_shot(
+        &mut self,
+        ch: u8,
+        id: u32,
+        at_us: u64,
+        mirror: &HashMap<String, f64>,
+    ) -> bool {
         let Some(i) = self
             .tx_list
             .iter()
             .position(|t| t.channel == ch && t.id == id)
         else {
-            return; // the generator row is gone: the rule idles
+            return false; // the generator row is gone: the rule idles
         };
         let (tch, tid, ext) = (
             self.tx_list[i].channel,
@@ -8673,6 +10239,7 @@ impl BusCore {
             dir: crate::can::frame::Direction::Tx,
             flags,
         });
+        true
     }
 }
 
@@ -9219,6 +10786,83 @@ mod tests {
     /// the same subscription space as CAN and FlexRay, keyed by the Ethernet
     /// bus and the frame the matrix matched -- so the observers plot it.
     #[test]
+    fn someip_catalog_is_adopted_as_comm_services() {
+        let text = std::fs::read_to_string(crate::test_assets::eth_arxml()).unwrap();
+        let db = std::sync::Arc::new(crate::eth::db::EthDb::parse(&text).unwrap());
+        let mut core = BusCore::new(Vec::new());
+        let mut dbs = std::collections::BTreeMap::new();
+        dbs.insert(0u8, db);
+        core.handle(
+            BusCommand::SetEthDbs {
+                dbs,
+                sources: Default::default(),
+            },
+            &mut String::new(),
+        );
+        core.handle(
+            BusCommand::SetSomeIpServices(crate::eth::arxml_service::ServiceCatalog {
+                services: vec![crate::eth::arxml_service::ServiceDef {
+                    name: "SpeedService".to_string(),
+                    id: 0x1234,
+                    major: 1,
+                    methods: Vec::new(),
+                    events: vec![crate::eth::arxml_service::ServiceEvent {
+                        name: "Speed".to_string(),
+                        id: 0x8001,
+                        fields: Vec::new(),
+                    }],
+                    instances: Vec::new(),
+                    buses: vec![0],
+                    issues: Vec::new(),
+                }],
+            }),
+            &mut String::new(),
+        );
+        let runtime = core.eth_models.get(&0).unwrap();
+        let cluster = *runtime.comm.clusters.keys().next().unwrap();
+        let service = runtime
+            .comm
+            .service(cluster, 0x1234)
+            .expect("service became a Comm entity");
+        assert_eq!(service.name, "SpeedService");
+        assert_eq!(service.events[0].id, 0x8001);
+    }
+
+    #[test]
+    fn bus_event_keeps_protocol_explicit() {
+        let frame = CanFrame {
+            t_us: 10,
+            channel: 2,
+            id: 0x100,
+            extended: false,
+            len: 1,
+            data: [0; 64],
+            dir: Direction::Rx,
+            flags: crate::can::frame::FrameFlags::NONE,
+        };
+        let event = BusEvent::Can(&frame);
+        assert_eq!(event.bus_ref(), BusRef::Can(2));
+        assert_eq!(event.t_us(), 10);
+        assert_eq!(event.payload_len(), 1);
+    }
+
+    #[test]
+    fn comm_resolves_dbc_node_to_ecu_identity() {
+        let mut comm = crate::model::Comm::default();
+        comm.ecus.insert(
+            crate::model::EcuId(7),
+            crate::model::Ecu {
+                id: crate::model::EcuId(7),
+                name: "Gateway".to_string(),
+                description: String::new(),
+                mac: None,
+            },
+        );
+        assert_eq!(comm.ecu_for_node("gateway"), Some(crate::model::EcuId(7)));
+        assert_eq!(comm.ecu_for_node("missing"), None);
+    }
+
+    #[test]
     fn ethernet_frames_fold_signals_into_subscriptions() {
         let mut core = BusCore::new(Vec::new());
         let db = crate::eth::db::EthDb {
@@ -9249,6 +10893,7 @@ mod tests {
                     }],
                 }],
             }],
+            ..Default::default()
         };
         core.eth_dbs.insert(0, std::sync::Arc::new(db));
         core.rebuild_eth_models();
@@ -9308,6 +10953,7 @@ mod tests {
                     }],
                 }],
             }],
+            ..Default::default()
         };
         let key = SigKey::eth_in(crate::model::ClusterId(1), "LenFrame", "Speed");
         let run = |includes_header: bool| {

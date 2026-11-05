@@ -54,6 +54,24 @@ pub struct EthSignal {
 pub struct EthDb {
     pub clusters: Vec<EthCluster>,
     pub frames: Vec<EthFrameDef>,
+    /// PDUs referenced by `PDU-TRIGGERING` even when no frame maps them
+    /// (Ethernet NM and PDU-only deployments).
+    pub pdus: Vec<EthPdu>,
+    /// Socket addresses / application endpoints from the same document.
+    pub endpoints: Vec<EthEndpoint>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct EthEndpoint {
+    pub name: String,
+    pub cluster: String,
+    pub ip: String,
+    pub port: u16,
+    /// "UDP" or "TCP".
+    pub protocol: String,
+    pub connector: String,
+    /// PDU carried by this endpoint when a PDU triggering names it.
+    pub pdu: String,
 }
 
 /// The L2 facts a captured frame offers to the matcher.
@@ -121,12 +139,55 @@ impl EthDb {
                 self.frames.push(frame);
             }
         }
+        for pdu in other.pdus {
+            if self.pdus.iter().any(|known| known.name == pdu.name) {
+                warnings.push(format!(
+                    "Ethernet PDU `{}` is declared twice; first wins",
+                    pdu.name
+                ));
+            } else {
+                self.pdus.push(pdu);
+            }
+        }
+        for endpoint in other.endpoints {
+            if self
+                .endpoints
+                .iter()
+                .any(|known| known.name == endpoint.name && known.ip == endpoint.ip)
+            {
+                continue;
+            }
+            self.endpoints.push(endpoint);
+        }
         warnings
+    }
+
+    /// Tries to bind one UDP payload to a PDU-only endpoint. Matching is by
+    /// port and, when the ARXML gave an address, by source/destination IP.
+    pub fn decode_nm(
+        &self,
+        src_ip: &str,
+        dst_ip: &str,
+        src_port: u16,
+        dst_port: u16,
+        payload: &[u8],
+    ) -> Option<(String, Vec<(String, f64)>)> {
+        let endpoint = self.endpoints.iter().find(|endpoint| {
+            endpoint.protocol == "UDP"
+                && !endpoint.pdu.is_empty()
+                && (endpoint.port == 0 || endpoint.port == src_port || endpoint.port == dst_port)
+                && (endpoint.ip.is_empty() || endpoint.ip == src_ip || endpoint.ip == dst_ip)
+        })?;
+        let pdu = self.pdus.iter().find(|pdu| pdu.name == endpoint.pdu)?;
+        Some((pdu.name.clone(), decode_pdu_signals(pdu, payload)))
     }
 
     pub fn parse(text: &str) -> Result<Self, String> {
         let doc = Document::parse(text).map_err(|e| e.to_string())?;
         let root = doc.root_element();
+        if root.tag_name().name().eq_ignore_ascii_case("FIBEX") {
+            return Self::parse_fibex(&doc);
+        }
         let mut db = EthDb::default();
 
         // Short-name indexes: a matrix may reference an object by path; the
@@ -194,6 +255,139 @@ impl EthDb {
             });
         }
 
+        // PDU-only deployments: an Ethernet cluster can carry NM or signal
+        // PDUs without ever declaring an Ethernet frame. Those PDUs are still
+        // useful database objects, so keep them separately from frame PDUs.
+        let pdu_nodes: HashMap<String, Node> = root
+            .descendants()
+            .filter(|n| {
+                n.is_element()
+                    && matches!(
+                        n.tag_name().name(),
+                        "NM-PDU" | "I-SIGNAL-I-PDU" | "I-PDU" | "PDU"
+                    )
+            })
+            .filter_map(|n| short_name_opt(n).map(|name| (name, n)))
+            .collect();
+        for triggering in root
+            .descendants()
+            .filter(|n| n.is_element() && n.has_tag_name("PDU-TRIGGERING"))
+        {
+            let Some(reference) = child_text(triggering, "I-PDU-REF") else {
+                continue;
+            };
+            let name = ref_tail(&reference);
+            if db.pdus.iter().any(|pdu| pdu.name == name) {
+                continue;
+            }
+            let Some(node) = pdu_nodes.get(&name) else {
+                continue;
+            };
+            if let Some(pdu) = read_pdu(*node, &signals, &compus, &units, &base_types) {
+                db.pdus.push(pdu);
+            } else {
+                db.pdus.push(EthPdu {
+                    name,
+                    length: number(*node, "LENGTH")
+                        .or_else(|| number(*node, "BYTE-LENGTH"))
+                        .unwrap_or(0.0) as usize,
+                    ..Default::default()
+                });
+            }
+        }
+
+        // Socket/application endpoints are the service-oriented counterpart
+        // of frame triggerings; they often exist in documents with no frames.
+        let mut connector_pdus: HashMap<String, String> = HashMap::new();
+        for triggering in root
+            .descendants()
+            .filter(|n| n.is_element() && n.has_tag_name("PDU-TRIGGERING"))
+        {
+            let Some(reference) = child_text(triggering, "I-PDU-REF") else {
+                continue;
+            };
+            let pdu = ref_tail(&reference);
+            for port in triggering
+                .descendants()
+                .filter(|n| n.has_tag_name("I-PDU-PORT-REF"))
+            {
+                if let Some(connector) = port.text().and_then(|path| {
+                    path.split('/').rev().find(|segment| {
+                        segment.contains("connector") && !segment.contains("pdu_port")
+                    })
+                }) {
+                    connector_pdus.insert(connector.to_string(), pdu.clone());
+                }
+            }
+        }
+        let network_ips: HashMap<String, String> = root
+            .descendants()
+            .filter(|n| n.is_element() && n.has_tag_name("NETWORK-ENDPOINT"))
+            .filter_map(|node| {
+                let name = short_name_opt(node)?;
+                let ip = node
+                    .descendants()
+                    .find(|n| n.has_tag_name("IPV-4-ADDRESS"))
+                    .and_then(|n| n.text())
+                    .map(str::trim)
+                    .filter(|text| !text.is_empty())
+                    .unwrap_or_default()
+                    .to_string();
+                Some((name, ip))
+            })
+            .collect();
+        for socket in root
+            .descendants()
+            .filter(|n| n.is_element() && n.has_tag_name("SOCKET-ADDRESS"))
+        {
+            let name = short_name(socket);
+            if name.is_empty() {
+                continue;
+            }
+            let Some(application) = socket
+                .children()
+                .find(|n| n.has_tag_name("APPLICATION-ENDPOINT"))
+            else {
+                continue;
+            };
+            let port = application
+                .descendants()
+                .find(|n| n.has_tag_name("PORT-NUMBER"))
+                .and_then(|n| n.text())
+                .and_then(|text| text.trim().parse::<u16>().ok())
+                .unwrap_or(0);
+            let protocol = if application.descendants().any(|n| n.has_tag_name("TCP-TP")) {
+                "TCP"
+            } else {
+                "UDP"
+            };
+            let ip = application
+                .descendants()
+                .find(|n| n.has_tag_name("NETWORK-ENDPOINT-REF"))
+                .and_then(|n| n.text())
+                .map(ref_tail)
+                .and_then(|name| network_ips.get(&name).cloned())
+                .unwrap_or_default();
+            let connector = child_text(socket, "CONNECTOR-REF")
+                .map(|path| ref_tail(&path))
+                .unwrap_or_default();
+            let pdu = connector_pdus.get(&connector).cloned().unwrap_or_default();
+            let cluster = socket
+                .ancestors()
+                .find(|n| n.has_tag_name("ETHERNET-CLUSTER"))
+                .map(short_name)
+                .unwrap_or_default();
+            db.endpoints.push(EthEndpoint {
+                name,
+                cluster,
+                ip,
+                port,
+                protocol: protocol.to_string(),
+                connector,
+                pdu,
+            });
+        }
+
         for frame_node in root.descendants().filter(|n| is_ethernet_frame(*n)) {
             let name = short_name(frame_node);
             if name.is_empty() {
@@ -238,6 +432,147 @@ impl EthDb {
                 }
             }
             db.frames.push(frame);
+        }
+        Ok(db)
+    }
+
+    /// Minimal FIBEX 4 Ethernet reader: channels become clusters, FRAME
+    /// elements become frame definitions, PDU/SIGNAL instances become signal
+    /// layouts. Vendor extensions that do not follow this shape are reported
+    /// as an empty database rather than guessed at.
+    fn parse_fibex(doc: &Document) -> Result<Self, String> {
+        let root = doc.root_element();
+        let mut db = EthDb::default();
+        let mut cluster_names: Vec<String> = root
+            .descendants()
+            .filter(|n| {
+                n.is_element()
+                    && matches!(
+                        n.tag_name().name(),
+                        "CHANNEL" | "PHYSICAL-CHANNEL" | "CLUSTER"
+                    )
+            })
+            .filter_map(short_name_opt)
+            .collect();
+        cluster_names.sort();
+        cluster_names.dedup();
+        if cluster_names.is_empty() {
+            cluster_names.push("FIBEX".to_string());
+        }
+        let cluster = cluster_names[0].clone();
+        for name in cluster_names {
+            db.clusters.push(EthCluster {
+                name,
+                vlans: Vec::new(),
+            });
+        }
+
+        let signal_nodes: HashMap<String, Node> = root
+            .descendants()
+            .filter(|n| n.is_element() && n.tag_name().name() == "SIGNAL")
+            .filter_map(|n| short_name_opt(n).map(|name| (name, n)))
+            .collect();
+        let pdu_nodes: HashMap<String, Node> = root
+            .descendants()
+            .filter(|n| n.is_element() && n.tag_name().name() == "PDU")
+            .filter_map(|n| short_name_opt(n).map(|name| (name, n)))
+            .collect();
+
+        for frame in root
+            .descendants()
+            .filter(|n| n.is_element() && n.tag_name().name() == "FRAME")
+        {
+            let Some(name) = short_name_opt(frame) else {
+                continue;
+            };
+            let length = child_text(frame, "BYTE-LENGTH")
+                .or_else(|| child_text(frame, "FRAME-LENGTH"))
+                .and_then(|value| value.parse::<usize>().ok())
+                .unwrap_or(0);
+            let mut pdus = Vec::new();
+            for instance in frame.descendants().filter(|n| {
+                n.is_element()
+                    && matches!(
+                        n.tag_name().name(),
+                        "PDU-INSTANCE" | "PDU-TRIGGERING" | "PDU-REF"
+                    )
+            }) {
+                let Some(reference) = child_text(instance, "PDU-REF").or_else(|| {
+                    (instance.tag_name().name() == "PDU-REF")
+                        .then(|| instance.text())
+                        .flatten()
+                        .map(str::to_string)
+                }) else {
+                    continue;
+                };
+                let pdu_name = ref_tail(&reference);
+                let Some(pdu_node) = pdu_nodes.get(&pdu_name) else {
+                    continue;
+                };
+                let start_bit = number(instance, "BIT-POSITION")
+                    .or_else(|| number(instance, "START-POSITION"))
+                    .unwrap_or(0.0) as usize;
+                let mut pdu = EthPdu {
+                    name: pdu_name,
+                    length: child_text(*pdu_node, "BYTE-LENGTH")
+                        .or_else(|| child_text(*pdu_node, "LENGTH"))
+                        .and_then(|value| value.parse::<usize>().ok())
+                        .unwrap_or(8),
+                    start_bit,
+                    signals: Vec::new(),
+                };
+                for signal_instance in pdu_node
+                    .descendants()
+                    .filter(|n| n.is_element() && n.tag_name().name() == "SIGNAL-INSTANCE")
+                {
+                    let Some(reference) = child_text(signal_instance, "SIGNAL-REF") else {
+                        continue;
+                    };
+                    let signal_name = ref_tail(&reference);
+                    let Some(signal_node) = signal_nodes.get(&signal_name) else {
+                        continue;
+                    };
+                    let size = number(signal_instance, "BIT-LENGTH")
+                        .or_else(|| number(*signal_node, "BIT-LENGTH"))
+                        .or_else(|| number(*signal_node, "LENGTH"))
+                        .unwrap_or(1.0) as usize;
+                    pdu.signals.push(EthSignal {
+                        name: signal_name,
+                        start_bit: number(signal_instance, "BIT-POSITION").unwrap_or(0.0) as usize,
+                        size,
+                        big_endian: child_text(*signal_node, "IS-BIG-ENDIAN")
+                            .is_some_and(|value| value.eq_ignore_ascii_case("true")),
+                        signed: child_text(*signal_node, "IS-SIGNED")
+                            .is_some_and(|value| value.eq_ignore_ascii_case("true")),
+                        ..Default::default()
+                    });
+                }
+                pdus.push(pdu);
+            }
+            db.frames.push(EthFrameDef {
+                name,
+                cluster: cluster.clone(),
+                vlan: None,
+                length,
+                ethertype_hint: None,
+                pdus,
+            });
+        }
+        if db.frames.is_empty() {
+            let ethernet = root.descendants().any(|node| {
+                node.has_tag_name("PROTOCOL")
+                    && node
+                        .text()
+                        .is_some_and(|text| text.trim().eq_ignore_ascii_case("ETHERNET"))
+            }) || root.descendants().any(|node| {
+                matches!(
+                    node.tag_name().name(),
+                    "SERVICE-INTERFACE" | "PROVIDED-SERVICE-INSTANCE"
+                )
+            });
+            if db.clusters.is_empty() || !ethernet {
+                return Err("FIBEX has no Ethernet FRAME elements".into());
+            }
         }
         Ok(db)
     }
@@ -486,9 +821,26 @@ fn read_text_table(compu: Node) -> Vec<(i64, String)> {
     out
 }
 
+/// Decodes the signal table of a PDU-only object against one UDP payload.
+pub fn decode_pdu_signals(pdu: &EthPdu, payload: &[u8]) -> Vec<(String, f64)> {
+    let mut out = Vec::new();
+    for signal in &pdu.signals {
+        let Some(raw) = extract_bits(payload, signal.start_bit, signal.size, signal.big_endian)
+        else {
+            continue;
+        };
+        let physical = if signal.signed {
+            sign_extend(raw, signal.size) as f64 * signal.factor + signal.offset
+        } else {
+            raw as f64 * signal.factor + signal.offset
+        };
+        out.push((signal.name.clone(), physical));
+    }
+    out
+}
+
 /// AUTOSAR bit positions start at the least-significant bit. This mirrors
 /// the DBC little-endian walk; big-endian starts at the signal's MSB.
-#[cfg(test)]
 fn extract_bits(data: &[u8], start: usize, size: usize, big_endian: bool) -> Option<u64> {
     if size == 0 || size > 64 {
         return None;
@@ -510,7 +862,6 @@ fn extract_bits(data: &[u8], start: usize, size: usize, big_endian: bool) -> Opt
     Some(raw)
 }
 
-#[cfg(test)]
 fn sign_extend(raw: u64, size: usize) -> i64 {
     if size >= 64 {
         raw as i64
@@ -533,6 +884,11 @@ fn is_ethernet_frame(node: Node) -> bool {
 
 fn short_name(node: Node) -> String {
     child_text(node, "SHORT-NAME").unwrap_or_default()
+}
+
+fn short_name_opt(node: Node) -> Option<String> {
+    let name = short_name(node);
+    (!name.is_empty()).then_some(name)
 }
 
 fn child_text(node: Node, tag: &str) -> Option<String> {
@@ -689,5 +1045,112 @@ mod multi_cluster_tests {
         assert_eq!(b.frames[0].vlan, Some(200));
 
         assert!(EthDb::parse_cluster(TWO, "Missing").is_err());
+    }
+
+    #[test]
+    fn nm_decode_matches_endpoint_and_decodes_signals() {
+        let db = EthDb {
+            pdus: vec![EthPdu {
+                name: "Nm".into(),
+                length: 8,
+                start_bit: 0,
+                signals: vec![EthSignal {
+                    name: "Repeat".into(),
+                    start_bit: 0,
+                    size: 1,
+                    factor: 1.0,
+                    ..Default::default()
+                }],
+            }],
+            endpoints: vec![EthEndpoint {
+                name: "Sock".into(),
+                cluster: "EthA".into(),
+                ip: "192.168.1.10".into(),
+                port: 50001,
+                protocol: "UDP".into(),
+                connector: String::new(),
+                pdu: "Nm".into(),
+            }],
+            ..Default::default()
+        };
+        let (pdu, signals) = db
+            .decode_nm("192.168.1.10", "192.168.1.255", 50001, 50002, &[1])
+            .expect("NM match");
+        assert_eq!(pdu, "Nm");
+        assert_eq!(signals, [("Repeat".to_string(), 1.0)]);
+    }
+
+    #[test]
+    fn pdu_only_arxml_keeps_pdus_and_endpoints() {
+        let text = r#"<?xml version="1.0"?>
+<AUTOSAR xmlns="http://autosar.org/schema/r4.0">
+ <AR-PACKAGES><AR-PACKAGE><SHORT-NAME>P</SHORT-NAME><ELEMENTS>
+  <ETHERNET-CLUSTER><SHORT-NAME>EthA</SHORT-NAME>
+   <PDU-TRIGGERINGS>
+    <PDU-TRIGGERING><SHORT-NAME>trig</SHORT-NAME>
+     <I-PDU-REF>/P/Nm</I-PDU-REF>
+    </PDU-TRIGGERING>
+   </PDU-TRIGGERINGS>
+  </ETHERNET-CLUSTER>
+  <NM-PDU><SHORT-NAME>Nm</SHORT-NAME><LENGTH>8</LENGTH>
+   <I-SIGNAL-TO-I-PDU-MAPPINGS>
+    <I-SIGNAL-TO-I-PDU-MAPPING><SHORT-NAME>m</SHORT-NAME>
+     <I-SIGNAL-REF>/P/Repeat</I-SIGNAL-REF>
+     <START-POSITION>0</START-POSITION>
+     <PACKING-BYTE-ORDER>MOST-SIGNIFICANT-BYTE-LAST</PACKING-BYTE-ORDER>
+    </I-SIGNAL-TO-I-PDU-MAPPING>
+   </I-SIGNAL-TO-I-PDU-MAPPINGS>
+  </NM-PDU>
+  <I-SIGNAL><SHORT-NAME>Repeat</SHORT-NAME><LENGTH>1</LENGTH></I-SIGNAL>
+  <NETWORK-ENDPOINT><SHORT-NAME>Nep</SHORT-NAME>
+   <NETWORK-ENDPOINT-ADDRESSES><IPV-4-CONFIGURATION>
+    <IPV-4-ADDRESS>192.168.1.10</IPV-4-ADDRESS>
+   </IPV-4-CONFIGURATION></NETWORK-ENDPOINT-ADDRESSES>
+  </NETWORK-ENDPOINT>
+  <SOCKET-ADDRESS><SHORT-NAME>Sock</SHORT-NAME>
+   <APPLICATION-ENDPOINT>
+    <NETWORK-ENDPOINT-REF>/P/Nep</NETWORK-ENDPOINT-REF>
+    <TP-CONFIGURATION><UDP-TP><UDP-TP-PORT>
+     <PORT-NUMBER>50001</PORT-NUMBER>
+    </UDP-TP-PORT></UDP-TP></TP-CONFIGURATION>
+   </APPLICATION-ENDPOINT>
+  </SOCKET-ADDRESS>
+ </ELEMENTS></AR-PACKAGE></AR-PACKAGES>
+</AUTOSAR>"#;
+        let db = EthDb::parse(text).expect("PDU-only ARXML");
+        assert_eq!(db.frames.len(), 0);
+        assert_eq!(db.clusters[0].name, "EthA");
+        assert_eq!(db.pdus[0].name, "Nm");
+        assert_eq!(db.pdus[0].signals[0].name, "Repeat");
+        assert_eq!(db.endpoints[0].name, "Sock");
+        assert_eq!(db.endpoints[0].ip, "192.168.1.10");
+        assert_eq!(db.endpoints[0].port, 50001);
+        assert_eq!(db.endpoints[0].protocol, "UDP");
+    }
+
+    #[test]
+    fn fibex_frames_pdus_and_signals_are_read() {
+        let text = r#"<?xml version="1.0"?>
+<FIBEX>
+  <CHANNELS><CHANNEL><SHORT-NAME>EthA</SHORT-NAME></CHANNEL></CHANNELS>
+  <SIGNALS><SIGNAL><SHORT-NAME>Speed</SHORT-NAME><BIT-LENGTH>16</BIT-LENGTH></SIGNAL></SIGNALS>
+  <PDUS><PDU><SHORT-NAME>P1</SHORT-NAME><BYTE-LENGTH>8</BYTE-LENGTH>
+    <SIGNAL-INSTANCES><SIGNAL-INSTANCE><SIGNAL-REF>/Speed</SIGNAL-REF>
+      <BIT-POSITION>8</BIT-POSITION><BIT-LENGTH>16</BIT-LENGTH>
+    </SIGNAL-INSTANCE></SIGNAL-INSTANCES>
+  </PDU></PDUS>
+  <FRAMES><FRAME><SHORT-NAME>F1</SHORT-NAME><BYTE-LENGTH>16</BYTE-LENGTH>
+    <PDU-INSTANCES><PDU-INSTANCE><PDU-REF>/P1</PDU-REF><BIT-POSITION>0</BIT-POSITION>
+    </PDU-INSTANCE></PDU-INSTANCES>
+  </FRAME></FRAMES>
+</FIBEX>"#;
+        let db = EthDb::parse(text).expect("FIBEX");
+        assert_eq!(db.clusters[0].name, "EthA");
+        assert_eq!(db.frames.len(), 1);
+        assert_eq!(db.frames[0].length, 16);
+        assert_eq!(db.frames[0].pdus[0].name, "P1");
+        assert_eq!(db.frames[0].pdus[0].signals[0].name, "Speed");
+        assert_eq!(db.frames[0].pdus[0].signals[0].start_bit, 8);
+        assert_eq!(db.frames[0].pdus[0].signals[0].size, 16);
     }
 }

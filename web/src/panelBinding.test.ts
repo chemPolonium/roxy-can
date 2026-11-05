@@ -7,6 +7,7 @@ import {
   panelButtonCapability,
   panelGaugeArc,
   panelNumberCapability,
+  panelSetpointCapability,
   panelSourceOptions,
   panelToggleCapability,
   panelLampLit,
@@ -17,10 +18,12 @@ import {
   resolvePanelSource,
   runningPanelActions,
   type PanelActionContext,
+  type PanelView,
 } from "./panelBinding";
 import type {
   PanelBand,
   PanelBar,
+  PanelButton,
   PanelLamp,
   PanelSetpoint,
   PanelToggle,
@@ -117,129 +120,85 @@ describe("panel bindings", () => {
   it("reports why a button cannot act", () => {
     const ctx: PanelActionContext = {
       online: true,
-      measuring: false,
+      measuring: true,
       paused: false,
       scriptActions: new Set(["Go"]),
     };
-    const view = {
+    const empty: PanelView = { signals: [], sysvars: [] };
+    const button = (over: Partial<PanelButton>): PanelButton => ({
+      id: "b",
+      kind: "button",
+      label: "B",
+      action: "none",
+      x: 0,
+      y: 0,
+      w: 20,
+      h: 6,
+      ...over,
+    });
+    expect(panelButtonCapability(button({}), empty, ctx)).toMatchObject({
+      enabled: false,
+      reason: "No action configured",
+    });
+
+    expect(
+      panelButtonCapability(button({ action: "script" }), empty, ctx).reason,
+    ).toBe("No script action name");
+    expect(
+      panelButtonCapability(button({ action: "script", script: "Go" }), empty, {
+        ...ctx,
+        measuring: false,
+      }).reason,
+    ).toContain("needs a running measurement");
+    expect(
+      panelButtonCapability(
+        button({ action: "script", script: "Missing" }),
+        empty,
+        ctx,
+      ).reason,
+    ).toContain("No running script");
+    expect(
+      panelButtonCapability(button({ action: "script", script: "Go" }), empty, ctx)
+        .enabled,
+    ).toBe(true);
+
+    expect(
+      panelButtonCapability(button({ action: "send" }), empty, ctx).reason,
+    ).toBe("No message configured");
+    const frame = {
+      protocol: "can" as const,
+      channel: 0,
+      id: 0x100,
+      extended: false,
+      data: "11 22",
+    };
+    expect(
+      panelButtonCapability(button({ action: "send", frame }), empty, ctx).reason,
+    ).toContain("Unknown CAN bus");
+    const canView: PanelView = {
       signals: [],
       sysvars: [],
       frameBuses: [{ index: 0, name: "CAN1" }],
-      frBuses: [{ index: 0, name: "FR0" }],
-      ethBuses: [{ index: 0, name: "ETH0" }],
-      ethFrames: [{ bus: 0, name: "EthFrame", length: 2 }],
     };
-    const button = (action: string, scriptName = "") =>
-      ({
-        id: "b",
-        kind: "button" as const,
-        label: "B",
-        action: action as never,
-        script: scriptName,
-        x: 0,
-        y: 0,
-        w: 20,
-        h: 6,
-      });
     expect(
-      panelButtonCapability(button("script", "Go"), view, ctx),
-    ).toMatchObject({
-      enabled: false,
-    });
-    expect(
-      panelButtonCapability(button("script", "Go"), view, {
-        ...ctx,
-        measuring: true,
-      }).enabled,
+      panelButtonCapability(button({ action: "send", frame }), canView, ctx)
+        .enabled,
     ).toBe(true);
     expect(
-      panelButtonCapability(button("script", "Missing"), view, {
-        ...ctx,
-        measuring: true,
-      }).reason,
-    ).toContain("No running script");
-    const preset = {
-      ...button("none"),
-      writes: [{ source: "0:256:EngineSpeed", value: 1 }],
-    };
-    expect(
-      panelButtonCapability({ ...button("none"), writes: [] }, view, {
-        ...ctx,
-        measuring: true,
-      }).reason,
-    ).toBe("No signal writes");
-    expect(panelButtonCapability(preset, view, ctx).reason).toBe(
-      "Start the measurement first",
-    );
-    expect(
-      panelButtonCapability(preset, view, { ...ctx, measuring: true }).enabled,
-    ).toBe(true);
-    expect(
-      panelButtonCapability(preset, view, { ...ctx, online: false }).reason,
-    ).toContain("No connection");
-
-    const send = {
-      ...button("send"),
-      frame: { protocol: "can" as const, channel: 0, id: 0x7df, extended: false, data: "02 10 03" },
-    };
-    expect(panelButtonCapability(button("send"), view, ctx).reason).toBe(
-      "No message configured",
-    );
-    expect(
       panelButtonCapability(
-        { ...send, frame: { ...send.frame, channel: 9 } },
-        view,
+        button({ action: "send", frame: { ...frame, data: "123" } }),
+        canView,
         ctx,
       ).reason,
-    ).toBe("Unknown CAN bus");
+    ).toContain("hex bytes");
     expect(
-      panelButtonCapability(
-        { ...send, frame: { ...send.frame, data: "0" } },
-        view,
-        ctx,
-      ).reason,
-    ).toContain("hex");
-    expect(panelButtonCapability(send, view, ctx).reason).toBe(
-      "Start the measurement first",
-    );
-    expect(panelButtonCapability(send, view, { ...ctx, measuring: true }).enabled).toBe(
-      true,
-    );
-
-    const fr = {
-      ...button("send"),
-      frame: { protocol: "fr" as const, bus: 0, slot: 25, data: "01 02" },
-    };
-    expect(panelButtonCapability(fr, view, ctx).reason).toBe(
-      "Start the measurement first",
-    );
-    expect(
-      panelButtonCapability({ ...fr, frame: { ...fr.frame, slot: 0 } }, view, ctx)
+      panelButtonCapability(button({}), empty, { ...ctx, online: false })
         .reason,
-    ).toContain("Slot");
-    const eth = {
-      ...button("send"),
-      frame: {
-        protocol: "eth" as const,
-        bus: 0,
-        frame: "EthFrame",
-        data: "01 02",
-      },
-    };
-    expect(
-      panelButtonCapability(eth, view, { ...ctx, measuring: true }).enabled,
-    ).toBe(true);
-    expect(
-      panelButtonCapability(
-        { ...eth, frame: { ...eth.frame, data: "01" } },
-        view,
-        ctx,
-      ).reason,
-    ).toContain("2 payload bytes");
+    ).toContain("No connection");
   });
 
-  it("reports unbound or unknown value/toggle sources", () => {
-    const view = { signals: [], sysvars: [sysvar(0)] };
+  it("reports unbound or unknown value/toggle/setpoint sources", () => {
+    const view: PanelView = { signals: [], sysvars: [sysvar(0)] };
     const value = (source: string): PanelValue => ({
       id: "v",
       kind: "value",
@@ -261,6 +220,21 @@ describe("panel bindings", () => {
       w: 16,
       h: 5,
     });
+    const setpoint = (over: Partial<PanelSetpoint> = {}): PanelSetpoint => ({
+      id: "n",
+      kind: "setpoint",
+      label: "N",
+      target: "sysvar",
+      sysvar: "",
+      source: "",
+      digits: 1,
+      step: 1,
+      x: 0,
+      y: 0,
+      w: 18,
+      h: 6,
+      ...over,
+    });
     expect(panelValueCapability(value(""), resolvePanelSource("", view)).reason).toBe(
       "No source bound",
     );
@@ -278,32 +252,50 @@ describe("panel bindings", () => {
       "Unknown sysvar",
     );
     expect(panelToggleCapability(toggle("Bench::Ready"), view).enabled).toBe(true);
-    const numeric = (ref: string): PanelSetpoint => ({
-      id: "n",
-      kind: "setpoint",
-      label: "N",
-      target: "sysvar",
-      sysvar: ref,
-      source: "",
-      digits: 1,
-      step: 1,
-      x: 0,
-      y: 0,
-      w: 18,
-      h: 6,
-    });
-    expect(panelNumberCapability(numeric(""), view).reason).toBe(
+    expect(panelNumberCapability(setpoint(), view).reason).toBe(
       "No system variable bound",
     );
-    expect(panelNumberCapability(numeric("Bench::Nope"), view).reason).toContain(
-      "Unknown sysvar",
-    );
-    expect(panelNumberCapability(numeric("Bench::Ready"), view).enabled).toBe(
-      true,
-    );
+    expect(
+      panelNumberCapability(setpoint({ sysvar: "Bench::Nope" }), view).reason,
+    ).toContain("Unknown sysvar");
+    expect(
+      panelNumberCapability(setpoint({ sysvar: "Bench::Ready" }), view).enabled,
+    ).toBe(true);
     expect(clampPanelNumber(9000, 0, 500)).toBe(500);
     expect(clampPanelNumber(-5, 0, 500)).toBe(0);
     expect(clampPanelNumber(12.5, null, null)).toBe(12.5);
+
+    const ctx: PanelActionContext = {
+      online: true,
+      measuring: true,
+      paused: false,
+      scriptActions: new Set(),
+    };
+    const writeView: PanelView = {
+      signals: [],
+      sysvars: [],
+      writeTargets: [
+        { key: "0:256:EngineSpeed", min: 0, max: 7000, unit: "rpm" },
+      ],
+    };
+    expect(panelSetpointCapability("derived:speed", writeView, ctx).reason).toBe(
+      "Derived signals are read-only",
+    );
+    expect(panelSetpointCapability("  ", writeView, ctx).reason).toBe(
+      "No signal bound",
+    );
+    expect(
+      panelSetpointCapability("0:256:Missing", writeView, ctx).reason,
+    ).toContain("Unknown signal");
+    expect(
+      panelSetpointCapability("0:256:EngineSpeed", writeView, {
+        ...ctx,
+        measuring: false,
+      }).reason,
+    ).toBe("Start the measurement first");
+    expect(
+      panelSetpointCapability("0:256:EngineSpeed", writeView, ctx).enabled,
+    ).toBe(true);
   });
 
   it("picks the first colour band the value fits", () => {
@@ -404,75 +396,5 @@ describe("panel bindings", () => {
     expect(panelGaugeArc(1)).toBe("M6 50 A44 44 0 0 1 94.00 50.00");
     expect(panelGaugeArc(2)).toBe(panelGaugeArc(1));
     expect(panelGaugeArc(-1)).toBe(panelGaugeArc(0));
-  });
-
-  it("gates setpoints on a writable signal and a running measurement", () => {
-    const setpoint: PanelSetpoint = {
-      id: "s",
-      kind: "setpoint",
-      label: "Speed",
-      target: "signal",
-      sysvar: "",
-      source: "0:256:EngineSpeed",
-      digits: 0,
-      step: 1,
-      x: 0,
-      y: 0,
-      w: 18,
-      h: 6,
-    };
-    const view = {
-      signals: [],
-      sysvars: [],
-      writeTargets: [
-        { key: "0:256:EngineSpeed", min: 0, max: 8000, unit: "rpm" },
-      ],
-    };
-    const ctx: PanelActionContext = {
-      online: true,
-      measuring: true,
-      paused: false,
-      scriptActions: new Set(),
-    };
-    expect(panelWidgetCapability(setpoint, view, ctx).enabled).toBe(true);
-    expect(
-      panelWidgetCapability(setpoint, { ...view, writeTargets: [] }, ctx).reason,
-    ).toContain("Unknown signal");
-    expect(
-      panelWidgetCapability({ ...setpoint, source: "" }, view, ctx).reason,
-    ).toBe("No signal bound");
-    expect(
-      panelWidgetCapability(setpoint, view, { ...ctx, measuring: false }).reason,
-    ).toContain("measurement");
-    const frView = {
-      ...view,
-      writeTargets: [
-        { key: "fr:0:13:CarSpeed", min: 0, max: 250, unit: "km/h" },
-      ],
-    };
-    expect(
-      panelWidgetCapability(
-        { ...setpoint, source: "fr:0:13:CarSpeed" },
-        frView,
-        ctx,
-      ).enabled,
-    ).toBe(true);
-    const ethView = {
-      ...view,
-      writeTargets: [
-        { key: "eth:0:Frame:Sig", min: null, max: null, unit: "" },
-      ],
-    };
-    expect(
-      panelWidgetCapability(
-        { ...setpoint, source: "eth:0:Frame:Sig" },
-        ethView,
-        ctx,
-      ).enabled,
-    ).toBe(true);
-    expect(
-      panelWidgetCapability({ ...setpoint, source: "derived:1" }, view, ctx)
-        .reason,
-    ).toContain("read-only");
   });
 });

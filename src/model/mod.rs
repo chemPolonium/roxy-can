@@ -89,6 +89,7 @@ model_id!(SystemSignalId, u32);
 model_id!(SignalGroupId, u32);
 model_id!(TransformationId, u32);
 model_id!(E2eProtectionId, u32);
+model_id!(ServiceId, u32);
 model_id!(BaseTypeId, u32);
 model_id!(CompuMethodId, u32);
 
@@ -244,6 +245,40 @@ pub struct Ecu {
     pub description: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mac: Option<[u8; 6]>,
+}
+
+/// Stable SOME/IP service identity inside the communication model. Field
+/// layouts stay in the ARXML catalog; this is the cross-referenceable entity.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Service {
+    pub id: ServiceId,
+    pub cluster: ClusterId,
+    pub name: String,
+    #[serde(default)]
+    pub major: u8,
+    #[serde(default)]
+    pub methods: Vec<ServiceMember>,
+    #[serde(default)]
+    pub events: Vec<ServiceMember>,
+    #[serde(default)]
+    pub instances: Vec<ServiceInstance>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ServiceMember {
+    pub id: u16,
+    pub name: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ServiceInstance {
+    pub id: u16,
+    #[serde(default)]
+    pub major: u8,
+    #[serde(default)]
+    pub minor: u32,
+    #[serde(default)]
+    pub eventgroups: Vec<u16>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -960,6 +995,8 @@ pub struct DecodePlan {
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Comm {
     pub clusters: BTreeMap<ClusterId, Cluster>,
+    #[serde(default)]
+    pub services: Vec<Service>,
     pub networks: BTreeMap<NetworkId, Network>,
     pub ecus: BTreeMap<EcuId, Ecu>,
     pub connectors: BTreeMap<ConnectorId, Connector>,
@@ -1093,6 +1130,32 @@ impl Comm {
 
     pub fn frames_in_cluster(&self, cluster: ClusterId) -> impl Iterator<Item = &Frame> {
         self.frames.values().filter(move |f| f.cluster == cluster)
+    }
+
+    /// The stable SOME/IP service entity for one cluster + service id.
+    pub fn service(&self, cluster: ClusterId, id: u16) -> Option<&Service> {
+        self.services
+            .iter()
+            .find(|service| service.cluster == cluster && service.id.0 == u32::from(id))
+    }
+
+    pub fn services_in_cluster(&self, cluster: ClusterId) -> impl Iterator<Item = &Service> {
+        self.services
+            .iter()
+            .filter(move |service| service.cluster == cluster)
+    }
+
+    /// ECU by its document name; DBC nodes and ARXML ECUs meet here.
+    pub fn ecu_by_name(&self, name: &str) -> Option<&Ecu> {
+        self.ecus
+            .values()
+            .find(|ecu| ecu.name.eq_ignore_ascii_case(name))
+    }
+
+    /// Resolution used by node/role UI: a DBC node name maps to the same
+    /// ECU identity the ARXML model uses when one exists.
+    pub fn ecu_for_node(&self, name: &str) -> Option<EcuId> {
+        self.ecu_by_name(name).map(|ecu| ecu.id)
     }
 
     pub fn frame_by_name(&self, cluster: ClusterId, name: &str) -> Option<&Frame> {

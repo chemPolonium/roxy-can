@@ -32,6 +32,7 @@ export interface State {
   tracePaused: boolean;
   recording: boolean;
   recordFile: string;
+  recordEthFile: string;
   recordFilter: string;
   mode: string;
   markers: number[];
@@ -55,6 +56,11 @@ export interface State {
   replayFiles: string[];
   replayRecordings: ReplayRecording[];
   workspace: unknown;
+  panelPages: unknown[];
+  someip: SomeIpEvent[];
+  someipIssues: string[];
+  someipServices: SomeIpService[];
+  someipSubscriptions: SomeIpSubscription[];
   workspaceRev: number;
   reference: {
     name: string;
@@ -77,6 +83,8 @@ export interface State {
   frTx: FrTxEntry[];
   blocks: ReplayBlock[];
   triggers: TriggerEntry[];
+  /// Recent trigger edges, oldest first (runtime only).
+  triggerFires: TriggerFire[];
   triggerLimits: TriggerLimits;
   sysvars: SysVar[];
   monitor: MonitorRow[];
@@ -152,7 +160,10 @@ export interface Catalog {
 export interface ReplayMapRow {
   raw: number;
   count: number;
+  /// The bus the core actually uses; null means these frames are dropped.
   target: number | null;
+  /// Whether the project stores a deliberate choice for this channel.
+  configured: boolean;
 }
 
 export interface ReplayMap {
@@ -187,6 +198,20 @@ export interface FlexRayBusDetail {
 
 export interface EthernetBusDetail {
   clusters: number;
+  pdus: number;
+  endpoints: number;
+  pduNames: string[];
+  endpointList: EthEndpoint[];
+  attached?: string;
+}
+
+export interface EthEndpoint {
+  name: string;
+  ip: string;
+  port: number;
+  protocol: string;
+  connector: string;
+  pdu: string;
 }
 
 export interface HwAttachment {
@@ -202,6 +227,7 @@ export interface BusNode {
   name: string;
   simulated: boolean;
   entries: number;
+  ecu?: number;
 }
 
 export interface Bus {
@@ -227,8 +253,15 @@ export interface HwChannel {
 export interface Hardware {
   channels: HwChannel[];
   frChannels: HwChannel[];
+  ethChannels: EthChannel[];
   error: string;
   frError: string;
+  ethError: string;
+}
+
+export interface EthChannel {
+  device: string;
+  name: string;
 }
 
 export interface ReplayBlock {
@@ -278,6 +311,39 @@ export interface TriggerEntry {
   actionKind: string;
   sendCh: number;
   sendId: number;
+  cooldownMs: number;
+  maxFires: number;
+  sysVarKey: string;
+  sysVarValue: number;
+  scriptName: string;
+  scriptValue: number | null;
+  sendFrame: string;
+  sendData: string;
+  someipMethod?: number;
+  someipClient?: number;
+  someipSession?: number;
+  someipType?: number;
+  someipTransport?: "udp" | "tcp";
+  someipHost?: string;
+  someipPort?: number;
+  condSomeipMethod?: number;
+  condSomeipType?: number;
+  someipValues?: Record<string, number>;
+  offset: number;
+  mask: number;
+  value: number;
+  vlan: number | null;
+  preFrames: number | null;
+  postFrames: number | null;
+}
+
+export interface TriggerFire {
+  index: number;
+  atUs: number;
+  text: string;
+  action: string;
+  result: string;
+  ok: boolean;
 }
 
 export interface ScriptFunctionHelp {
@@ -471,6 +537,108 @@ export interface TriggerEdit {
   action: string;
   sendCh: number;
   sendId: number;
+  cooldownMs: number;
+  maxFires: number;
+  sysVarKey: string;
+  sysVarValue: number | null;
+  scriptName: string;
+  scriptValue: number | null;
+  sendFrame: string;
+  sendData: string;
+  someipMethod?: number;
+  someipClient?: number;
+  someipSession?: number;
+  someipType?: number;
+  someipTransport?: "udp" | "tcp";
+  someipHost?: string;
+  someipPort?: number;
+  condSomeipMethod?: number;
+  condSomeipType?: number;
+  someipValues?: Record<string, number>;
+  offset: number;
+  mask: number;
+  value: number;
+  vlan: number | null;
+  preFrames: number | null;
+  postFrames: number | null;
+}
+
+export interface SomeIpEvent {
+  tUs: number;
+  bus: number;
+  tx: boolean;
+  transport: string;
+  src: string;
+  dst: string;
+  srcPort: number;
+  dstPort: number;
+  service: number;
+  method: number;
+  messageType: number;
+  returnCode: number;
+  client: number;
+  session: number;
+  interfaceVersion: number;
+  protocolVersion: number;
+  length: number;
+  payload: number[];
+  decoded: { name: string; text: string; numeric?: number | null }[];
+  decodeError?: string;
+  sd: SdEntry[] | null;
+}
+
+export interface SomeIpService {
+  id: number;
+  name: string;
+  bus: number;
+  busName: string;
+  major: number;
+  source: string;
+  methods: SomeIpMember[];
+  events: SomeIpMember[];
+  instances: SomeIpInstance[];
+}
+
+export interface SomeIpMember {
+  id: number;
+  name: string;
+  fields: string[];
+}
+
+export interface SomeIpSubscription {
+  bus: number;
+  service: number;
+  instance: number;
+  eventgroup: number;
+  ip: string;
+  port: number;
+  ttl: number;
+}
+
+export interface SomeIpInstance {
+  id: number;
+  major: number;
+  minor: number;
+  eventgroups: number[];
+  endpoint: string;
+}
+
+export interface SdEntry {
+  kind: number;
+  service: number;
+  instance: number;
+  major: number;
+  ttl: number;
+  minor: number;
+  eventgroup: number | null;
+  endpoints: SdEndpoint[];
+  configuration: string[];
+}
+
+export interface SdEndpoint {
+  address: string;
+  port: number;
+  protocol: number;
 }
 
 export interface TxSource {
@@ -596,7 +764,8 @@ export type Command =
       type: "set_replay_channel";
       kind: string;
       raw: number;
-      target: number | null;
+      /// "same" clears the entry, "drop" is an explicit no-replay.
+      target: "same" | "drop" | number;
     }
   | { type: "record_toggle"; name: string | null; format: number | null }
   | { type: "set_record_settings"; name: string; format: number }
@@ -632,10 +801,6 @@ export type Command =
     }
   | { type: "panel_write_signal"; source: string; value: number }
   | {
-      type: "panel_write_signals";
-      writes: { source: string; value: number }[];
-    }
-  | {
       type: "panel_send_frame";
       channel: number;
       id: number;
@@ -660,6 +825,21 @@ export type Command =
       physical?: boolean;
       signals?: Record<string, number>;
     }
+  | {
+      type: "panel_send_someip";
+      bus: number;
+      service: number;
+      method: number;
+      client: number;
+      session: number;
+      message_type: number;
+      data: number[];
+      values?: Record<string, number>;
+      texts?: Record<string, string>;
+      transport?: "udp" | "tcp";
+      host?: string;
+      port?: number;
+    }
   | { type: "set_message_expanded"; key: string; on: boolean }
   | { type: "open_project"; path: string }
   | { type: "create_sample_project"; parent: string }
@@ -669,7 +849,7 @@ export type Command =
   | { type: "add_replay_file"; path: string }
   | { type: "remove_replay_source"; path: string; folder: boolean }
   | { type: "refresh_replay_sources" }
-  | { type: "save_project"; path: string | null }
+  | { type: "save_project"; path: string | null; panels: unknown[] }
   | { type: "set_sys_var"; namespace: string; name: string; value: number }
   | {
       type: "define_sys_var";
@@ -826,6 +1006,8 @@ export type Command =
     }
   | { type: "attach_hardware"; bus: number; driver: string; index: number }
   | { type: "detach_hardware"; bus: number }
+  | { type: "attach_eth_port"; bus: number; device: string }
+  | { type: "detach_eth_port"; bus: number }
   | { type: "attach_fr_hardware"; bus: number; index: number }
   | { type: "detach_fr_hardware"; bus: number }
   | { type: "refresh_hardware" }
@@ -890,10 +1072,20 @@ export type Command =
   | { type: "add_entry"; ch: number; id: number }
   | { type: "remove_entry"; ch: number; id: number }
   | { type: "simulate_bus_nodes"; ch: number }
-  | { type: "add_trigger"; kind: string }
+  | {
+      type: "add_trigger";
+      kind: string;
+      ch?: number;
+      id?: number;
+      ext?: boolean;
+      bus?: number;
+      slot?: number;
+      signal_key?: string;
+    }
   | { type: "set_trigger_enabled"; index: number; on: boolean }
   | { type: "remove_trigger"; index: number }
   | { type: "rearm_triggers" }
+  | { type: "rearm_trigger"; index: number }
   | {
       type: "edit_trigger";
       index: number;
@@ -911,6 +1103,30 @@ export type Command =
       action: string;
       send_ch: number;
       send_id: number;
+      sys_var_key: string;
+      sys_var_value: number | null;
+      script_name: string;
+      script_value: number | null;
+      send_frame: string;
+      send_data: string;
+      someip_method?: number;
+      someip_client?: number;
+      someip_session?: number;
+      someip_type?: number;
+      cond_someip_method?: number;
+      cond_someip_type?: number;
+      someip_values?: Record<string, number>;
+  someip_transport?: "udp" | "tcp";
+  someip_host?: string;
+  someip_port?: number;
+      offset: number;
+      mask: number;
+      value: number;
+      vlan: number | null;
+      cooldown_ms: number;
+      max_fires: number;
+      pre_frames: number | null;
+      post_frames: number | null;
     }
   | {
       type: "set_trigger_limits";

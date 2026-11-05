@@ -5,13 +5,12 @@ import type {
   BusDescription,
   Hardware,
   HwChannel,
-  ReplayMap,
 } from "../types";
 import { HostPathPick, fileBrowserOpen } from "./FileBrowser";
 
 interface Props {
   buses: Bus[];
-  replayMap: ReplayMap;
+  projectFolder: string | null;
   realBus: boolean;
   wireLocked: boolean;
   hardware: Hardware | null;
@@ -44,7 +43,8 @@ interface Props {
   onDetach: (bus: number) => void;
   onAttachFr: (bus: number, index: number) => void;
   onDetachFr: (bus: number) => void;
-  onSetReplay: (kind: string, raw: number, target: number | null) => void;
+  onAttachEth: (bus: number, device: string) => void;
+  onDetachEth: (bus: number) => void;
   onSetReal: (real: boolean) => void;
   onClose: () => void;
 }
@@ -99,6 +99,7 @@ function DescriptionList({
   onError,
   accept,
   allowCluster,
+  initialPath,
 }: {
   bus: number;
   kind: string;
@@ -110,6 +111,7 @@ function DescriptionList({
   onError: (message: string) => void;
   accept: string;
   allowCluster: boolean;
+  initialPath: string | null;
 }) {
   const [pending, setPending] = useState<string | null>(null);
   const matches =
@@ -194,6 +196,7 @@ function DescriptionList({
       <HostPathPick
         label="Add description…"
         accept={accept}
+        initialPath={initialPath}
         onError={onError}
         onPick={pick}
       />
@@ -204,6 +207,7 @@ function DescriptionList({
 function BusCard({
   bus,
   channels,
+  projectFolder,
   realBus,
   loading,
   onAttach,
@@ -220,6 +224,7 @@ function BusCard({
 }: {
   bus: Bus;
   channels: HwChannel[];
+  projectFolder: string | null;
   realBus: boolean;
   loading: boolean;
   onAttach: (bus: number, driver: string, index: number) => void;
@@ -398,6 +403,7 @@ function BusCard({
         onError={onError}
         accept=".dbc,.arxml"
         allowCluster
+        initialPath={projectFolder}
       />
 
       {nodes.length > 0 && (
@@ -516,7 +522,7 @@ function BusCard({
 
 export function BusesModal({
   buses,
-  replayMap,
+  projectFolder,
   realBus,
   wireLocked,
   hardware,
@@ -539,7 +545,8 @@ export function BusesModal({
   onDetach,
   onAttachFr,
   onDetachFr,
-  onSetReplay,
+  onAttachEth,
+  onDetachEth,
   onSetReal,
   onClose,
 }: Props) {
@@ -661,8 +668,12 @@ export function BusesModal({
 
   const channels = hardware?.channels ?? [];
   const frChannels = hardware?.frChannels ?? [];
+  const ethChannels = hardware?.ethChannels ?? [];
   const attachedCount = buses.filter(
-    (bus) => bus.can?.attached || bus.flexray?.attached,
+    (bus) =>
+      bus.can?.attached ||
+      bus.flexray?.attached ||
+      bus.ethernet?.attached,
   ).length;
 
   return (
@@ -952,7 +963,7 @@ export function BusesModal({
               ? "Probing hardware…"
               : error
                 ? error
-                : `${channels.length} CAN hardware channels`}
+                : `${channels.length} CAN · ${frChannels.length} FR · ${ethChannels.length} Ethernet hardware channels`}
           </span>
         </div>
 
@@ -968,6 +979,7 @@ export function BusesModal({
               key={selectedCanBus.index}
               bus={selectedCanBus}
               channels={channels}
+              projectFolder={projectFolder}
               realBus={realBus}
               loading={loading}
               onAttach={onAttach}
@@ -1057,6 +1069,7 @@ export function BusesModal({
                 onError={onError}
                 accept=".xml,.arxml,.fibex"
                 allowCluster
+                initialPath={projectFolder}
               />
             </div>
           </section>
@@ -1073,7 +1086,9 @@ export function BusesModal({
               <strong>{selectedEthBus.name}</strong>
               <span>
                 {selectedEthBus.ethernet?.clusters ?? 0} clusters ·{" "}
-                {selectedEthBus.frames} frames
+                {selectedEthBus.frames} frames ·{" "}
+                {selectedEthBus.ethernet?.pdus ?? 0} PDUs ·{" "}
+                {selectedEthBus.ethernet?.endpoints ?? 0} endpoints
               </span>
               <button
                 type="button"
@@ -1082,6 +1097,96 @@ export function BusesModal({
               >
                 Remove bus
               </button>
+              <div class="eth-live">
+                <select
+                  value=""
+                  onChange={(event) => {
+                    const device = (event.target as HTMLSelectElement).value;
+                    if (device) onAttachEth(selectedEthBus.index, device);
+                  }}
+                  title={
+                    hardware?.ethError
+                      ? hardware.ethError
+                      : "Npcap interfaces; attaching starts live capture"
+                  }
+                >
+                  <option value="">Live port…</option>
+                  {(hardware?.ethChannels ?? []).map((channel) => (
+                    <option value={channel.device} key={channel.device}>
+                      {channel.name}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  type="button"
+                  disabled={!selectedEthBus.ethernet?.attached}
+                  title={
+                    selectedEthBus.ethernet?.attached
+                      ? "Detach the live Npcap port from this Ethernet bus"
+                      : "No live port is attached"
+                  }
+                  onClick={() => onDetachEth(selectedEthBus.index)}
+                >
+                  Detach
+                </button>
+                <span class="eth-live-state" title={selectedEthBus.ethernet?.attached ?? ""}>
+                  {selectedEthBus.ethernet?.attached
+                    ? `Attached: ${selectedEthBus.ethernet.attached}`
+                    : "No live port"}
+                </span>
+                {hardware?.ethError && (
+                  <span class="attach-warn">{hardware.ethError}</span>
+                )}
+              </div>
+              {selectedEthBus.frames === 0 &&
+                (selectedEthBus.ethernet?.pdus ?? 0) > 0 && (
+                  <p class="clusters-hint">
+                    PDU-only ARXML: frame decode is unavailable; PDUs and
+                    endpoints are listed as database objects.
+                  </p>
+                )}
+              {(selectedEthBus.ethernet?.pdus ?? 0) > 0 && (
+                <details class="eth-db">
+                  <summary>
+                    Database: {selectedEthBus.ethernet?.pdus ?? 0} PDUs ·{" "}
+                    {selectedEthBus.ethernet?.endpoints ?? 0} endpoints
+                  </summary>
+                  <div class="eth-db-grid">
+                    <section>
+                      <h4>PDUs</h4>
+                      <ul>
+                        {(selectedEthBus.ethernet?.pduNames ?? [])
+                          .slice(0, 40)
+                          .map((name) => (
+                            <li key={name} class="mono">
+                              {name}
+                            </li>
+                          ))}
+                      </ul>
+                    </section>
+                    <section>
+                      <h4>Endpoints</h4>
+                      <ul>
+                        {(selectedEthBus.ethernet?.endpointList ?? [])
+                          .slice(0, 40)
+                          .map((endpoint) => (
+                            <li
+                              key={`${endpoint.name}:${endpoint.ip}:${endpoint.port}`}
+                              title={endpoint.connector}
+                            >
+                              <span class="mono">{endpoint.name}</span>
+                              <span class="eth-endpoint">
+                                {endpoint.pdu ? `${endpoint.pdu} · ` : ""}
+                                {endpoint.protocol} {endpoint.ip || "—"}:
+                                {endpoint.port}
+                              </span>
+                            </li>
+                          ))}
+                      </ul>
+                    </section>
+                  </div>
+                </details>
+              )}
               <DescriptionList
                 bus={selectedEthBus.index}
                 kind="ethernet"
@@ -1091,107 +1196,14 @@ export function BusesModal({
                 onAdd={onAddDescription}
                 onRemove={onRemoveDescription}
                 onError={onError}
-                accept=".arxml"
+                accept=".arxml,.xml,.fibex"
                 allowCluster
+                initialPath={projectFolder}
               />
             </div>
           </section>
           )}
 
-          <section class="bus-proto replay-map">
-            <h3>Replay channel map</h3>
-            {replayMap.can.length === 0 &&
-            replayMap.fr.length === 0 &&
-            replayMap.eth.length === 0 ? (
-              <p class="hint">
-                Replay a log and the channels it contains are listed here.
-              </p>
-            ) : (
-              [
-                {
-                  kind: "can",
-                  title: "CAN channels in the log",
-                  rows: replayMap.can,
-                  targets: buses
-                    .filter((bus) => bus.kind === "can")
-                    .map((bus) => ({ id: bus.index, label: bus.name })),
-                  channel: (raw: number) => `Channel ${raw + 1}`,
-                },
-                {
-                  kind: "fr",
-                  title: "FlexRay channels in the log",
-                  rows: replayMap.fr,
-                  targets: buses
-                    .filter((bus) => bus.kind === "flexray")
-                    .map((bus) => ({ id: bus.index, label: bus.name })),
-                  channel: (raw: number) => `#${raw}`,
-                },
-                {
-                  kind: "eth",
-                  title: "Ethernet channels in the log",
-                  rows: replayMap.eth,
-                  targets: buses
-                    .filter((bus) => bus.kind === "ethernet")
-                    .map((bus) => ({ id: bus.index, label: bus.name })),
-                  channel: (raw: number) => `#${raw}`,
-                },
-              ].map((group) =>
-                group.rows.length === 0 ? null : (
-                  <div class="replay-group" key={group.kind}>
-                    <span class="replay-group-title">{group.title}</span>
-                    {group.rows.map((row) => {
-                      const value =
-                        row.target == null
-                          ? "none"
-                          : row.target === row.raw
-                            ? "raw"
-                            : `b${row.target}`;
-                      return (
-                        <div
-                          class="replay-row"
-                          key={`${group.kind}:${row.raw}`}
-                          title="Which project bus replays this log channel"
-                        >
-                          <span>{group.channel(row.raw)}</span>
-                          <em>{row.count} frames</em>
-                          <select
-                            value={value}
-                            onChange={(event) => {
-                              const next = (
-                                event.target as HTMLSelectElement
-                              ).value;
-                              onSetReplay(
-                                group.kind,
-                                row.raw,
-                                next === "raw"
-                                  ? row.raw
-                                  : next === "none"
-                                    ? null
-                                    : Number(next.slice(1)),
-                              );
-                            }}
-                          >
-                            <option value="raw">
-                              As-is ({group.channel(row.raw)})
-                            </option>
-                            {group.targets.map((target) => (
-                              <option
-                                key={target.id}
-                                value={`b${target.id}`}
-                              >
-                                {target.label}
-                              </option>
-                            ))}
-                            <option value="none">No replay</option>
-                          </select>
-                        </div>
-                      );
-                    })}
-                  </div>
-                ),
-              )
-            )}
-          </section>
         </div>
 
         <p class="hint picker-hint">

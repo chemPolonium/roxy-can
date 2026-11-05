@@ -1,6 +1,14 @@
 # 架构文档
 
-roxy-can 的结构、关键决策与不变式。用法见 `README.md` 与 `docs/usage.md`，取舍理由见 `docs/roadmap.md`，还没做的事见 `TODO.md`。
+roxy-can 的结构、关键决策与不变式。用法见 `README.md` 与 `docs/usage.md`，产品边界与取舍见 `docs/product.md`，还没做的事见 `TODO.md`。
+
+## 描述 / 线 / 计划三层
+
+- **Description**：`model::Comm` 持有 `Cluster → Network → Frame → PDU → Signal`、ECU/connector、service。SOME/IP 的 field 布局仍在 ARXML catalog，`Comm.services` 只保存稳定身份（service/method/event/instance），避免把协议布局塞进模型。
+- **Wire**：`CanFrame` / `FrRow` / `EthFrame` 保持轻量；`BusEvent` 只是把三者装进一个带 `BusRef` 的边界信封，不构造对象图。
+- **Plan**：`PlanCache` 按 bus 预编译 decode/encode 计划；Recorder 通过 `BusEvent` 统一入口，热路径仍直接读原始帧。
+- **ECU**：`Comm::ecu_for_node` 把 DBC node 名和 ARXML `EcuId` 对上；`ChannelView.node_ecus` 暴露同一映射，仿真角色仍以 DBC node 为准。
+
 
 ## 总体分层：核心线程 + 命令/快照边界
 
@@ -98,22 +106,22 @@ DBC 与 ARXML 都只读：解析出的事实先进统一模型（`Cluster → Ne
 
 ## Panel 操作页
 
-- **模型**：`panelPage.ts` 的控件注册表声明每类控件的创建、字段、最小/默认尺寸与补丁（Button / Value / Bar / Gauge / Lamp / Toggle / Setpoint）；页面是固定 8px 网格画布，坐标按格保存，多页面 book 随 workspace 走。Setpoint 用 `target` 区分 SysVar 与信号；Button 的 `writes` 是随页面保存的信号预设；持久格式只有 `setpoint` 一种可编辑控件，不再读取旧的 Numeric/Setpoint 页面。
+- **模型**：`panelPage.ts` 的控件注册表声明每类控件的创建、字段、最小/默认尺寸与补丁（Button / Value / Bar / Gauge / Lamp / Toggle / Setpoint）；页面是固定 8px 网格画布，坐标按格保存，多页面 book 随 workspace 走。Setpoint 用 `target` 区分 SysVar 与信号；持久格式只有 `setpoint` 一种可编辑控件，不再读取旧的 Numeric/Setpoint 页面。
 - **绑定与能力**：`panelBinding.ts` 是纯选择器层——解析 source、SysVar、色段、量程比例、弧线路径、运行中的动作集合与禁用原因；PagePanel 只负责渲染与编辑命令。
 - **右键**：Edit 下控件、空白画布与页签各有一套上下文菜单（复制/删除；粘贴/添加/撤销；页面重命名/复制/导出/删除），统一 `role="menu"` 与 ↑/↓/Home/End/Esc，Esc 只关菜单；右键按下不触发拖动。
-- **执行链**：按钮的 **On click** 三选一、互斥——**Write signals** 走 `panel_write_signals` → `BusCommand::PanelWriteSignals`，逐项调用同一个写入实现并汇总失败（会话帧无法回滚，所以不做原子失败），不碰仿真；**Send message** 走 `panel_send_frame` / `panel_send_fr_frame` / `panel_send_eth_frame`，校验总线/地址/长度后发一条原始报文：CAN 帧排进本步的接收队列，像生成器帧一样计数、解码、录制并进入已连接硬件；FlexRay 帧按槽声明长度补齐后只注入本会话；Ethernet 按矩阵 VLAN/EtherType 与固定 MAC 注入本会话 flow，长度必须与帧声明一致；CAN 已知报文带 `physical` 时改由 `signals` 编码：按目录信号夹取写入、未写信号取声明初始值，载荷宽度用报文 DLC；FR/ETH 的 physical 走同一组 `signals`，宽度用槽/矩阵的声明长度；**Script action** 走 `run_panel_action` → `on panel_action`（可带数值参数）。启动/停止/暂停等仿真控制只保留在顶部工具栏，不再由面板按钮发送 `PanelAction`；组合逻辑由脚本实现；Setpoint 的 SysVar target 写 `set_sys_var`，信号 target 统一走键寻址的 `panel_write_signal`（`SigKey` 的 Can/Fr/Eth/Derived）：CAN 按统一模型夹取、用 `encode_payload` 写进 generator 基载荷、摘掉该信号的波形源并注入一帧；FlexRay 仍用描述决定当前 cycle 的占用帧，信号位置与编码取模型 plan，并只在本次测量内注入一帧；Ethernet 按模型帧与 plan 编码，用矩阵 VLAN、`ethertype_hint`（缺省 `0x88B5`）和固定本机管理 MAC 注入一个 TX 会话帧，匹配与回读走现有 flow 解码；派生信号直接拒绝。两种 target 提交后都可带值触发同名动作。目录里既没有声明范围（max ≤ min）时按不夹取处理，与后端一致。
+- **执行链**：按钮的 **On click** 二选一、互斥——**Send message** 走 `panel_send_frame` / `panel_send_fr_frame` / `panel_send_eth_frame` / `panel_send_someip`，校验总线/地址/长度后发一条报文：CAN 帧排进本步的接收队列，像生成器帧一样计数、解码、录制并进入已连接硬件；FlexRay 帧按槽声明长度补齐后只注入本会话；Ethernet 按矩阵 VLAN/EtherType 与固定 MAC 注入本会话 flow，长度必须与帧声明一致；SOME/IP 按 service/method/client/session/type/payload 构造 UDP 帧注入本会话。CAN 已知报文带 `physical` 时改由 `signals` 编码：按目录信号夹取写入、未写信号取声明初始值，载荷宽度用报文 DLC；FR/ETH 的 physical 走同一组 `signals`，宽度用槽/矩阵的声明长度；**Script action** 走 `run_panel_action` → `on panel_action`（可带数值参数）。启动/停止/暂停等仿真控制只保留在顶部工具栏，不再由面板按钮发送 `PanelAction`；组合逻辑由脚本实现；Setpoint 的 SysVar target 写 `set_sys_var`，信号 target 统一走键寻址的 `panel_write_signal`（`SigKey` 的 Can/Fr/Eth/Derived）：CAN 按统一模型夹取、用 `encode_payload` 写进 generator 基载荷、摘掉该信号的波形源并注入一帧；FlexRay 仍用描述决定当前 cycle 的占用帧，信号位置与编码取模型 plan，并只在本次测量内注入一帧；Ethernet 按模型帧与 plan 编码，用矩阵 VLAN、`ethertype_hint`（缺省 `0x88B5`）和固定本机管理 MAC 注入一个 TX 会话帧，匹配与回读走现有 flow 解码；派生信号直接拒绝。两种 target 提交后都可带值触发同名动作。目录里既没有声明范围（max ≤ min）时按不夹取处理，与后端一致。
 - **回读**：Setpoint 把目标信号按 Read 订阅（`select_signal read=true`），用同一份序列显示总线实际值；前端记录自己添加的 key，控件改绑/删除时只回收这些订阅，用户手动 Plot/Read 的信号不动。这就是面板唯一自动订阅的入口。
 - **文件**：`.rxpanel` 由前端序列化，导入严格校验（类型/画幅/最小尺寸/重叠）后才作为新页面追加，绝不静默丢弃。
-- **测试**：模型、选择器与导入导出有 Vitest；动作、参数与写信号有 Rust 无头测试（真实 core）；交互用浏览器 + CDP 实机走查。
+- **测试**：模型、选择器与导入导出有 Vitest；动作、参数与 Setpoint 写入有 Rust 无头测试（真实 core）；交互用浏览器 + CDP 实机走查。
 
-## 下一步（2026-10）
+## 当前方向（2026-11）
 
-按优先级，细节在 `TODO.md`：
+产品定位与体验准则见 [`product.md`](product.md)。能力主链路已经够用，当前不靠新增按钮扩展：
 
-1. **Setpoint 组写**：一个控件写一组信号或整帧，作为测试步骤（回读已落地）。
-2. **FlexRay / 以太网发送**：语言侧补 `on fr`/`on eth` 的命名形式；FlexRay 的 Panel 会话内写入已接通，硬件发送对象布局实测后再接端口；Ethernet 的 Panel 会话内写入已接通（合成 MAC/默认 EtherType），真实端口发送与 MAC/VLAN 工程配置仍待立项。
-3. **测试单元的 CI 结论**：无头跑一段仿真，把 `on stop` + `test()` 结果输出成 JSON/退出码。
-4. **Vector 物理插拔复核**：USB 拔插后的自动恢复与多台设备逐台判定，需要台架人工验收。
+1. **体验收尾**：Panel 校验提示就近保留；SOME/IP 发送字段从文本改为按 service/method 选择。
+2. **文档单一来源**：README 只留功能总表，usage 只留操作语义，web/README 只留前端结构；过时文档直接删除。
+3. **真实台架**：Ethernet 端口、FlexRay TX、CANoe IL 级服务模拟与真实语料按 `TODO.md` 推进，不在界面层假装完成。
+4. **可选项**：无头测试单元等真实 CI 诉求，不提前扩协议。
 
 ## 验收三分
 
