@@ -4,6 +4,12 @@
 
 ![roxy-can](screenshot.png)
 
+| Messages | Signal cursor |
+|---|---|
+| ![Messages](screenshot-messages.png) | ![Signal cursor](screenshot-signals.png) |
+
+![Panel](screenshot-panel.png)
+
 完整操作语义见 [docs/usage.md](docs/usage.md)，产品定位与体验准则见 [docs/product.md](docs/product.md)，这一页只说有什么。
 
 ## 功能
