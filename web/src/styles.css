@@ -6351,10 +6351,11 @@ button.danger:hover:not(:disabled) {
   display: flex;
   flex: 1 1 auto;
   flex-direction: column;
-  gap: 8px;
+  gap: 6px;
   min-height: 0;
   overflow: auto;
-  padding: 6px 10px;
+  padding: 4px 8px 12px;
+  scrollbar-gutter: stable;
 }
 
 .busstat-bus {
@@ -6368,9 +6369,9 @@ button.danger:hover:not(:disabled) {
 .busstat-head {
   display: grid;
   grid-template-columns: auto auto 1fr;
-  gap: 4px 8px;
+  gap: 2px 8px;
   align-items: center;
-  padding: 5px 8px;
+  padding: 3px 8px;
   background: #111821;
   border-bottom: 1px solid #1c242e;
 }
@@ -6396,15 +6397,15 @@ button.danger:hover:not(:disabled) {
 .busstat-spark {
   grid-column: 1 / -1;
   width: 100%;
-  height: 28px;
+  height: 22px;
   border-radius: 3px;
 }
 
 .busstat-row {
   display: grid;
   grid-template-columns: minmax(100px, 1fr) 64px;
-  gap: 1px 6px;
-  padding: 3px 8px;
+  gap: 0 6px;
+  padding: 1px 8px;
   border-bottom: 1px solid #161d26;
 }
 
@@ -6429,7 +6430,8 @@ button.danger:hover:not(:disabled) {
   text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--muted);
-  font-size: 9.5px;
+  font-size: 8.5px;
+  line-height: 12px;
 }
 
 .monitor-host {

@@ -3756,31 +3756,26 @@ export function App() {
             type="button"
             class="primary transport-button"
             disabled={
-              !canControl || measuring || needsLog || (!replaying && noBuses)
+              measuring
+                ? !canControl
+                : !canControl || needsLog || (!replaying && noBuses)
             }
             title={
-              !online
-                ? "Waiting for the bus core"
-                : needsLog
-                  ? "Choose a recording in Setup → Replay first"
-                  : !replaying && noBuses
-                    ? "Add a bus or create a sample project first"
-                    : measuring
-                      ? "Measurement is already running"
+              measuring
+                ? "Stop measurement"
+                : !online
+                  ? "Waiting for the bus core"
+                  : needsLog
+                    ? "Choose a recording in Setup → Replay first"
+                    : !replaying && noBuses
+                      ? "Add a bus or create a sample project first"
                       : "Start measurement"
             }
-            onClick={() => void run({ type: "start" })}
+            onClick={() =>
+              void run({ type: measuring ? "stop" : "start" })
+            }
           >
-            Start
-          </button>
-          <button
-            type="button"
-            class="transport-button"
-            disabled={!canControl || !measuring}
-            title={measuring ? "Stop measurement" : "Measurement is not running"}
-            onClick={() => void run({ type: "stop" })}
-          >
-            Stop
+            {measuring ? "Stop" : "Start"}
           </button>
           <button
             type="button"
