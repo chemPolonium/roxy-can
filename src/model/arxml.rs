@@ -518,6 +518,16 @@ impl<'a> Importer<'a> {
                 .filter(|n| n.has_tag_name("I-SIGNAL-TO-I-PDU-MAPPING"))
                 .enumerate()
             {
+                // A signal-group mapping names a group whose members are
+                // already mapped individually; it carries no start position
+                // of its own. Ignoring it avoids a false dangling-signal
+                // error and does not drop any bit layout.
+                if mapping
+                    .children()
+                    .any(|child| child.has_tag_name("I-SIGNAL-GROUP-REF"))
+                {
+                    continue;
+                }
                 let Some(signal_node) = ref_node(mapping, "I-SIGNAL-REF", &self.objects) else {
                     self.issues.push(
                         Issue::error(
