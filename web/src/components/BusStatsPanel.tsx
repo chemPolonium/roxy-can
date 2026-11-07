@@ -79,7 +79,11 @@ export function BusStatsPanel({
           </header>
           <div class="busstat-rows">
             {bus.rows.map((row) => (
-              <div class="busstat-row" key={row.label}>
+              <div
+                class="busstat-row"
+                key={row.label}
+                title={`${row.label}: ${row.current} · min ${row.min} · max ${row.max} · avg ${row.avg}`}
+              >
                 <span class="busstat-label">{row.label}</span>
                 <strong class="busstat-current">{row.current}</strong>
                 <span class="busstat-range">

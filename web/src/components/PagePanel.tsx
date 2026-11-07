@@ -60,7 +60,6 @@ import {
   type PanelFrameDef,
   type PanelView,
 } from "../panelBinding";
-import { FilePick } from "./FilePick";
 import { copyText } from "../clipboard";
 
 interface DragState {
@@ -1467,6 +1466,7 @@ export function PagePanel({
   const addMenu = useRef<HTMLDivElement>(null);
   const [menu, setMenu] = useState<PageMenu | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
+  const importInput = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     setSizeW(String(page.width * PAGE_GRID));
@@ -1792,10 +1792,6 @@ export function PagePanel({
     onBook(removePanelPage(book, id));
   };
 
-  const copyPage = () => copyPageById(page.id);
-
-  const deletePage = () => deletePageById(page.id);
-
   const commitRename = () => {
     if (!renaming) return;
     if (renameCanceled.current) {
@@ -1831,8 +1827,6 @@ export function PagePanel({
     window.setTimeout(() => URL.revokeObjectURL(url), 0);
     onNotice(`Exported ${name}`);
   };
-
-  const exportPage = () => exportPageById(page.id);
 
   const importPage = (text: string) => {
     let raw: unknown;
@@ -2261,6 +2255,18 @@ export function PagePanel({
     <section
       class={`panel page-panel ${fullscreen ? "page-fullscreen" : ""}`}
     >
+      <input
+        ref={importInput}
+        type="file"
+        accept=".rxpanel,.json,application/json"
+        hidden
+        onChange={(event) => {
+          const file = event.currentTarget.files?.[0];
+          if (!file) return;
+          void file.text().then(importPage);
+          event.currentTarget.value = "";
+        }}
+      />
       <div class={`panel-head ${editing ? "editing" : ""}`}>
         <div class="panel-title">Panel</div>
         <span class="meta">
@@ -2339,33 +2345,19 @@ export function PagePanel({
               <button
                 type="button"
                 class="mini"
-                title="Duplicate this page"
-                onClick={copyPage}
+                title="Page actions: rename, duplicate, import, export, delete"
+                aria-haspopup="menu"
+                onClick={(event) => {
+                  const rect = event.currentTarget.getBoundingClientRect();
+                  setMenu({
+                    kind: "page",
+                    id: page.id,
+                    x: rect.left,
+                    y: rect.bottom + 4,
+                  });
+                }}
               >
-                Duplicate
-              </button>
-              <button
-                type="button"
-                class="mini"
-                title="Delete this page"
-                disabled={book.pages.length <= 1}
-                onClick={deletePage}
-              >
-                Delete
-              </button>
-              <FilePick
-                label="Import"
-                accept=".rxpanel,.json,application/json"
-                onText={importPage}
-                onError={(message) => onNotice(message)}
-              />
-              <button
-                type="button"
-                class="mini"
-                title="Download this page as a .rxpanel file"
-                onClick={exportPage}
-              >
-                Export
+                …
               </button>
             </div>
           )}
@@ -2440,21 +2432,23 @@ export function PagePanel({
               </div>
               <button
                 type="button"
-                class="mini"
+                class="mini icon-mini"
                 disabled={history.past.length === 0}
                 title="Undo (Ctrl+Z)"
+                aria-label="Undo"
                 onClick={undo}
               >
-                Undo
+                ↶
               </button>
               <button
                 type="button"
-                class="mini"
+                class="mini icon-mini"
                 disabled={history.future.length === 0}
                 title="Redo (Ctrl+Shift+Z / Ctrl+Y)"
+                aria-label="Redo"
                 onClick={redo}
               >
-                Redo
+                ↷
               </button>
             </>
           )}
@@ -2802,6 +2796,16 @@ export function PagePanel({
                 }}
               >
                 Duplicate page
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  setMenu(null);
+                  importInput.current?.click();
+                }}
+              >
+                Import page…
               </button>
               <button
                 type="button"

@@ -2276,15 +2276,20 @@ export function App() {
 
   const mainMessages = useMemo(() => {
     const rows = state?.messages ?? [];
+    const selected = bus;
+    const visible =
+      selected === "all"
+        ? rows
+        : rows.filter((row) => row.busName === selected);
     const needle = messageQuery.trim().toLowerCase();
-    if (!needle) return rows;
-    return rows.filter(
+    if (!needle) return visible;
+    return visible.filter(
       (row) =>
         row.name.toLowerCase().includes(needle) ||
         row.addr.toLowerCase().includes(needle) ||
         row.busName.toLowerCase().includes(needle),
     );
-  }, [state?.messages, messageQuery]);
+  }, [state?.messages, messageQuery, bus]);
 
   const writeRows = useMemo(() => {
     const rows = state?.write ?? [];
@@ -2822,13 +2827,13 @@ export function App() {
     },
     {
       id: "tab-statistics",
-      label: "Show Statistics",
+      label: "Show message statistics",
       group: "Lower panel",
       run: () => setTab("statistics"),
     },
     {
       id: "tab-bus",
-      label: "Show Bus statistics",
+      label: "Show bus load statistics",
       group: "Lower panel",
       run: () => setTab("bus"),
     },
@@ -4176,6 +4181,23 @@ export function App() {
                 {mainTabs}
                 <span class="meta">{mainMessages.length} ids</span>
                 <div class="panel-tools">
+                  <select
+                    value={bus}
+                    title="Bus filter; shared with Trace"
+                    onChange={(event) =>
+                      setBus((event.target as HTMLSelectElement).value)
+                    }
+                  >
+                    <option value="all">All buses</option>
+                    {state?.buses.map((entry) => (
+                      <option
+                        key={`${entry.kind}:${entry.index}`}
+                        value={entry.name}
+                      >
+                        {entry.name}
+                      </option>
+                    ))}
+                  </select>
                   <input
                     class="panel-filter"
                     type="search"
@@ -4599,6 +4621,7 @@ export function App() {
 
           <div
             class={`splitter horizontal ${drag === "right" ? "active" : ""}`}
+            title="Drag to resize the chart and lower panel"
             onPointerDown={(e) => {
               e.preventDefault();
               setDrag("right");
@@ -4613,14 +4636,14 @@ export function App() {
                   class={tab === "statistics" ? "on" : ""}
                   onClick={() => setTab("statistics")}
                 >
-                  Statistics
+                  Messages stats
                 </button>
                 <button
                   type="button"
                   class={tab === "bus" ? "on" : ""}
                   onClick={() => setTab("bus")}
                 >
-                  Bus stats
+                  Bus load
                 </button>
                 <button
                   type="button"
@@ -4660,7 +4683,7 @@ export function App() {
               {tab !== "bus" && tab !== "spec" && tab !== "someip" && (
                 <button
                   type="button"
-                  class="mini"
+                  class="mini lower-export"
                   onClick={() =>
                     openExport(tab === "statistics" ? "stats" : "write")
                   }

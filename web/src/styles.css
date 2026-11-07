@@ -73,6 +73,13 @@ button.primary:hover:not(:disabled) {
   background: #246dc5;
 }
 
+button.primary:disabled {
+  background: transparent;
+  border-color: var(--line);
+  color: var(--muted);
+  opacity: 0.7;
+}
+
 button:disabled {
   opacity: 0.38;
   cursor: default;
@@ -2123,16 +2130,30 @@ body.col-resizing {
   overflow: auto;
 }
 
-.trace-hint {
-  color: var(--muted);
-  font-size: 10px;
-  white-space: nowrap;
+.icon-mini {
+  min-width: 24px;
+  padding: 0;
+  font-size: 14px;
+  line-height: 1;
 }
 
-@media (max-width: 1200px) {
-  .trace-hint {
-    display: none;
-  }
+.trace-help {
+  display: inline-grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 50%;
+  background: transparent;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1;
+}
+
+.trace-help:hover {
+  border-color: var(--accent);
+  color: var(--accent);
 }
 
 .trace-menu {
@@ -3051,6 +3072,29 @@ body.row-resizing {
 .tabs button.on {
   background: #1b2836;
   color: #dce7f5;
+}
+
+.lower-panel .panel-head .tabs button {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+.lower-panel .lower-export {
+  min-width: 24px;
+  padding-inline: 6px;
+}
+
+@media (max-width: 1100px) {
+  .lower-panel .lower-export {
+    width: 24px;
+    padding: 0;
+    font-size: 0;
+  }
+
+  .lower-panel .lower-export::before {
+    content: "↓";
+    font-size: 13px;
+  }
 }
 
 .lower-panel .meta {
@@ -6430,8 +6474,8 @@ button.danger:hover:not(:disabled) {
   text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--muted);
-  font-size: 8.5px;
-  line-height: 12px;
+  font-size: 9px;
+  line-height: 13px;
 }
 
 .monitor-host {

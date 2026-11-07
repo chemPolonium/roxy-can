@@ -539,7 +539,7 @@ export function TraceTable({
               ? `Row ${(selectedFrame.tUs / 1e6).toFixed(6)} · ↑/↓ · Ctrl+C`
               : selectedKey
                 ? "Selected row is not in the current view"
-                : "Click a row · ↑/↓ moves · Ctrl+C copies"}
+                : "No row selected"}
           </span>
           {(cursorA || cursorB) && (
             <span class="trace-cursor-times">
@@ -563,9 +563,14 @@ export function TraceTable({
             </button>
           )}
           <span class="spacer" />
-          <span class="trace-hint">
-            Right-click a row for cursors and analysis
-          </span>
+          <button
+            type="button"
+            class="trace-help"
+            title="Click a row to select · ↑/↓ moves · Ctrl+C copies · Right-click for cursors and analysis"
+            aria-label="Trace table help"
+          >
+            ?
+          </button>
         </div>
       <div
         class="table-scroll"
