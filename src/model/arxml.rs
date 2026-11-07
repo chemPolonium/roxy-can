@@ -128,7 +128,6 @@ struct Importer<'a> {
     e2e_ids: HashMap<String, E2eProtectionId>,
     system_e2e: HashMap<SystemSignalId, E2eProtectionId>,
     signal_ids: HashMap<String, SignalId>,
-    signal_pdus: HashMap<SignalId, PduId>,
     pdu_ids: HashMap<String, PduId>,
     frame_ids: HashMap<String, FrameId>,
 }
@@ -159,7 +158,6 @@ impl<'a> Importer<'a> {
             e2e_ids: HashMap::new(),
             system_e2e: HashMap::new(),
             signal_ids: HashMap::new(),
-            signal_pdus: HashMap::new(),
             pdu_ids: HashMap::new(),
             frame_ids: HashMap::new(),
         }
@@ -542,22 +540,9 @@ impl<'a> Importer<'a> {
                     continue;
                 };
                 let signal_path = object_path(signal_node);
+                let mut created = false;
                 let signal_id = match self.signal_ids.get(&signal_path) {
                     Some(id) => {
-                        if self
-                            .signal_pdus
-                            .get(id)
-                            .is_some_and(|existing| *existing != pdu_id)
-                        {
-                            self.issues.push(Issue::error(
-                                IssueKind::SignalLayoutConflict,
-                                format!(
-                                    "signal {} is mapped into more than one PDU; only the first mapping is kept",
-                                    short_name(signal_node)
-                                ),
-                            ));
-                            continue;
-                        }
                         if seen.insert(*id) {
                             *id
                         } else {
@@ -581,8 +566,8 @@ impl<'a> Importer<'a> {
                         self.link_signal_transformation(&mut signal, signal_node);
                         self.comm.signals.insert(id, signal);
                         self.signal_ids.insert(signal_path.clone(), id);
-                        self.signal_pdus.insert(id, pdu_id);
                         seen.insert(id);
+                        created = true;
                         id
                     }
                 };
@@ -604,7 +589,7 @@ impl<'a> Importer<'a> {
                     update_bit: child_number(mapping, "UPDATE-INDICATION-BIT-POSITION")
                         .map(|v| v as u32),
                 };
-                if let Some(signal) = self.comm.signals.get_mut(&signal_id) {
+                if created && let Some(signal) = self.comm.signals.get_mut(&signal_id) {
                     signal.start_bit = mapping_model.start_bit;
                     signal.byte_order = mapping_model.byte_order;
                     signal.update_bit = mapping_model.update_bit;
@@ -621,9 +606,8 @@ impl<'a> Importer<'a> {
         for pdu_id in pdu_ids {
             let protected = self
                 .comm
-                .signals
-                .values()
-                .filter(|signal| signal.pdu == pdu_id)
+                .signals_in_pdu(pdu_id)
+                .into_iter()
                 .find_map(|signal| {
                     signal
                         .system_signal

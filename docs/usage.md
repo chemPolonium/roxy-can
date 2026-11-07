@@ -131,7 +131,7 @@ roxy-can -h                               完整帮助
 - **数据来源**：PCAP/PCAPNG 与 BLF 的 Ethernet 对象（类型 71/120/121）都可回放；录制时 `.pcap` 或 `.blf` 会写 Ethernet，PCAP 仍是通用交换格式。
 - **实时口**：Buses 选中 ETH 路，在 **Live port…** 里选 Npcap 接口并挂载；RX 帧进入 Trace/Messages/Statistics/触发/录制，Panel/Trigger/脚本发出的 Ethernet 与 SOME/IP 帧走该端口；Real bus 关闭时端口仍挂着但不收发。Npcap 未安装或没有接口时下拉为空，错误写在行内。
 - **矩阵**：Buses 加载 AUTOSAR Ethernet 矩阵（ARXML）或 FIBEX（Vector 导出的 FIBEX 扩展名通常是 `.xml`，不是 `.fibex`）的 CHANNEL/FRAME/PDU/SIGNAL；没有 frame 的 PDU-only ARXML 也会保留 PDU triggerings 与 socket/endpoint，显示 cluster/VLAN、PDU、endpoint 清单（含 endpoint→PDU 关联），并明确提示帧解码不可用。收到匹配 endpoint 的 UDP NM 帧时，PDU 信号解码后按变化写入 Write（重复值不刷屏），并按 RepeatMessageRequest / sleep-ready 信号给出 RepeatMessage / NormalOperation / ReadySleep / PrepareBusSleep / BusSleep 状态（3s/5s 超时）。官方 XSD 校验可运行 `pwsh scripts/validate-arxml.ps1 <arxml>`（默认用 `target/refs/AUTOSAR_00052.xsd` + `xml.xsd`，该 schema 是 R23-11，不是 4.2.2）。捕获 flow 按 VLAN、payload 长度和 IEEE1722 EtherType 打分匹配；多个候选或无候选都不猜，Name 列退回 MAC 对。`FRAME-LENGTH 含 L2 头` 是项目开关（随工程保存）：打开时按「声明长度 − 14」与捕获 payload 比较。
-- **解码**：`I-SIGNAL-I-PDU` 里的 I-Signal 位偏移、大小、字节序、符号、factor/offset、单位和值表；Container / Multiplexed / Secured PDU 不在当前范围内。
+- **解码**：`I-SIGNAL-I-PDU` 里的 I-Signal 位偏移、大小、字节序、符号、factor/offset、单位和值表；同一 I-SIGNAL 被多个 PDU 复用时，按每个 PDU mapping 的 `START-POSITION` / 字节序分别解码，不丢第二个 PDU。Container / Multiplexed / Secured PDU 不在当前范围内。
 - **Trace**：以太网帧与 CAN/FlexRay 按时间混排。Bus 列 `ETHn`，ID 列 EtherType，Name 列矩阵帧名（无唯一匹配时是 MAC 对）；右键可把该 L2 flow 加入本窗口的 Manual 选择。作用域多一档 `Ethernet: ETHn`。
 - **实时 vs 会话**：没有挂实时口时，Panel 的 **Send message** 只注入本会话并进入当前录制；挂了实时口且 Real bus 打开时，帧走线上，Trace 里由 Npcap 回读。
 - **Messages / Statistics**：每个 L2 flow 一行，MAC、VLAN、EtherType、计数与周期；CSV 导出同样包含。
@@ -246,6 +246,4 @@ string/union 的 length-field 宽度与 alignment 会读取 SOMEIP-TRANSFORMATIO
 - 新会话是固定的 Web 外壳：主视图、右侧图表面板（Rate / Signals / Monitor / Data / State）与下栏 Statistics / Bus / Spec / Write；打开工程时布局、Graphics 配置与 Panel 页按文件恢复。
 - 坏库容错：复用报文的 mux 条件引用了不存在的开关时按"无条件"处理（显示数据而不是空解码）。
 - 信号类型标记（`[u16]` / `[f32]`）按 `SIG_VALTYPE_` 声明解位模式。
-
-
 

@@ -310,7 +310,7 @@ fn expand_pdu(
     issues: &mut Vec<Issue>,
     reads: &mut Vec<SignalRead>,
 ) {
-    for signal in comm.signals_in_pdu(pdu) {
+    for (signal, mapping_start, mapping_order, mapping_update) in comm.signal_layouts_in_pdu(pdu) {
         let mut mux = signal.mux.clone();
         if let Some(part) = mux_part.clone() {
             mux.push(part);
@@ -350,9 +350,9 @@ fn expand_pdu(
         };
         reads.push(SignalRead {
             signal: signal.id,
-            bit_offset: base.saturating_add(signal.start_bit),
+            bit_offset: base.saturating_add(mapping_start),
             bit_len: signal.length,
-            byte_order: signal.byte_order,
+            byte_order: mapping_order,
             signed: signal.signed,
             float: signal.float,
             factor: signal.factor,
@@ -360,7 +360,7 @@ fn expand_pdu(
             mux,
             container,
             transform,
-            update_bit: signal.update_bit.map(|bit| base.saturating_add(bit)),
+            update_bit: mapping_update.map(|bit| base.saturating_add(bit)),
         });
     }
 }

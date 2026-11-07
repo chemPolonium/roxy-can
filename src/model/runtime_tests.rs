@@ -440,6 +440,38 @@ fn a_text_table_transformation_is_flagged_and_left_raw() {
 /// An update indication bit gates the value on decode and is set by encode:
 /// a frame that did not mark the signal as updated carries no new value.
 #[test]
+fn shared_signal_uses_the_layout_of_each_pdu_mapping() {
+    let mut comm = base_comm();
+    let mut shared = signal(1, 0, 8);
+    shared.byte_order = ByteOrder::BigEndian;
+    add_signal(&mut comm, shared);
+    let mut other = comm.pdus.get(&PduId(10)).expect("base pdu").clone();
+    other.id = PduId(11);
+    other.name = "P11".to_string();
+    comm.pdus.insert(other.id, other);
+    comm.signal_pdu_mappings.insert(
+        MappingId(2),
+        SignalPduMapping {
+            id: MappingId(2),
+            signal: SignalId(1),
+            pdu: PduId(11),
+            start_bit: 8,
+            byte_order: ByteOrder::LittleEndian,
+            update_bit: None,
+        },
+    );
+
+    let first = comm.signal_layouts_in_pdu(PduId(10));
+    assert_eq!(first.len(), 1);
+    assert_eq!(first[0].1, 0);
+    assert_eq!(first[0].2, ByteOrder::BigEndian);
+    let second = comm.signal_layouts_in_pdu(PduId(11));
+    assert_eq!(second.len(), 1);
+    assert_eq!(second[0].1, 8);
+    assert_eq!(second[0].2, ByteOrder::LittleEndian);
+}
+
+#[test]
 fn update_bit_gates_decoding_and_is_set_by_encoding() {
     let mut comm = base_comm();
     let mut speed = signal(1, 0, 8);

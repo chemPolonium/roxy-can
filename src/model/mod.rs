@@ -1225,7 +1225,77 @@ impl Comm {
     }
 
     pub fn signals_in_pdu(&self, pdu: PduId) -> Vec<&Signal> {
+        let mapped: Vec<&Signal> = self
+            .signal_pdu_mappings
+            .values()
+            .filter(|mapping| mapping.pdu == pdu)
+            .filter_map(|mapping| self.signals.get(&mapping.signal))
+            .collect();
+        if !mapped.is_empty() {
+            let mut seen = std::collections::BTreeSet::new();
+            let mut signals: Vec<&Signal> = mapped
+                .into_iter()
+                .filter(|signal| seen.insert(signal.id))
+                .collect();
+            for signal in self.signals.values().filter(|signal| signal.pdu == pdu) {
+                if seen.insert(signal.id) {
+                    signals.push(signal);
+                }
+            }
+            return signals;
+        }
+        // Hand-built and DBC models predate explicit mapping rows.
         self.signals.values().filter(|s| s.pdu == pdu).collect()
+    }
+
+    /// Signal/bit-layout rows for one PDU. A signal reused by several PDUs
+    /// keeps one [`Signal`] object but a distinct mapping row per start
+    /// position and byte order; the planner must use the row, not
+    /// `Signal.start_bit`.
+    pub fn signal_layouts_in_pdu(&self, pdu: PduId) -> Vec<(&Signal, u32, ByteOrder, Option<u32>)> {
+        let mut seen = std::collections::BTreeSet::new();
+        let mapped: Vec<(&Signal, u32, ByteOrder, Option<u32>)> = self
+            .signal_pdu_mappings
+            .values()
+            .filter(|mapping| mapping.pdu == pdu)
+            .filter_map(|mapping| {
+                self.signals.get(&mapping.signal).map(|signal| {
+                    (
+                        signal,
+                        mapping.start_bit,
+                        mapping.byte_order,
+                        mapping.update_bit.or(signal.update_bit),
+                    )
+                })
+            })
+            .filter(|(signal, ..)| seen.insert(signal.id))
+            .collect();
+        if !mapped.is_empty() {
+            let mut layouts = mapped;
+            for signal in self.signals.values().filter(|signal| signal.pdu == pdu) {
+                if seen.insert(signal.id) {
+                    layouts.push((
+                        signal,
+                        signal.start_bit,
+                        signal.byte_order,
+                        signal.update_bit,
+                    ));
+                }
+            }
+            return layouts;
+        }
+        self.signals
+            .values()
+            .filter(|signal| signal.pdu == pdu)
+            .map(|signal| {
+                (
+                    signal,
+                    signal.start_bit,
+                    signal.byte_order,
+                    signal.update_bit,
+                )
+            })
+            .collect()
     }
 
     pub fn signals_in_frame(&self, frame: &Frame) -> Vec<&Signal> {
