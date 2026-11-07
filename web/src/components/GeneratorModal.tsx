@@ -516,6 +516,24 @@ function BusGroup({
         <button
           type="button"
           class="mini"
+          disabled={entries.length === 0}
+          title="Turn on every entry on this bus"
+          onClick={() => entries.forEach((entry) => onToggle(entry, true))}
+        >
+          All on
+        </button>
+        <button
+          type="button"
+          class="mini"
+          disabled={entries.length === 0}
+          title="Turn off every entry on this bus"
+          onClick={() => entries.forEach((entry) => onToggle(entry, false))}
+        >
+          All off
+        </button>
+        <button
+          type="button"
+          class="mini"
           disabled={
             !bus.descriptions.some(
               (description) => description.kind === "dbc" && description.path,
@@ -724,6 +742,24 @@ function FrBusGroup({
         <span class="gen-meta">
           {bus.cluster || "unnamed cluster"} · {entries.length} entries
         </span>
+        <button
+          type="button"
+          class="mini"
+          disabled={entries.length === 0}
+          title="Turn on every FlexRay entry on this bus"
+          onClick={() => entries.forEach((entry) => onToggle(entry, true))}
+        >
+          All on
+        </button>
+        <button
+          type="button"
+          class="mini"
+          disabled={entries.length === 0}
+          title="Turn off every FlexRay entry on this bus"
+          onClick={() => entries.forEach((entry) => onToggle(entry, false))}
+        >
+          All off
+        </button>
         <span class="spacer" />
         <input
           class="gen-slot"

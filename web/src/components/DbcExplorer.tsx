@@ -149,7 +149,21 @@ export function DbcExplorer({
                       const onChart = charted.has(signal.key);
                       const onMonitor = watched.has(signal.key);
                       return (
-                        <div class="dbc-signal" key={signal.key}>
+                        <div
+                          class="dbc-signal"
+                          key={signal.key}
+                          draggable
+                          title="Drag to the chart, Monitor or Data tab"
+                          onDragStart={(event) => {
+                            event.dataTransfer?.setData(
+                              "application/x-roxy-signal",
+                              signal.key,
+                            );
+                            if (event.dataTransfer) {
+                              event.dataTransfer.effectAllowed = "copy";
+                            }
+                          }}
+                        >
                           <span
                             class="dbc-signal-name"
                             title={

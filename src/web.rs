@@ -2038,6 +2038,12 @@ enum WebCommand {
         text: String,
     },
     ClearTrace,
+    /// Reset the Messages counters without dropping the Trace ring.
+    ClearMessages,
+    /// Open or close every Messages row's signal children.
+    SetAllMessagesExpanded {
+        on: bool,
+    },
     /// Open or close one Messages row's signal children.
     SetMessageExpanded {
         key: String,
@@ -2777,6 +2783,12 @@ fn app_loop(
                 }
                 WebCommand::ClearTrace => {
                     app.send(BusCommand::ClearTrace);
+                }
+                WebCommand::ClearMessages => {
+                    app.clear_messages();
+                }
+                WebCommand::SetAllMessagesExpanded { on } => {
+                    app.set_all_messages_expanded(on);
                 }
                 WebCommand::SetMessageExpanded { key, on } => {
                     app.set_message_expanded(&key, on);

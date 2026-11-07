@@ -842,6 +842,26 @@ impl App {
         ));
     }
 
+    pub fn clear_messages(&mut self) {
+        self.clear_message_expanded();
+        self.send(crate::bus::BusCommand::ClearAggregates);
+    }
+
+    pub fn set_all_messages_expanded(&mut self, on: bool) {
+        self.expanded_messages.clear();
+        if on {
+            for message in &self.snap.aggs {
+                self.expanded_messages.insert(format!(
+                    "can:{}:{}:{}",
+                    message.channel, message.id, message.extended
+                ));
+            }
+        }
+        self.send(crate::bus::BusCommand::SetExpandedMessages(
+            self.expanded_messages.iter().cloned().collect(),
+        ));
+    }
+
     pub fn clear_message_expanded(&mut self) {
         if !self.expanded_messages.is_empty() {
             self.expanded_messages.clear();

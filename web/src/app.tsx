@@ -19,6 +19,7 @@ import {
   fetchHardware,
   fetchState,
   sendCommand,
+  uploadFile,
 } from "./api";
 import { triggerDownload } from "./download";
 import {
@@ -112,8 +113,10 @@ import {
   saveTraceColumns,
 } from "./traceLayout";
 import {
+  addPanelPageFromFile,
   defaultPanelBook,
   exportPanelFile,
+  importPanelFile,
   mergeProjectPanels,
   panelSetpointTarget,
   parsePanelBook,
@@ -459,6 +462,14 @@ export function App() {
   const [query, setQuery] = useState("");
   const [bus, setBus] = useState<string>("all");
   const [traceFilter, setTraceFilter] = useState<TraceFilter>(EMPTY_TRACE_FILTER);
+  const traceFilterCount =
+    Number(traceFilter.dir !== "all") +
+    Number(traceFilter.dbcOnly) +
+    Number(traceFilter.payload.trim() !== "") +
+    Number(traceFilter.from.trim() !== "") +
+    Number(traceFilter.to.trim() !== "") +
+    Number(traceFilter.idInclude.trim() !== "") +
+    Number(traceFilter.idExclude.trim() !== "");
   const [traceFilterOpen, setTraceFilterOpen] = useState(false);
   const [panelQuery, setPanelQuery] = useState("");
   const [messageQuery, setMessageQuery] = useState("");
@@ -494,6 +505,8 @@ export function App() {
     loadLocalRecentProjects,
   );
   const [clearArmed, setClearArmed] = useState(false);
+  const [messageClearArmed, setMessageClearArmed] = useState(false);
+  const [allMessagesExpanded, setAllMessagesExpanded] = useState(false);
   const [replayStepMs, setReplayStepMs] = useState(100);
   const [replayForS, setReplayForS] = useState(5);
   const [replayTo, setReplayTo] = useState("");
@@ -825,6 +838,12 @@ export function App() {
     const timer = window.setTimeout(() => setClearArmed(false), 3000);
     return () => window.clearTimeout(timer);
   }, [clearArmed]);
+
+  useEffect(() => {
+    if (!messageClearArmed) return;
+    const timer = window.setTimeout(() => setMessageClearArmed(false), 3000);
+    return () => window.clearTimeout(timer);
+  }, [messageClearArmed]);
 
   // Transport changes deserve a message even though the status line keeps
   // showing the bus state rather than the command result.
@@ -1579,6 +1598,54 @@ export function App() {
     if (path) await run({ type: "save_project", path, panels: projectPanels() });
   };
 
+  const handleDroppedFile = async (file: File) => {
+    const name = file.name.toLowerCase();
+    try {
+      if (name.endsWith(".rxproj")) {
+        const path = await uploadFile(file);
+        await run({ type: "open_project", path });
+        showToast(`Opened ${file.name}`);
+        return;
+      }
+      if (/\.(asc|blf|pcap|pcapng)$/.test(name)) {
+        const path = await uploadFile(file);
+        await run({ type: "open_log", path, play: true });
+        showToast(`Opened ${file.name}`);
+        return;
+      }
+      if (name.endsWith(".rxpanel")) {
+        let raw: unknown;
+        try {
+          raw = JSON.parse(await file.text());
+        } catch {
+          showToast("That Panel file is not valid JSON");
+          return;
+        }
+        const result = importPanelFile(raw);
+        if ("error" in result) {
+          showToast(result.error);
+          return;
+        }
+        const added = addPanelPageFromFile(panelBook, result.page);
+        setPanelBook(added.book);
+        setMainView("panel");
+        showToast(`Imported ${added.page.name}`);
+        return;
+      }
+      openBuses();
+      showToast("Drop DBC / ARXML / FIBEX inside Buses to bind it");
+    } catch (error) {
+      showToast(`Drop failed: ${describeError(error)}`);
+    }
+  };
+
+  const handleDrop = (event: DragEvent) => {
+    const file = event.dataTransfer?.files?.[0];
+    if (!file) return;
+    event.preventDefault();
+    void handleDroppedFile(file);
+  };
+
   const openProjectPicker = async () => {
     const path = await pickHost({
       mode: "file",
@@ -1766,6 +1833,15 @@ export function App() {
       }
       const mod = event.ctrlKey || event.metaKey;
       const key = event.key.toLowerCase();
+      if (event.altKey && event.shiftKey && /^[1-3]$/.test(event.key)) {
+        event.preventDefault();
+        setMainView(
+          (["trace", "messages", "panel"] as MainView[])[
+            Number(event.key) - 1
+          ],
+        );
+        return;
+      }
       if (event.altKey && !mod && /^[1-5]$/.test(event.key)) {
         if (mainView === "panel") return;
         event.preventDefault();
@@ -1782,6 +1858,17 @@ export function App() {
       if (event.key === "F9") {
         event.preventDefault();
         void run({ type: state?.measuring ? "stop" : "start" });
+      } else if (event.key === "F10") {
+        if (!state?.measuring) return;
+        event.preventDefault();
+        void run({ type: "pause", on: !state?.tracePaused });
+      } else if (event.key === "F2") {
+        event.preventDefault();
+        document
+          .querySelector<HTMLInputElement>(
+            ".trace-panel input[type='search'], .panel-head input[type='search']",
+          )
+          ?.focus();
       } else if (mod && event.shiftKey && key === "s") {
         event.preventDefault();
         void saveProjectAs();
@@ -1809,7 +1896,7 @@ export function App() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [state?.measuring, state?.projectPath, mainView]);
+  }, [state?.measuring, state?.projectPath, state?.tracePaused, mainView]);
 
   const openDataPicker = () => {    setSessionOpen(false);
     setScriptsOpen(false);
@@ -2590,6 +2677,42 @@ export function App() {
       });
     }
     setChartTab("monitor");
+  };
+
+  const addExplorerData = (
+    channel: CatalogChannel,
+    message: CatalogMessage,
+    signal: CatalogSignal,
+  ) => {
+    if (!dataKeys.has(signal.key)) {
+      void run({
+        type: "add_data",
+        kind: channel.kind,
+        ch: channel.index,
+        id: message.id,
+        ext: message.extended,
+        frame: message.frame,
+        name: signal.name,
+      });
+    }
+    setChartTab("data");
+  };
+
+  const dropCatalogSignal = (event: DragEvent) => {
+    event.preventDefault();
+    const key =
+      event.dataTransfer?.getData("application/x-roxy-signal") ??
+      event.dataTransfer?.getData("text/plain") ??
+      "";
+    const hit = findCatalogSignal(catalog, key);
+    if (!hit) return;
+    if (chartTab === "monitor") {
+      addExplorerMonitor(hit.channel, hit.message, hit.signal);
+    } else if (chartTab === "data") {
+      addExplorerData(hit.channel, hit.message, hit.signal);
+    } else {
+      addExplorerChart(hit.channel, hit.message, hit.signal);
+    }
   };
 
   const applyReference = (data: ReferenceData) => {
@@ -4042,6 +4165,12 @@ export function App() {
       <main
         class="workspace"
         ref={workspaceRef}
+        onDragOver={(event) => {
+          if (event.dataTransfer?.types.includes("Files")) {
+            event.preventDefault();
+          }
+        }}
+        onDrop={handleDrop}
         style={{
           gridTemplateColumns:
             mainView === "panel"
@@ -4105,11 +4234,11 @@ export function App() {
                 </button>
                 <button
                   type="button"
-                  class={`mini ${traceFilterActive(traceFilter) ? "on" : ""}`}
+                  class={`mini filter-button ${traceFilterActive(traceFilter) ? "on" : ""}`}
                   onClick={() => setTraceFilterOpen(true)}
                   title="Direction, DBC-only, payload and time filters"
                 >
-                  Filters
+                  Filters{traceFilterCount > 0 ? ` · ${traceFilterCount}` : ""}
                 </button>
                 <button
                   type="button"
@@ -4212,6 +4341,68 @@ export function App() {
                   <button
                     type="button"
                     class="mini"
+                    disabled={mainMessages.length === 0}
+                    title="Copy the visible messages as tab-separated rows"
+                    onClick={() => {
+                      const text = mainMessages
+                        .map(
+                          (message) =>
+                            `${message.busName}\t${message.addr || `0x${message.id.toString(16).toUpperCase()}`}\t${message.name}\t${message.cycleMs.toFixed(1)}\t${message.data}`,
+                        )
+                        .join("\n");
+                      void navigator.clipboard
+                        .writeText(text)
+                        .then(() =>
+                          showToast(`Copied ${mainMessages.length} messages`),
+                        )
+                        .catch(() => showToast("Clipboard is unavailable"));
+                    }}
+                  >
+                    Copy
+                  </button>
+                  <button
+                    type="button"
+                    class="mini message-clear"
+                    disabled={mainMessages.length === 0}
+                    title={
+                      messageClearArmed
+                        ? "Click again to reset message counters"
+                        : "Reset message counters; Trace data is kept"
+                    }
+                    onClick={() => {
+                      if (!messageClearArmed) {
+                        setMessageClearArmed(true);
+                        return;
+                      }
+                      setMessageClearArmed(false);
+                      void run({ type: "clear_messages" });
+                    }}
+                  >
+                    {messageClearArmed ? "Confirm" : "Clear"}
+                  </button>
+                  <button
+                    type="button"
+                    class="mini"
+                    disabled={mainMessages.length === 0}
+                    title={
+                      allMessagesExpanded
+                        ? "Collapse all decoded signal rows"
+                        : "Expand all decoded signal rows"
+                    }
+                    onClick={() => {
+                      const next = !allMessagesExpanded;
+                      setAllMessagesExpanded(next);
+                      void run({
+                        type: "set_all_messages_expanded",
+                        on: next,
+                      });
+                    }}
+                  >
+                    {allMessagesExpanded ? "Collapse" : "Expand"}
+                  </button>
+                  <button
+                    type="button"
+                    class="mini"
                     onClick={() => openExport("messages")}
                     title="Export messages to a host CSV file"
                   >
@@ -4265,6 +4456,12 @@ export function App() {
         >
           <section
             class={`panel chart-panel ${chartFullscreen ? "chart-fullscreen" : ""}`}
+            onDragOver={(event) => {
+              if (event.dataTransfer?.types.includes("application/x-roxy-signal")) {
+                event.preventDefault();
+              }
+            }}
+            onDrop={dropCatalogSignal}
           >
             <div class="panel-head">
               <div class="tabs chart-tabs">
@@ -4782,6 +4979,10 @@ export function App() {
                   rows={writeRows}
                   clock={clock}
                   filtered={writeKind !== "all" || writeQuery.trim() !== ""}
+                  onFind={(query) => {
+                    setQuery(query);
+                    setMainView("trace");
+                  }}
                 />
               </div>
             )}

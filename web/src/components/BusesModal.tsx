@@ -7,6 +7,7 @@ import type {
   HwChannel,
 } from "../types";
 import { HostPathPick, fileBrowserOpen } from "./FileBrowser";
+import { uploadFile } from "../api";
 
 interface Props {
   buses: Bus[];
@@ -553,6 +554,7 @@ export function BusesModal({
   const [addOpen, setAddOpen] = useState(false);
   const addRef = useRef<HTMLDivElement>(null);
   const [selected, setSelected] = useState<string | null>(null);
+  const [busQuery, setBusQuery] = useState("");
   const [rowMenu, setRowMenu] = useState<string | null>(null);
   const [menuPos, setMenuPos] = useState({ top: 0, left: 0 });
   const rowMenuRef = useRef<HTMLDivElement>(null);
@@ -560,6 +562,42 @@ export function BusesModal({
   const selectedCanBus = selectedBus?.kind === "can" ? selectedBus : null;
   const selectedFrBus = selectedBus?.kind === "flexray" ? selectedBus : null;
   const selectedEthBus = selectedBus?.kind === "ethernet" ? selectedBus : null;
+  const busNeedle = busQuery.trim().toLowerCase();
+  const visibleBuses = busNeedle
+    ? buses.filter(
+        (bus) =>
+          bus.name.toLowerCase().includes(busNeedle) ||
+          bus.kind.toLowerCase().includes(busNeedle) ||
+          (bus.source ?? "").toLowerCase().includes(busNeedle),
+      )
+    : buses;
+
+  const dropDescription = async (file: File) => {
+    if (!selectedBus) {
+      onError("Select a bus before dropping a description");
+      return;
+    }
+    const name = file.name.toLowerCase();
+    try {
+      if (name.endsWith(".dbc")) {
+        if (!selectedCanBus) {
+          onError("DBC files can only be attached to a CAN bus");
+          return;
+        }
+        const path = await uploadFile(file);
+        onAddDescription(selectedCanBus.index, "dbc", path);
+        return;
+      }
+      if (/\.(arxml|xml|fibex)$/.test(name)) {
+        const path = await uploadFile(file);
+        onScanArxml(path);
+        return;
+      }
+      onError("Drop a DBC or ARXML/FIBEX file here");
+    } catch (error) {
+      onError(error instanceof Error ? error.message : String(error));
+    }
+  };
 
   const wireFor = (bus: Bus) => {
     if (bus.kind === "can") {
@@ -684,6 +722,18 @@ export function BusesModal({
         aria-modal="true"
         aria-label="Buses and hardware"
         onMouseDown={(event) => event.stopPropagation()}
+        onDragOver={(event) => {
+          if (event.dataTransfer?.types.includes("Files")) {
+            event.preventDefault();
+          }
+        }}
+        onDrop={(event) => {
+          const file = event.dataTransfer?.files?.[0];
+          if (!file) return;
+          event.preventDefault();
+          event.stopPropagation();
+          void dropDescription(file);
+        }}
       >
         <header class="modal-head">
           <h2>Buses</h2>
@@ -692,6 +742,16 @@ export function BusesModal({
               {buses.length} bus{buses.length === 1 ? "" : "s"} ·{" "}
               {attachedCount} attached
             </span>
+            <input
+              class="bus-filter"
+              type="search"
+              value={busQuery}
+              placeholder="Filter buses…"
+              aria-label="Filter buses"
+              onInput={(event) =>
+                setBusQuery((event.target as HTMLInputElement).value)
+              }
+            />
             <div class="add-cluster" ref={addRef}>
               <button
                 type="button"
@@ -743,7 +803,7 @@ export function BusesModal({
                 </tr>
               </thead>
               <tbody>
-                {buses.map((bus) => {
+                {visibleBuses.map((bus) => {
                   const key = busKey(bus);
                   const isSelected = key === selected;
                   return (
@@ -902,6 +962,13 @@ export function BusesModal({
                     </tr>
                   );
                 })}
+                {visibleBuses.length === 0 && (
+                  <tr>
+                    <td colSpan={6} class="clusters-empty">
+                      No buses match “{busQuery.trim()}”.
+                    </td>
+                  </tr>
+                )}
               </tbody>
             </table>
             <p class="clusters-hint">

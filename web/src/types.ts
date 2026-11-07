@@ -797,6 +797,8 @@ export type Command =
       to_us?: number;
     }
   | { type: "clear_trace" }
+  | { type: "clear_messages" }
+  | { type: "set_all_messages_expanded"; on: boolean }
   | {
       type: "run_panel_action";
       name: string;

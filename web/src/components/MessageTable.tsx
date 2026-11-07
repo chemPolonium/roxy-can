@@ -1,6 +1,5 @@
 import { Fragment } from "preact";
 import type { ComponentChildren } from "preact";
-import { useState } from "preact/hooks";
 import type { Message } from "../types";
 
 function hexId(message: Message): string {
@@ -19,7 +18,6 @@ export function MessageTable({
   onExpand?: (key: string, on: boolean) => void;
   empty?: ComponentChildren;
 }) {
-  const [expanded, setExpanded] = useState<Set<string>>(new Set());
   if (rows.length === 0) {
     if (empty && !filtered) return <>{empty}</>;
     return (
@@ -36,14 +34,7 @@ export function MessageTable({
 
   const toggle = (message: Message) => {
     if (message.signalCount === 0) return;
-    const open = !expanded.has(message.key);
-    setExpanded((old) => {
-      const next = new Set(old);
-      if (open) next.add(message.key);
-      else next.delete(message.key);
-      return next;
-    });
-    onExpand?.(message.key, open);
+    onExpand?.(message.key, (message.signals?.length ?? 0) === 0);
   };
 
   return (
@@ -67,7 +58,7 @@ export function MessageTable({
         </thead>
         <tbody>
           {rows.map((message) => {
-            const open = expanded.has(message.key);
+            const open = (message.signals?.length ?? 0) > 0;
             const expandable = message.signalCount > 0;
             return (
               <Fragment key={message.key}>
