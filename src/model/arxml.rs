@@ -1683,10 +1683,17 @@ fn indexed_tag(tag: &str) -> bool {
 fn object_path(node: Node<'_, '_>) -> String {
     let mut parts = Vec::new();
     for ancestor in node.ancestors() {
-        if ancestor.is_element()
-            && ancestor.has_tag_name("AR-PACKAGE")
-            && let Some(name) = child_text(ancestor, "SHORT-NAME")
-        {
+        if !ancestor.is_element() {
+            continue;
+        }
+        let container = ancestor.has_tag_name("AR-PACKAGE")
+            || ancestor.has_tag_name("CAN-CLUSTER")
+            || ancestor.has_tag_name("FLEXRAY-CLUSTER")
+            || ancestor.has_tag_name("ETHERNET-CLUSTER")
+            || ancestor.has_tag_name("CAN-PHYSICAL-CHANNEL")
+            || ancestor.has_tag_name("FLEXRAY-PHYSICAL-CHANNEL")
+            || ancestor.has_tag_name("ETHERNET-PHYSICAL-CHANNEL");
+        if container && let Some(name) = child_text(ancestor, "SHORT-NAME") {
             parts.push(name);
         }
     }
