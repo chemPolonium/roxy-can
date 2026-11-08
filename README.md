@@ -4,11 +4,13 @@
 
 ![roxy-can](screenshot.png)
 
-| Messages | Signal cursor |
+| Quad layout | Focus · signal cursors |
 |---|---|
-| ![Messages](screenshot-messages.png) | ![Signal cursor](screenshot-signals.png) |
+| ![Quad layout](screenshot-layouts.png) | ![Signal cursors](screenshot-signals.png) |
 
 ![Panel](screenshot-panel.png)
+
+截图使用浅色主题：首图是 Main + side（Signals / Monitor / Data），下表展示 Quad（Rate / Bus load / State / Write）和 Focus（曲线与 A/B 游标），最后是 Panel 操作页。
 
 完整操作语义见 [docs/usage.md](docs/usage.md)，产品定位与体验准则见 [docs/product.md](docs/product.md)，这一页只说有什么。
 
