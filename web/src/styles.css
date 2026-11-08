@@ -7598,35 +7598,6 @@ button.danger:hover:not(:disabled) {
   }
 }
 
-@media (max-width: 1200px) {
-  /* The Trace header now carries the row actions too; drop the row count
-     before the filter box has to shrink below usability. */
-  .trace-panel .panel-head .meta {
-    display: none;
-  }
-
-  /* The main-view tabs share the Trace header with every trace tool. Below
-     this width the tools get their own wrapping row instead of clipping. */
-  .trace-panel.trace .panel-head {
-    flex: 0 0 auto;
-    flex-wrap: wrap;
-    height: auto;
-    min-height: 30px;
-    padding: 3px 8px;
-    row-gap: 4px;
-  }
-
-  .trace-panel.trace .panel-head .panel-tools {
-    flex: 1 1 100%;
-    flex-wrap: wrap;
-    margin-left: 0;
-  }
-
-  .trace-panel.trace .panel-head .panel-tools > input {
-    max-width: none;
-  }
-}
-
 @media (max-width: 1100px) {
   /* Signal/Monitor/Data/State each add head actions; the fullscreen icon
      needs a little room before the header starts clipping. */
@@ -7920,4 +7891,304 @@ button.danger:hover:not(:disabled) {
   color: var(--muted);
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+/* --- Fixed dock layouts and slot pages ------------------------------- */
+
+.workspace.workspace-dock,
+.workspace.workspace-panel {
+  display: flex;
+}
+
+.workspace-panel > .page-panel {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+}
+
+.dock-body {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+}
+
+.dock-body.focus {
+  display: flex;
+}
+
+.dock-body.split,
+.dock-body.main-side {
+  display: flex;
+}
+
+.dock-side {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+.dock-body.quad {
+  display: grid;
+}
+
+.dock-slot {
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 0;
+  /* The panel chooser menu is absolutely positioned inside the slot; the
+     page bodies each own their scrolling, so let the menu escape the
+     rounded panel box. */
+  overflow: visible;
+}
+
+.dock-splitter.vertical {
+  flex: 0 0 3px;
+}
+
+.dock-splitter.horizontal {
+  flex: 0 0 3px;
+}
+
+.dock-body.quad > .dock-splitter.quad-v {
+  grid-column: 2;
+  grid-row: 1 / span 3;
+  min-width: 3px;
+}
+
+.dock-body.quad > .dock-splitter.quad-h {
+  grid-column: 1 / span 3;
+  grid-row: 2;
+  min-height: 3px;
+}
+
+/* One row for every page: chooser, page actions, maximize. At narrow
+   widths the action cluster wraps instead of clipping the way the old
+   five-tab chart header did. */
+.dock-head {
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  height: auto;
+  min-height: 30px;
+  padding: 3px 8px;
+  row-gap: 4px;
+}
+
+.dock-head-spacer {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.dock-head-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex: 0 1 auto;
+  flex-wrap: wrap;
+  gap: 5px;
+  min-width: 0;
+}
+
+.dock-head-actions > select,
+.dock-head-actions > input,
+.dock-head-actions > button {
+  flex: 0 1 auto;
+}
+
+.dock-head-actions > input {
+  flex: 1 1 90px;
+  min-width: 60px;
+  max-width: 220px;
+}
+
+.slot-menu-wrap {
+  flex: 0 0 auto;
+}
+
+.slot-panel-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 24px;
+  padding: 0 7px;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  background: var(--accent-soft);
+  color: #dce7f5;
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.slot-panel-trigger:hover {
+  background: #223144;
+}
+
+.slot-panel-menu {
+  top: 28px;
+  left: 0;
+  min-width: 248px;
+  max-height: min(72vh, 580px);
+  overflow: auto;
+}
+
+.slot-panel-menu button {
+  align-items: flex-start;
+}
+
+.slot-panel-menu button > span:nth-child(2) {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.slot-panel-menu button em {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 9.5px;
+  font-style: normal;
+  white-space: nowrap;
+}
+
+.slot-panel-menu button.on {
+  background: var(--accent-soft);
+}
+
+.slot-menu-check {
+  display: inline-flex;
+  flex: 0 0 14px;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  margin-top: 1px;
+}
+
+.slot-menu-check svg {
+  width: 12px;
+  height: 12px;
+}
+
+.slot-menu-note {
+  padding: 3px 8px 6px;
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.layout-menu .layout-glyph {
+  font-size: 13px;
+  line-height: 1;
+}
+
+.layout-panel {
+  min-width: 236px;
+}
+
+.layout-panel .layout-check {
+  flex: 0 0 12px;
+  color: var(--accent);
+  font-size: 11px;
+}
+
+.layout-panel .menu-copy small {
+  display: block;
+  margin-top: 1px;
+  color: var(--muted);
+  font-size: 9.5px;
+}
+
+.dock-slot.dock-maximized {
+  overflow: hidden;
+  position: fixed;
+  inset: 0;
+  z-index: 95;
+  width: 100vw;
+  height: 100vh;
+  border: 0;
+  border-radius: 0;
+  background: var(--panel);
+}
+
+.dock-slot.dock-maximized .signal-stack {
+  flex: 1 1 auto;
+  flex-direction: row;
+  min-height: 0;
+}
+
+.dock-slot.dock-maximized .signal-stack > .signal-chart-wrap {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 100%;
+}
+
+.dock-slot.dock-maximized .cursor-analysis {
+  order: -1;
+  flex: 0 0 330px;
+  height: 100%;
+  max-height: none;
+  border-top: 0;
+  border-right: 1px solid var(--line);
+}
+
+.dock-slot.dock-maximized .cursor-analysis-head {
+  flex-wrap: wrap;
+  row-gap: 3px;
+}
+
+/* Narrow windows need the page selectors to keep the header one line. */
+@media (max-width: 1100px) {
+  .layout-menu .layout-menu-label {
+    display: none;
+  }
+
+  .dock-head .meta {
+    display: none;
+  }
+
+  .dock-head-actions > input {
+    flex-basis: 80px;
+  }
+
+  .dock-slot.dock-maximized .cursor-analysis {
+    flex-basis: 260px;
+  }
+}
+
+
+/* A Trace page in a narrow dock slot needs the same two-row header the
+   viewport media query gives the full-width case. The slot measures itself,
+   so a quad on a 1280 screen also wraps. */
+.dock-slot.dock-narrow.trace .panel-head {
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  height: auto;
+  min-height: 30px;
+  padding: 3px 8px;
+  row-gap: 4px;
+}
+
+.dock-slot.dock-narrow.trace .panel-head .meta {
+  display: none;
+}
+
+.dock-slot.dock-narrow.trace .panel-head .panel-tools {
+  flex: 1 1 100%;
+  flex-wrap: wrap;
+  margin-left: 0;
+}
+
+.dock-slot.dock-narrow.trace .panel-head .panel-tools > input {
+  max-width: none;
+}
+
+.dock-slot.dock-narrow .dock-head {
+  padding: 3px 6px;
+  gap: 4px;
+}
+
+.dock-slot.dock-narrow .dock-head-actions {
+  gap: 4px;
+}
+
+.dock-slot.dock-narrow .dock-head-actions .mini {
+  padding-inline: 6px;
 }

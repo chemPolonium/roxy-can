@@ -14,15 +14,16 @@
 
 ## 功能
 
-界面是固定的 Web 外壳：Trace / Messages / Panel 主视图切换、右侧
-Rate/Signals/Monitor/Data/State 标签页、下栏 Messages stats/Bus load/Spec/SOME/IP/Write，
-入口与操作见 [web/README.md](web/README.md)。下文的“窗口”指 core 的
-观测模型，Web 用对应标签页呈现。
+界面是固定的 Web 外壳：Standard 工作区提供 **Focus / Split / Main + side / Quad**
+四种布局，每个槽位用页眉菜单选面板或移动；顶栏 **Standard / Panel** 切换操作页。
+Trace / Messages / Rate / Signals / Monitor / Data / State / Messages stats / Bus load /
+Spec / SOME/IP / Write 都是单实例页面，可放进任意槽位。入口与操作见
+[web/README.md](web/README.md)。下文的“窗口”指 core 的观测模型，Web 用对应页面呈现。
 
 - **动态总线**：数量不固定，在 Buses 窗口增删、改名，每条总线单独加载 DBC；删除总线时观测器、过滤器与生成器条目自动跟着重映射。
 - **DBC 解码**：复用报文只解当前那一组；值表显示枚举文本；浮点信号按位模式解码并带类型标记。
 - **帧模型**：经典 CAN、CAN FD（变长载荷至 64 字节、BRS / ESI）、错误帧、远程帧。Trace 的 Flags 列统一给帧类型，错误行与远程行有底色。
-- **观测面板**：Trace、Messages、消息统计（Messages stats）、Signals、Data、State、Monitor 各有独立过滤与选择；Data/Signals 可跨总线勾选信号，Signals 还支持 **Read**（只订阅、不画 lane，游标处读数），Messages 行可展开查看解码信号（按需解码）。
+- **观测面板与布局**：Trace、Messages、Messages stats、Rate、Signals、Monitor、Data、State、Bus load、Spec、SOME/IP、Write 都是单实例页面，用页眉菜单放进 Focus / Split / Main + side / Quad 的任意槽位；选一个已在别处的面板会交换两个槽位，Move to 直接移动当前页。Trace/Messages 有独立过滤与选择；Data/Signals 可跨总线勾选信号，Signals 还支持 **Read**（只订阅、不画 lane，游标处读数），Messages 行可展开查看解码信号（按需解码）。
 - **Panel 操作页**：顶栏 Standard / Panel 切换；多页面标签栏，每页独立画幅与控件；固定画布默认 1280×720、始终显示 8px 网格，Edit 下可新建/复制/重命名/删除页面并改画幅尺寸，用 **+ Add** 菜单添加 Button / Value / Bar / Gauge / Lamp / Toggle / Setpoint 控件，拖动/缩放吸附网格；Button 的 **On click** 二选一——**Send message**（发一条 CAN / FlexRay / Ethernet / SOME/IP 报文；已知帧可按物理值编码；SOME/IP 可按 ARXML 字段名填值）或 **Script action**（`on panel_action("…")`，可带数值参数），Value 只读显示信号/派生/SysVar 并可按升序上限给数字分段染色，Bar / Gauge 按 min/max 填充并复用同一套色段，Lamp 在源值达到阈值时点亮（颜色可选），Toggle 写 SysVar 0/1，Setpoint 写 SysVar 或 DBC 信号并按所属后端的量程夹取；页面以 `.rxpanel` 文档存进工程文件，打开工程时自动合并回 Panel；也可单独 **Export** / **Import**（严格校验）。**Fullscreen** 覆盖应用外壳但保持浏览器窗口、画布居中不缩放。
 - **Trace**：虚拟滚动（几十万行的过滤结果照样流畅），payload 字节搜索、信号值条件（`Name>10`）、精确地址（`id:1AB` / `slot:13`）、时间范围、列头排序、右键"Filter this ID"、行游标 A/B 与 Δt 读数、点一行选中后用 ↑/↓ 走行、Ctrl+C 复制。
 - **总线负载与规格监视**：按总线给线上一帧占时加权的负载与帧率（1 s 滚动窗）、60 s 负载曲线、错误帧计数；Specification 把实测流量与数据库声明逐条对账——Unknown / Dlc / Cycle / Missing 四类判定，容差与宽限可调，可导出 CSV。
@@ -32,11 +33,11 @@ Rate/Signals/Monitor/Data/State 标签页、下栏 Messages stats/Bus load/Spec/
 - **Profile 与硬件映射**：`profiles/<名>.toml` 存角色覆盖与硬件映射，配合 `--profile` 让同一份工程在仿真 / 台架 / CI 之间零修改切换；错配整份拒绝，绝不只生效一半。
 - **Kvaser / Vector 硬件连接**：Buses 里选中总线、选硬件通道再点 **Attach**；通道被别的程序占用时自动降级为仅接收并在行上标注；CAN FD 按总线的数据段波特率申请，硬件不支持就降级经典并标注。连接期间收到的帧照常进入所有视图，真实节点不必被模拟。发送被线路拒绝不再是静默的：第一次写入 Write 窗口带驱动给的原因，之后只在 Buses 行上累计次数。
 - **FlexRay**：可同时监听多路，每路一份自己的集群描述（FIBEX 2.x/3.x 或 AUTOSAR ARXML，中文编码无碍）。帧名与信号都按该路的描述解码，与 CAN 帧在 Trace 里按时间混排；Messages 逐帧给计数与周期均值±抖动，负载与规格照常判定；信号可订阅画曲线、进 State Tracker；帧到达与信号越阈都能作触发条件。**目前仅接收**：生成器条目与脚本发的 FlexRay 帧只进入本会话（所有视图与录制都看得见），但不出端口、不会被另一台设备收到。
-- **车载以太网**：Buses 加载 AUTOSAR Ethernet 矩阵（ARXML）或 FIBEX 的 CHANNEL/FRAME/PDU/SIGNAL，没有 frame 的 PDU-only ARXML 也保留 PDU 与 endpoint 清单；Buses 的 **Live port…** 可把 Npcap 接口挂到 ETH 路，实时收帧、发帧；离线 PCAP/PCAPNG 与 BLF 的以太网帧按 VLAN/长度/EtherType 匹配帧定义并解码 PDU/I-Signal；录制时 ASC/BLF 与同名 `.eth.pcap` 同时留档，也可直接选 PCAP 格式只录 Ethernet；帧与 CAN/FlexRay 在 Trace 同表按时间混排，Messages stats 有 flow 行，信号可订阅画曲线；SOME/IP over UDP/TCP（含 Service Discovery）解码到 **SOME/IP** 标签页，分 Events / Services / Availability 查看 service/method/type/endpoint、ARXML 参数与 SD 可用性；Trace 导出 `.pcap`（MAC/VLAN/EtherType/载荷），ASC 导出负责 CAN/FlexRay。`FRAME-LENGTH 含 L2 头` 随工程保存。
+- **车载以太网**：Buses 加载 AUTOSAR Ethernet 矩阵（ARXML）或 FIBEX 的 CHANNEL/FRAME/PDU/SIGNAL，没有 frame 的 PDU-only ARXML 也保留 PDU 与 endpoint 清单；Buses 的 **Live port…** 可把 Npcap 接口挂到 ETH 路，实时收帧、发帧；离线 PCAP/PCAPNG 与 BLF 的以太网帧按 VLAN/长度/EtherType 匹配帧定义并解码 PDU/I-Signal；录制时 ASC/BLF 与同名 `.eth.pcap` 同时留档，也可直接选 PCAP 格式只录 Ethernet；帧与 CAN/FlexRay 在 Trace 同表按时间混排，Messages stats 有 flow 行，信号可订阅画曲线；SOME/IP over UDP/TCP（含 Service Discovery）解码到 **SOME/IP** 页，分 Events / Services / Availability 查看 service/method/type/endpoint、ARXML 参数与 SD 可用性；Trace 导出 `.pcap`（MAC/VLAN/EtherType/载荷），ASC 导出负责 CAN/FlexRay。`FRAME-LENGTH 含 L2 头` 随工程保存。
 - **统一 ARXML 导入**：Buses 的 `Import ARXML...` 一次读取文件里的全部 CAN / FlexRay / Ethernet cluster，各自建一路；CAN ARXML 读标识符/帧类、帧→PDU、I-Signal、compu/单位、PDU 周期与 ECU 端口发送方，和 DBC 共用同一套分析路径。
 - **回放块**：依附于 DBC 节点——把该节点录制过的日志按 id 过滤后重新发到仿真总线上，按录制间距发送，仿真 restbus 的落地方案。
 - **仿真节点**：类 CAPL 的小语言编译执行，`on start` / `on message` / `on fr slot` / `on timer` / `on errorFrame` 事件驱动，读写 DBC 信号、收发帧、随机与波形内建。每个回调有指令预算，有缺陷的脚本不会卡住总线，出错节点自动停止运行。可绑定到 DBC 节点，绑定后能否发送由该节点的角色决定。编辑器三栏：处理器大纲、静态收发事实表、函数与报文速插。语言参考见 [docs/script_language.md](docs/script_language.md)，可运行示例见 `examples/`。
-- **派生信号**：脚本 `emit_value("名", 表达式)` 一行发布，像数据库信号一样进 Graphics / Data / State Tracker。
+- **派生信号**：脚本 `emit_value("名", 表达式)` 一行发布，像数据库信号一样进 Signals / Data / State。
 - **系统变量**：CANoe 式的命名空间变量（初值 / 界限 / 单位 / 备注），专用窗口管理，脚本读写，同时发布为可观测流；每次测量开始复位为初值。
 - **Monitor 监控面板**：轻量纯文本行，一行一个信号，行内阈值着色规则让"温度超 90 变红"这类告警一眼可见。
 - **State Tracker**：对订阅信号的历史做状态分段——枚举标签、二进制方波、会话稳定配色，支持自定义区间与固定颜色，短区段按最短显示时长合并，区段表可导出 CSV。
@@ -87,7 +88,7 @@ cargo run -- --web --replay <path.asc|blf|pcap|pcapng> # 载入并开始回放
 `cargo build --release` 产出的 exe 已内嵌前端资源，可以单独拷走运行。双击会
 保留一个终端窗口，服务地址和启动失败原因都打印在那里；`--port <n>` 可换端口。
 
-当前 Web 端已有：Trace / Messages 主视图（CAN、FlexRay、Ethernet 同行混排，方向、仅解码、Payload、时间范围、ID 包含/排除过滤，50k 行虚拟化）、总线速率/负载曲线、DBC 信号多泳道曲线与游标读数、Start/Stop/Pause；回放条（Speed 0.5x–Fast、Step 10ms–5s、Play for 1–60s、Play to 绝对时间，只向前）；品牌菜单的 **Open project… / Recent projects** 与 Ctrl+O 打开工程，**Save / Save as** 保存（保留工作区与 Graphics 配置，未保存有标记）；**Setup** 菜单里的 **Recording…**（ASC/BLF/PCAP、文件名模板与 `100, 3F4x, FR0:13` 白名单，写入工程旁 `Record/`）、**Replay…**（保存的日志文件夹、录制列表、Channel map）与 **Scripts…**（节点脚本的编辑、应用、日志、断点单步、断言）；**Buses…** 增删/改名/改速率/加载 DBC·FIBEX·ARXML，探测并挂载 Kvaser/Vector 通道、切换 Simulated/Real bus，每个 DBC 节点以 chip 切换 Simulated/Offline；**Setup → Generator…** 编辑 CAN/FlexRay 发送条目（On、周期、hex，CAN 另有 FD/BRS，一键模拟节点）与 **Replay blocks**，**Sources** 给 DBC 信号加波形（Ramp/Sine/Step/Random/Triangle/Counter）；**Triggers…** 与 **Variables…** 管理规则和系统变量；右侧 **Monitor / Data / State**，下栏 **Statistics / Bus / Spec / SOME/IP / Write**；**Export…** 按扩展名导出 ASC/PCAP 与 CSV/TXT。观测覆盖 CAN、FlexRay 与 Ethernet；生成覆盖 CAN 与 FlexRay 会话帧（FlexRay 端口仍只收），Ethernet 可挂 Npcap 实时口收发，未挂口时 Panel/Trigger 只注入本会话。信号选择、曲线与 Monitor/Data/State 行随工程保存。
+当前 Web 端已有：Trace / Messages 主视图（CAN、FlexRay、Ethernet 同行混排，方向、仅解码、Payload、时间范围、ID 包含/排除过滤，50k 行虚拟化）、总线速率/负载曲线、DBC 信号多泳道曲线与游标读数、Start/Stop/Pause；回放条（Speed 0.5x–Fast、Step 10ms–5s、Play for 1–60s、Play to 绝对时间，只向前）；品牌菜单的 **Open project… / Recent projects** 与 Ctrl+O 打开工程，**Save / Save as** 保存（保留工作区与 Signals 曲线配置，未保存有标记）；**Setup** 菜单里的 **Recording…**（ASC/BLF/PCAP、文件名模板与 `100, 3F4x, FR0:13` 白名单，写入工程旁 `Record/`）、**Replay…**（保存的日志文件夹、录制列表、Channel map）与 **Scripts…**（节点脚本的编辑、应用、日志、断点单步、断言）；**Buses…** 增删/改名/改速率/加载 DBC·FIBEX·ARXML，探测并挂载 Kvaser/Vector 通道、切换 Simulated/Real bus，每个 DBC 节点以 chip 切换 Simulated/Offline；**Setup → Generator…** 编辑 CAN/FlexRay 发送条目（On、周期、hex，CAN 另有 FD/BRS，一键模拟节点）与 **Replay blocks**，**Sources** 给 DBC 信号加波形（Ramp/Sine/Step/Random/Triangle/Counter）；**Triggers…** 与 **Variables…** 管理规则和系统变量；页眉菜单把 **Rate / Signals / Monitor / Data / State / Messages stats / Bus load / Spec / SOME/IP / Write** 放进四种布局的槽位；**Export…** 按扩展名导出 ASC/PCAP 与 CSV/TXT。观测覆盖 CAN、FlexRay 与 Ethernet；生成覆盖 CAN 与 FlexRay 会话帧（FlexRay 端口仍只收），Ethernet 可挂 Npcap 实时口收发，未挂口时 Panel/Trigger 只注入本会话。布局、信号选择、曲线与 Monitor/Data/State 行随工程保存。
 
 ## 上手
 
@@ -95,7 +96,7 @@ cargo run -- --web --replay <path.asc|blf|pcap|pcapng> # 载入并开始回放
 2. 顶栏 **Run mode** 选 **Simulation** 或 **Replay** 后点 **Start**；Replay 先在 **Setup → Replay…** 勾选录制
 3. **Buses…** 里把 DBC 节点切到 **Simulated**，在 **Setup → Generator…** 里逐条打开发送的报文、调数值、加激励
 4. **Setup → Recording…** 配好文件名与格式，点顶栏 **Record** 开始/停止；**Save** 保存工程
-5. 下栏 **Spec** 看实测流量与数据库声明的对账结果
+5. **Spec** 页看实测流量与数据库声明的对账结果
 
 ## 命令行
 

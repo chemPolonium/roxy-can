@@ -1,9 +1,26 @@
 # 使用说明
 
-各面板能做什么、数字按什么口径算、出错时说什么。界面是固定的 Web 外壳
-（Trace / Messages / Panel 主视图 + 右侧图表页 + 下栏），文中“窗口”指对应的 core
-观测模型与标签页。
+各面板能做什么、数字按什么口径算、出错时说什么。界面是固定的 Web 外壳：
+Standard 工作区可选 Focus / Split / Main + side / Quad 四种布局，每个槽位用页眉菜单
+选面板；顶栏 Standard / Panel 切换操作页。文中“窗口”指对应的 core 观测模型与页面。
 总览与快速上手见 `README.md`，脚本语法见 `docs/script_language.md`。
+
+## 布局与槽位
+
+- **四种布局**：Focus（1 页）、Split（左右 2 页）、Main + side（主页 + 右侧上下 2 页）、
+  Quad（2×2 4 页）。顶栏 **▦ Layout** 菜单切换；Alt+1…4 同效。工程文件记住每种布局
+  各自的页面分配与分隔比例，切换布局不会覆盖另一套配置。
+- **每个页一个面板**：页眉左侧是面板菜单，按 Stream / Live / Analysis 分组；选中面板
+  即放到这一页。面板只有一个实例：如果它已经在别的槽位，两个槽位交换；菜单右侧标出
+  它当前在哪个槽位。
+- **Move to**：页面菜单里的 Move to 把当前页整体移到另一个槽位，同样与目标页交换，
+  不会出现重复页或丢页。
+- **最大化**：页眉最右的图标把当前页盖住应用外壳；Esc 或再点一次恢复。Signals 最大化
+  时读数表在左侧，其他页按原样铺满。
+- **保持固定**：布局只是四种预设，不提供自由拖拽、浮动窗、关闭页或任意嵌套分割；
+  未显示的面板随时可以从任意页的页眉菜单选出来。
+- **窄槽位**：1024 宽度下页眉会换行；Trace 表在很窄的槽位里可能出现横向滚动，需要整表
+  宽度时用 Focus/Split 或拖宽分隔条。
 
 ## 运行模式与测量状态
 
@@ -122,7 +139,7 @@ roxy-can -h                               完整帮助
 - **E2E**：受保护的 CAN/FlexRay/Ethernet 行显示 `E2E Pn`；当 ARXML/DBC 给出 profile、Data ID 和 CRC 位置时，同时校验 CRC（Profile 1/2/4/5/7/11/22/44，Profile 4/5/7/44 需显式 CRC 位置），失败标红并写 `✗`；没有 CRC 位置时只保留计数连续性与 Data ID。
 - **Messages stats**：FR 槽位与 CAN 报文并列（计数、间隔 min/avg/max、占比）。
 - **作用域**下拉有 `FlexRay: <路名>` 一档（与 `Bus: CAN{n}` 分列，因为两套编号不互解）：只看这一路，占比也算这一路的。**Manual 手动勾选的集合**同样能勾槽，与 CAN 报文共用同一份勾选集合。
-- **信号可订阅**：Graphics / Data / State / Monitor 都能选 FlexRay 信号，身份就是 `(路, 槽, 信号名)`。
+- **信号可订阅**：Signals / Data / State / Monitor 都能选 FlexRay 信号，身份就是 `(路, 槽, 信号名)`。
 - **录与放对称**：CANoe 录的 BLF 与 ASC 里的 FlexRay 收帧一并读入；本工具自己录的文件也写同类对象/行，录完再放回来是同一批帧。`--convert` 与 Trace 的 ASC 导出保留 FlexRay 流量。
 - 负载与规格另有口径，见下面"总线统计与规格监视"。
 
@@ -135,7 +152,7 @@ roxy-can -h                               完整帮助
 - **Trace**：以太网帧与 CAN/FlexRay 按时间混排。Bus 列 `ETHn`，ID 列 EtherType，Name 列矩阵帧名（无唯一匹配时是 MAC 对）；右键可把该 L2 flow 加入本窗口的 Manual 选择。作用域多一档 `Ethernet: ETHn`。
 - **实时 vs 会话**：没有挂实时口时，Panel 的 **Send message** 只注入本会话并进入当前录制；挂了实时口且 Real bus 打开时，帧走线上，Trace 里由 Npcap 回读。
 - **Messages stats**：每个 L2 flow 一行，MAC、VLAN、EtherType、计数与周期；CSV 导出同样包含。
-- **订阅**：以太网信号进 Graphics / Data / State / Monitor，身份是 `(ETH 路, 帧名, 信号名)`，随工程保存；作用域为某个 Ethernet 路或 Manual flow 时 Messages stats 也按同一规则收窄。
+- **订阅**：以太网信号进 Signals / Data / State / Monitor，身份是 `(ETH 路, 帧名, 信号名)`，随工程保存；作用域为某个 Ethernet 路或 Manual flow 时 Messages stats 也按同一规则收窄。
 - **Channel map**：抓包工具的以太网 channel 有单独一张表，先映射到工程的 `ETHn` 再匹配矩阵、解码和聚合。
 - **导出**：Trace 窗口的 Export 按扩展名选格式——`.asc` 写 CAN/FlexRay；`.pcap` 写经典 PCAP（LINKTYPE_ETHERNET，保留 MAC、VLAN TPID（含 0x88A8）、EtherType 和载荷，不写 FCS；经典 PCAP 没有方向位，Rx/Tx 都按线上帧导出）。Messages stats 的 CSV 里以太网行把 EtherType 放在 `id` 列、VLAN 写进 `name` 列。
 
@@ -153,11 +170,11 @@ roxy-can -h                               完整帮助
 - **导出 / 导入**：Triggers 窗口的 **Export** 把当前全部规则写成 `.rxtriggers`（JSON，带版本）；**Import** 追加到当前工程，按 cluster 名称重新映射总线，逐条校验并在状态行报告跳过原因。引用不存在或重名的总线不会被静默猜一个。
 - **Check**：静态检查规则引用的总线、sysvar、派生通道、发生器条目、脚本动作和目标帧是否存在；导入后或开跑前用它找出“武装但永远不会触发/动作必然失败”的规则。它不重放流量，运行时仍以 Write 的 Warning 为准。
 
-## Graphics（曲线窗口）
+## Signals（曲线页）
 
 - **游标 A/B**（曲线区的 **+ Cursor**）：按钮在可见数据中点放一条游标（依次标 A、B、C…，Δt 取 A/B 两条），按住游标线拖动微调，**Clear** 清掉全部。右上角读数给 `A`/`B` 两个时刻与 **Δt**（自动换单位，B 在 A 前就读负数），下面每个 **Plot** 或 **Read** 信号一行 `名字 A值 → B值 Δ差值`。
 - **Read 信号**：Signals 选择器里每个信号都有 **Plot / Read** 两段式模式开关。Read 只订阅、不画 lane，但读数表始终存在：没有游标时显示 **Live values** 与最新值（列头 `Now`），有游标时切到游标值，A/B 时一起显示 A/B/Δ 与区间统计。点当前模式可取消，切换另一段直接换模式，Ctrl-click 信号名也能切换 Read。图上一个 lane 都没有时仍可拖游标读数，Read 集合随工程 workspace 保存。
-- **全屏读数**：Signals 全屏时读数表变成左侧竖栏，信号名与 A/B/Δ 值同行紧挨，图表占右侧；非全屏仍保留图下方的读数表。
+- **Maximize 读数**：Signals 页最大化时读数表变成左侧竖栏，信号名与 A/B/Δ 值同行紧挨，图表占右侧；未最大化仍保留图下方的读数表。
 - 游标记的是**时间**：平移、缩放、实时推进都让线跟着视图走，标的点不动；跑出视野的游标不画线，时刻仍留在读数里。没打上的那条印 `-`，没有样本的时刻也印 `-`——不把 0 当成一个读数显示。
 - 游标位置与 Read 集合保存在 Web workspace 里，随工程保存恢复。
 
@@ -176,7 +193,7 @@ roxy-can -h                               完整帮助
 ## State Tracker
 
 - 对订阅信号的历史做状态分段：值不变的最长区段为一条带，带内标值。
-- Graphics / Data 左侧信号列表里**右键任一信号**即可加入某个 State Tracker。
+- Signals 页的 lane 菜单或 Data 页里**右键任一信号**即可加入 State Tracker。
 - 恒定贴实时边缘（回放中跟随播放头）；时间窗 5 秒到 30 分钟预设；**Min ms** 把更短的区段并入前一段（0 = 全部显示）。
 - 默认模式取 VAL_ 值表标签（显示枚举名而非数字）；每个状态可固定颜色，未固定的按会话槽位自动配色。自定义模式按切分点分区间，每区间自定义名字与颜色。
 - 可见状态只有 {0,1} 时自动画成二进制方波。
@@ -184,7 +201,7 @@ roxy-can -h                               完整帮助
 
 ## Monitor（轻量监控面板）
 
-- **右侧 Monitor 页**：一行一个信号 `[状态点] 标签 值 单位`，从与 Data/Graphics 同一棵选择树里挑（数据库信号 / 派生信号 / 系统变量通吃）。
+- **Monitor 页**（可从任意页眉菜单放到任意槽位）：一行一个信号 `[状态点] 标签 值 单位`，从与 Data/Signals 同一棵选择树里挑（数据库信号 / 派生信号 / 系统变量通吃）。
 - 每行可开一条阈值规则（`>=` 或 `<=` 时整行换色），行内改阈值、切方向、点色号换色。
 - 行随工程保存（键、标签、小数位、规则全部写入工程）；Clear 清空，单行 `x` 删除。
 
@@ -197,7 +214,7 @@ roxy-can -h                               完整帮助
 
 ## Write 窗口
 
-- **下栏 Write 页**：整系统一条滚动输出——节点 `print`（带归属）、装配检查 `[check]`/`[info]`、告警、节点停止的错误（红）、命令消息（蓝）。
+- **Write 页**：整系统一条滚动输出——节点 `print`（带归属）、装配检查 `[check]`/`[info]`、告警、节点停止的错误（红）、命令消息（蓝）。
 - 每行带墙钟时间戳；停在底部时自动跟随新行，向上滚动阅读时不被拽回。顶部按类别过滤。**导出**写当前过滤视图（与屏幕同形）；全被滤掉时拒绝导出而不写空文件。**清空**只清这个窗口，不动测量与录制。
 - **状态栏只留最后一条，这里才是记录**：步进中出现的新消息（回放到达末尾、触发命中、post-roll 结束）与前端的失败（工程读不到、导出失败、描述装载失败）都同步写入 Write。
 - 打开缺文件的项目时，状态栏只说"loaded · N 项未能载入（Write 窗口有明细）"，逐条原因（红色）在 Write 里——能恢复的部分照常恢复。
@@ -214,7 +231,7 @@ roxy-can -h                               完整帮助
 ## 回放与录制
 
 - 回放按时间戳顺序调度，**不提供进度条随机跳转**（CANoe 的录制模式同样如此）：进度条只跟随不回跳，要向后赶用 **Fast**（一次读到日志末尾）。倍速可增减可直选；暂停/恢复的边沿不产生重复帧。
-- **SOME/IP**：回放 PCAP/PCAPNG 或 BLF 时，IPv4/IPv6 的 SOME/IP 消息会解码到右下 **SOME/IP** 标签页，分 **Events / Services / Availability / Database**：Database 是不需要流量的 ARXML 视图，可按 service/instance/endpoint 过滤，instance 显示 endpoint，并在下方列出远端订阅者；Events 默认只列时间、service、method、type 和字段摘要，点一行展开 L4/方向、client/session、return、endpoint、SD 与完整 payload，不靠横向滚动；Services 按 service 汇总消息数、method 列表、类型、SD offer 给出的 endpoint、平均周期、抖动和时间跨度；Availability 按 service/instance 给出 Offered / Stopped / Expired、TTL、endpoint 与订阅数（按抓包最后一帧判断 TTL 过期）。UDP 要求长度字段与 datagram 严格一致；TCP 按方向做顺序重组；IPv4/IPv6 分片按 offset/more 重组；IPv6 的 Hop-by-Hop / Routing / Destination / Fragment / AH 扩展头会逐跳跳过。Service Discovery 解析 entry 类型、service/instance、版本、TTL、IPv4/IPv6 endpoint、eventgroup 与 configuration option（按 SD 头里的 entry/option 长度读取，不猜布局）。SOME/IP-TP 按 offset / more-segments 重组为一条消息；ARXML 固定/动态数组（发送可写 `name.$count`）、record、FIELD notifier、service instance/eventgroup、application→implementation 映射、TEXTTABLE 枚举、string/union 已能展开，string/union/struct/array 的长度字段与 alignment 由 SOMEIP-TRANSFORMATION-PROPS 驱动。ARXML 解出的 SOME/IP 字段会以 `SOMEIP 0x1234/0x8001` 这样的合成 Ethernet 帧出现在 Signals 选择器里，record/array 展开为 `Details.Speed`、`Wheel[0]` 等叶子，枚举保留数值供曲线使用，单位与量程从 `UNIT-REF`/`DATA-CONSTR` 读取，可像普通信号一样 Plot/Read、进 Monitor/Data/State。Events 详情可复制 payload；缺 ARXML、方法/事件未定义或 payload 短于布局时会就地显示原因。本地 Offer 收到 `type=0x00` method 请求时，按 ARXML output 字段自动回 `0x80` 响应（字段填 0）。Panel/Trigger 以 `type=0x00` 发请求、`session=0` 自动编号时，核心会把同 service/method/client/session 的 `0x80` 响应记到 Write；5 秒内没有响应会写超时告警。
+- **SOME/IP**：回放 PCAP/PCAPNG 或 BLF 时，IPv4/IPv6 的 SOME/IP 消息会解码到 **SOME/IP** 页，分 **Events / Services / Availability / Database**：Database 是不需要流量的 ARXML 视图，可按 service/instance/endpoint 过滤，instance 显示 endpoint，并在下方列出远端订阅者；Events 默认只列时间、service、method、type 和字段摘要，点一行展开 L4/方向、client/session、return、endpoint、SD 与完整 payload，不靠横向滚动；Services 按 service 汇总消息数、method 列表、类型、SD offer 给出的 endpoint、平均周期、抖动和时间跨度；Availability 按 service/instance 给出 Offered / Stopped / Expired、TTL、endpoint 与订阅数（按抓包最后一帧判断 TTL 过期）。UDP 要求长度字段与 datagram 严格一致；TCP 按方向做顺序重组；IPv4/IPv6 分片按 offset/more 重组；IPv6 的 Hop-by-Hop / Routing / Destination / Fragment / AH 扩展头会逐跳跳过。Service Discovery 解析 entry 类型、service/instance、版本、TTL、IPv4/IPv6 endpoint、eventgroup 与 configuration option（按 SD 头里的 entry/option 长度读取，不猜布局）。SOME/IP-TP 按 offset / more-segments 重组为一条消息；ARXML 固定/动态数组（发送可写 `name.$count`）、record、FIELD notifier、service instance/eventgroup、application→implementation 映射、TEXTTABLE 枚举、string/union 已能展开，string/union/struct/array 的长度字段与 alignment 由 SOMEIP-TRANSFORMATION-PROPS 驱动。ARXML 解出的 SOME/IP 字段会以 `SOMEIP 0x1234/0x8001` 这样的合成 Ethernet 帧出现在 Signals 选择器里，record/array 展开为 `Details.Speed`、`Wheel[0]` 等叶子，枚举保留数值供曲线使用，单位与量程从 `UNIT-REF`/`DATA-CONSTR` 读取，可像普通信号一样 Plot/Read、进 Monitor/Data/State。Events 详情可复制 payload；缺 ARXML、方法/事件未定义或 payload 短于布局时会就地显示原因。本地 Offer 收到 `type=0x00` method 请求时，按 ARXML output 字段自动回 `0x80` 响应（字段填 0）。Panel/Trigger 以 `type=0x00` 发请求、`session=0` 自动编号时，核心会把同 service/method/client/session 的 `0x80` 响应记到 Write；5 秒内没有响应会写超时告警。
 string/union 的 length-field 宽度与 alignment 会读取 SOMEIP-TRANSFORMATION-PROPS，struct/array 的 length field 也按 props 宽度读取。
 - **以太网抓包回放**：`.pcap`、`.pcapng` 与 BLF Ethernet 对象可直接作为回放源（经典 PCAP / PCAPNG / BLF 类型 71/120/121）。抓包的绝对时间戳会重基到第一帧，帧进入 Trace/Messages stats 并参与解码；PCAPNG 多接口按接口编号作为文件里的 ETH 路号，可由 Channel map 指到本工程的路。非 Ethernet 链路类型的包会被跳过，不阻止整个文件打开。
 - **前向导航**：Replay 行可设步长（10 ms–5 s）并按 **Step** 立即前进；**Play for** 从当前位置播放指定日志时长后自动暂停；**To** 输入绝对日志时间（秒）并 **Go**，播放到该时刻后暂停。三种都走正常回放步进，统计/观察器与连续播放一致；目标在播放头之前会被拒绝（向前有效）。
@@ -235,15 +252,17 @@ string/union 的 length-field 宽度与 alignment 会读取 SOMEIP-TRANSFORMATIO
 - **精确地址**：普通文本是子串搜索（`13` 同时命中槽 113、槽 130 和名字里带 13 的帧）。只要这一个地址就写前缀：`id:1AB`、`id:1ABCDEFx`（29 位扩展帧）、`slot:13`（十进制）。两套编号不互解。行右键 **Filter this ID** 写的就是精确形式。**输入不完整时不猜测**：`id:` 后不是 hex、`slot:` 后不是合法数字时，整串按普通子串处理（表里通常就空了，改一个字符即恢复）。
 - **信号值条件两种总线都算**：CAN 行问 DBC，FlexRay 行问这一帧在自己那路描述里解出的物理值——与曲线上画的、展开子行里印的是同一个数。这一帧没这个信号或这路没有加载描述，该行不出。多个条件是"且"。
 - **点一行就是"这一行"**：左键点任一行，该行亮蓝底（与错误行、游标底色互不遮挡，同一行可以同时是"选中的"和"被标记的"）。表头提示 `已选中一行 · ↑/↓ 换行 · Ctrl+C 复制该行`。↑/↓ 按屏幕行序走（新行在上，所以 ↓ 往旧的方向），一个展开的 FlexRay 帧算一步（子行跟着父行一起亮、一起跳），到底就停住，不会把选中清掉；选中的行因过滤或裁剪不在了，下一次按键从当前最新一行重新落地。Ctrl+C 复制该行，八列与表格一致。两个键只在指针停在本窗口、没有输入框在打字时接管。
-- **表里的两条游标 A/B**：行右键 → **Set cursor A / B** 把游标落在这一行的时刻（两种总线都放，一次右键只动一条），被标的行带底色（A 琥珀、B 青蓝，与 Graphics 同两色），表头读 `A … B … Δt +221.433 ms`（时刻给到微秒）。**Clear cursors** 只在有东西可清时出现。
+- **表里的两条游标 A/B**：行右键 → **Set cursor A / B** 把游标落在这一行的时刻（两种总线都放，一次右键只动一条），被标的行带底色（A 琥珀、B 青蓝，与 Signals 曲线同两色），表头读 `A … B … Δt +221.433 ms`（时刻给到微秒）。**Clear cursors** 只在有东西可清时出现。
 - **Clear** 清空显示与归档，测量照常进行（录制与逐报文计数都不动），过滤器不重置。
-- 时间范围两框、过滤行是否展开、FR 子行是否展开、选中与游标位置：前三样随工程保存，后两样是会话状态。\n- **快捷键**：F9 启动/停止，F10 暂停/继续，F2 聚焦当前过滤框，Alt+1…5 切右侧页，Alt+Shift+1…3 切 Trace / Messages / Panel（避开浏览器占用的 Ctrl+1…3）。\n- **拖放**：DBC Explorer 的信号可拖到右侧图表区；当前页是 Signals 时加曲线，Monitor/Data 时加到对应观察器。工程、ASC/BLF/PCAP/PCAPNG 与 `.rxpanel` 可直接拖进窗口；DBC/ARXML/FIBEX 拖到 Buses 弹窗。
+- 时间范围两框、过滤行是否展开、FR 子行是否展开、选中与游标位置：前三样随工程保存，后两样是会话状态。
+- **快捷键**：F9 启动/停止，F10 暂停/继续，F2 聚焦当前过滤框，Alt+1…4 切布局，Alt+Shift+1…2 在聚焦槽位显示 Trace / Messages，Alt+Shift+P 切 Standard / Panel（避开浏览器占用的 Ctrl+1…3）。
+- **拖放**：DBC Explorer 的信号可拖到 Signals / Monitor / Data 页；目标页当前是哪个面板就加到哪个观察器。工程、ASC/BLF/PCAP/PCAPNG 与 `.rxpanel` 可直接拖进窗口；DBC/ARXML/FIBEX 拖到 Buses 弹窗。
 
 ## 工程文件
 
 - 工程（`.rxproj`）单文件 JSON，DBC 路径相对工程目录。
-- 只保留当前格式：旧版本工程里已删除的字段不会再被迁移（例如旧的 dock 布局、`sim_nodes`、单 FIBEX 路径）；未知字段按 serde 规则忽略。
-- 新会话是固定的 Web 外壳：主视图、右侧图表面板（Rate / Signals / Monitor / Data / State）与下栏 Messages stats / Bus load / Spec / SOME/IP / Write；打开工程时布局、Graphics 配置与 Panel 页按文件恢复。
+- 只保留当前格式：旧版本工程里已删除的字段不会再被迁移（例如 ImGui 时代的 desktop dock 状态、`sim_nodes`、单 FIBEX 路径）；未知字段按 serde 规则忽略。
+- 新会话的 Standard 默认是 **Main + side**（Messages / Rate / Messages stats）；四个布局各自保存页面分配与分隔比例。打开工程时布局、Signals 曲线配置与 Panel 页按文件恢复。
 - 坏库容错：复用报文的 mux 条件引用了不存在的开关时按"无条件"处理（显示数据而不是空解码）。
 - 信号类型标记（`[u16]` / `[f32]`）按 `SIG_VALTYPE_` 声明解位模式。
 

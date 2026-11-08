@@ -18,6 +18,7 @@
 - SOME/IP 发送的字段输入从 `name=value` 文本改成按 service/method 列字段。
 - service instance / eventgroup 已有 Database 过滤与 endpoint 展示。
 - 新增解析规则前先补真实样本，不靠合成 fixture 自证。
+- 极窄槽位里的 Trace/Messages 宽表仍靠内部横向滚动；下一步按槽位宽度自动减列，或提供“收紧当前页列集”的快捷动作，而不是让用户手动拖宽分隔条。
 
 ## 硬件与台架
 
@@ -36,7 +37,7 @@
 
 ## 边界外（定位变了才重启）
 
-诊断层（UDS / ODX / CDD / 刷写）；TSN / DoIP / SoAd 协议栈；通用 HMI / 任意控件 / Docking；多机分布式与 PTP / GPS；用户与权限、国际化；工业级测试报告；MF4、LIN；网关与跨总线路由。
+诊断层（UDS / ODX / CDD / 刷写）；TSN / DoIP / SoAd 协议栈；通用 HMI / 任意控件 / 自由 Docking（固定四种布局与页眉槽位菜单已做，但不做窗口管理器）；多机分布式与 PTP / GPS；用户与权限、国际化；工业级测试报告；MF4、LIN；网关与跨总线路由。
 
 ## CI 的规矩
 

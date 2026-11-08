@@ -17,6 +17,7 @@ npx vitest run
 ## 结构与边界
 
 - `app.tsx`：外壳、快照轮询、命令发送、跨会话布局。
+- `dockLayout.ts`：四种布局、槽位面板分配、移动/交换、归一化与旧 workspace 迁移；纯函数并单测。
 - `components/TraceTable.tsx`：手写固定行高虚拟化，不引入表格库。
 - `components/SignalChart.tsx`：canvas 抽稀绘制，不引入图表库。
 - `panelPage.ts`：Panel 控件注册表、页面序列化与校验。
@@ -31,7 +32,8 @@ npx vitest run
 - Panel 新控件先加注册表，不在 `PagePanel` 里加类型分支。
 - 文件交换只走 `/api/upload`、`/api/download`；前端不读任意主机路径。
 - 主界面文案英文；长标签省略，控件文字随尺寸自适应。
-- 改 UI 必须在 1280×800 与 1024×768 下检查主要标签页和弹窗无横向溢出。
+- 视觉皮肤在 `minimal.css`：窄边距、直角、无装饰阴影；状态灯保留圆形。新增组件沿用这套 chrome，不要引入圆角卡片。
+- 改 UI 必须在 1280×800 与 1024×768 下检查主要页面、四种布局和弹窗无横向溢出。
 
 ## 当前不在这里
 

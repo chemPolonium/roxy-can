@@ -1,0 +1,298 @@
+/* Minimal chrome: flat surfaces, square controls, tight spacing.
+   This layer loads after the theme so both dark and light get the same
+   geometry; indicator dots keep their circular shape. */
+
+/* Square everything that is a surface or control. Small status LEDs are the
+   only deliberate exception: a 6px square reads as a glitch, not a lamp. */
+*:not(.dot):not(.record-dot):not(.page-lamp-dot):not(.attach-dot):not(
+    .trig-level
+  ):not(.bp) {
+  border-radius: 0 !important;
+}
+
+/* Remove decorative depth; keep the few shadows that carry a cursor or
+   selection state (restored below). */
+* {
+  box-shadow: none !important;
+}
+
+.trace-table tbody tr.cursor-a td:first-child {
+  box-shadow: inset 2px 0 #e6b455 !important;
+}
+
+.trace-table tbody tr.cursor-b td:first-child {
+  box-shadow: inset 2px 0 #c77dff !important;
+}
+
+.buses-clusters tbody tr.selected td:first-child {
+  box-shadow: inset 3px 0 var(--accent) !important;
+}
+
+.page-lamp-dot {
+  box-shadow: inset 0 0 0 1px #3a4757 !important;
+}
+
+[data-theme="light"] .page-lamp-dot {
+  box-shadow: inset 0 0 0 1px #c3cdd9 !important;
+}
+
+/* Flat page ground and top bar instead of the radial/gradient wash. */
+:root body {
+  background: var(--bg);
+}
+
+:root .topbar {
+  gap: 10px;
+  flex-basis: 42px;
+  padding: 0 6px;
+  background: var(--head);
+}
+
+:root .stats {
+  flex-basis: 30px;
+  padding: 0 6px;
+  background: var(--panel-2);
+}
+
+:root .statusbar {
+  flex-basis: 20px;
+  gap: 8px;
+  padding: 0 6px;
+  background: var(--panel-2);
+}
+
+:root .replaybar {
+  gap: 6px;
+  padding: 2px 6px;
+  background: var(--panel-2);
+}
+
+:root .brand-menu .logo {
+  width: 24px;
+  height: 24px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 12px;
+}
+
+:root .brand-menu .logo:hover:not(:disabled) {
+  border-color: transparent;
+  background: var(--accent);
+  filter: brightness(1.08);
+}
+
+:root .brand-menu .logo[aria-expanded="true"] {
+  outline: 1px solid var(--accent);
+  outline-offset: 1px;
+}
+
+:root .brand {
+  gap: 7px;
+}
+
+:root .brand h1 {
+  gap: 6px;
+  font-size: 13px;
+}
+
+:root .brand p,
+:root .brand-project {
+  font-size: 10px;
+}
+
+:root .presence {
+  padding: 0 4px;
+  letter-spacing: 0.04em;
+}
+
+:root .actions {
+  gap: 4px;
+}
+
+:root .view-switch {
+  padding: 1px;
+  background: var(--panel-2);
+}
+
+:root .view-switch button {
+  padding: 1px 8px;
+}
+
+button {
+  padding: 3px 8px;
+}
+
+button.mini {
+  padding: 1px 6px;
+}
+
+input,
+select {
+  padding: 2px 6px;
+}
+
+/* Tight page chrome. */
+:root .workspace {
+  padding: 2px;
+}
+
+:root .panel-head {
+  gap: 6px;
+  flex-basis: 26px;
+  padding: 0 6px;
+  --ctl-h: 22px;
+}
+
+:root .dock-head {
+  min-height: 26px;
+  padding: 2px 6px;
+}
+
+:root .dock-head-actions {
+  gap: 4px;
+}
+
+:root .slot-panel-trigger {
+  height: 22px;
+  padding: 0 6px;
+  gap: 4px;
+}
+
+:root .panel-filter-row {
+  gap: 4px;
+  padding: 2px 6px;
+}
+
+:root .chart-legend {
+  gap: 2px 10px;
+  padding: 2px 6px;
+}
+
+:root .trace-cursors {
+  gap: 4px;
+  min-height: 22px;
+  padding: 1px 6px;
+}
+
+:root .data-table th {
+  height: 22px;
+  padding: 0 6px;
+}
+
+:root .data-table td {
+  padding: 0 6px;
+}
+
+:root .stats-table th,
+:root .stats-table td {
+  padding-left: 5px;
+  padding-right: 5px;
+}
+
+:root .monitor-list,
+:root .data-list,
+:root .state-rows {
+  gap: 3px;
+  padding: 4px 6px;
+}
+
+:root .busstat-list {
+  gap: 4px;
+  padding: 3px 6px 8px;
+}
+
+:root .activity {
+  padding: 3px 0;
+}
+
+:root .activity li {
+  gap: 7px;
+  padding: 1px 6px;
+}
+
+/* Flat menu surface: border instead of a floating shadow. */
+:root .app-menu {
+  padding: 2px;
+  background: var(--panel);
+}
+
+:root .app-menu button {
+  gap: 6px;
+  padding: 4px 6px;
+}
+
+:root .app-menu-group {
+  padding: 5px 6px 2px;
+}
+
+:root .app-menu-sep {
+  margin: 3px 2px;
+}
+
+:root .app-menu-brand {
+  top: 28px;
+}
+
+:root .slot-panel-menu button {
+  padding: 4px 6px;
+}
+
+:root .layout-panel .menu-copy small {
+  margin-top: 0;
+}
+
+/* Dialogs: less frame, more content. */
+:root .modal-backdrop {
+  padding: 10px;
+  background: rgb(0 0 0 / 52%);
+}
+
+:root .modal-head {
+  padding: 6px 10px;
+}
+
+:root .help-body,
+:root .export-body,
+:root .picker-tools,
+:root .buses-body,
+:root .gen-body,
+:root .trig-body,
+:root .scripts-body,
+:root .sysvars-body,
+:root .state-rule-body,
+:root .event-body,
+:root .session-body {
+  padding: 8px 10px;
+}
+
+:root .someip-panel,
+:root .spec-panel,
+:root .page-panel {
+  min-width: 0;
+}
+
+/* Toolbars inside data pages keep a single line at normal width, but the
+   2px gap and 22px controls leave more room for content. */
+:root .panel-head input[type="search"],
+:root .panel-filter-row input[type="search"] {
+  min-width: 0;
+}
+
+@media (max-width: 1100px) {
+  :root .actions {
+    gap: 3px;
+  }
+
+  :root .topbar {
+    gap: 8px;
+  }
+}
+
+/* Scrollbar thumbs are part of the chrome too. */
+::-webkit-scrollbar-thumb {
+  border-radius: 0 !important;
+}
+
+::-webkit-scrollbar-corner {
+  background: var(--scroll-track);
+}

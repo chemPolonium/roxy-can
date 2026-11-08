@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from "preact/hooks";
+import { useEffect, useLayoutEffect, useRef, useState } from "preact/hooks";
+import type { JSX } from "preact";
 import type { ComponentChildren } from "preact";
 
 interface Props {
@@ -8,6 +9,10 @@ interface Props {
   className?: string;
   /// Extra class on the menu panel (e.g. `mode-panel`).
   menuClass?: string;
+  /// Anchor the panel to the viewport instead of the trigger wrapper. This
+  /// keeps a menu opened inside an overflow-clipped panel usable, and flips
+  /// it above the trigger when there is more room there.
+  fixed?: boolean;
   buttonClass?: string;
   ariaLabel?: string;
   title?: string;
@@ -23,6 +28,7 @@ export function MenuButton({
   children,
   className = "",
   menuClass = "",
+  fixed = false,
   buttonClass,
   ariaLabel,
   title,
@@ -33,8 +39,39 @@ export function MenuButton({
   const wrap = useRef<HTMLDivElement>(null);
   const trigger = useRef<HTMLButtonElement>(null);
   const panel = useRef<HTMLDivElement>(null);
+  const [fixedStyle, setFixedStyle] = useState<JSX.CSSProperties>({});
 
   const close = () => setOpen(false);
+
+  useLayoutEffect(() => {
+    if (!open || !fixed) return;
+    const place = () => {
+      const rect = trigger.current?.getBoundingClientRect();
+      if (!rect) return;
+      const width = Math.min(300, Math.max(200, window.innerWidth - 16));
+      const left = Math.max(
+        8,
+        Math.min(rect.left, window.innerWidth - width - 8),
+      );
+      const below = window.innerHeight - rect.bottom - 8;
+      const above = rect.top - 8;
+      // The page chooser is tall (12 panels plus move targets); prefer the
+      // side with more room instead of only flipping for a very short menu.
+      const up = below < 460 && above > below;
+      setFixedStyle({
+        position: "fixed",
+        left,
+        width,
+        top: up ? "auto" : rect.bottom + 4,
+        bottom: up ? window.innerHeight - rect.top + 4 : "auto",
+        maxHeight: Math.max(160, up ? above : below),
+        overflow: "auto",
+      });
+    };
+    place();
+    window.addEventListener("resize", place);
+    return () => window.removeEventListener("resize", place);
+  }, [open, fixed]);
 
   useEffect(() => {
     if (!open) return;
@@ -109,6 +146,7 @@ export function MenuButton({
           role="menu"
           aria-label={menuLabel}
           ref={panel}
+          style={fixed ? fixedStyle : undefined}
           onKeyDown={onKeyDown}
         >
           {children(close)}

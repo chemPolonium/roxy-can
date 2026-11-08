@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "preact/hooks";
+import type { ComponentChildren, JSX } from "preact";
 import type {
   Catalog,
   CatalogChannel,
@@ -82,6 +83,29 @@ import type { SysVarEdit } from "./components/VariablesModal";
 import { TimeJump } from "./components/TimeJump";
 import { TraceTable } from "./components/TraceTable";
 import type { TraceJump } from "./components/TraceTable";
+import {
+  DockSlotSurface,
+  SlotHeader,
+  SlotMaximizeButton,
+  SlotMenu,
+} from "./components/DockSlot";
+import {
+  LAYOUTS,
+  assignPanel,
+  defaultDock,
+  layoutInfo,
+  moveSlot,
+  normalizeDock,
+  panelsFor,
+  panelLabel,
+  resetLayoutPanels,
+  setLayout,
+  setRatio,
+  showPanel,
+  type DockState,
+  type LayoutId,
+  type PanelId,
+} from "./dockLayout";
 import { traceQueryPredicate } from "./traceFilter";
 import {
   EMPTY_TRACE_FILTER,
@@ -138,29 +162,27 @@ import {
   type PanelWriteTarget,
 } from "./panelBinding";
 
-type RightTab = "statistics" | "bus" | "spec" | "someip" | "activity";
-type MainView = "trace" | "messages" | "panel";
-type ChartTab = "rate" | "signals" | "monitor" | "data" | "state";
-type Drag = "main" | "right" | null;
-
-interface Layout {
-  main: number;
-  right: number;
-}
+type ShellMode = "standard" | "panel";
+type DockDrag = "x" | "y" | null;
 
 const LAYOUT_KEY = "roxy-can-web.layout";
 const VIEW_KEY = "roxy-can-web.view";
 const TRACE_CAP = 50_000;
 const SIGNAL_CAP = 12_000;
-const DEFAULT_LAYOUT: Layout = { main: 0.63, right: 0.56 };
+
+interface LegacyView {
+  mainView?: unknown;
+  tab?: unknown;
+  chartTab?: unknown;
+  chartTab2?: unknown;
+  chartSplit?: unknown;
+  splitRatio?: unknown;
+  layout?: unknown;
+}
 
 interface SavedView {
-  tab: RightTab;
-  mainView: MainView;
-  chartTab: ChartTab;
-  chartTab2: ChartTab;
-  chartSplit: boolean;
-  splitRatio: number;
+  shellMode: ShellMode;
+  dock: DockState;
   overlay: boolean;
   signalView: SignalView;
   yModes?: Record<string, ChartYMode>;
@@ -169,29 +191,31 @@ interface SavedView {
   panelBook?: PanelBook;
 }
 
-interface SavedWorkspace extends Partial<SavedView> {
+interface SavedWorkspace extends Partial<SavedView>, LegacyView {
   traceColumns?: unknown;
-  layout?: unknown;
   readSignals?: unknown;
 }
 
 
-function normalizeView(saved: Partial<SavedView>): Partial<SavedView> {
-  const tabs: RightTab[] = ["statistics", "bus", "spec", "someip", "activity"];
-  const chartTabs: ChartTab[] = [
-    "rate",
-    "signals",
-    "monitor",
-    "data",
-    "state",
-  ];
-  const windowS = clamp(Number(saved.signalView?.windowS) || 30, 1, 120);
-  const rawEnd = saved.signalView?.endS;
+function normalizeView(
+  saved: SavedWorkspace,
+  legacyLayout?: unknown,
+): Partial<SavedView> {
+  const raw: SavedWorkspace =
+    saved && typeof saved === "object" ? saved : {};
+  const docking = normalizeDock(raw.dock, {
+    mainView: raw.mainView,
+    tab: raw.tab,
+    chartTab: raw.chartTab,
+    layout: raw.layout ?? legacyLayout,
+  });
+  const windowS = clamp(Number(raw.signalView?.windowS) || 30, 1, 120);
+  const rawEnd = raw.signalView?.endS;
   const endS =
     typeof rawEnd === "number" && Number.isFinite(rawEnd) ? rawEnd : null;
   const cursors: ChartCursor[] = [];
-  if (Array.isArray(saved.cursors)) {
-    for (const cursor of saved.cursors.slice(0, 16)) {
+  if (Array.isArray(raw.cursors)) {
+    for (const cursor of raw.cursors.slice(0, 16)) {
       if (!Number.isFinite(cursor?.id) || !Number.isFinite(cursor?.t)) continue;
       const label =
         cursor.label === "A" || cursor.label === "B" ? cursor.label : undefined;
@@ -203,16 +227,16 @@ function normalizeView(saved: Partial<SavedView>): Partial<SavedView> {
     }
   }
   const yModes: Record<string, ChartYMode> = {};
-  if (saved.yModes && typeof saved.yModes === "object") {
-    for (const [key, mode] of Object.entries(saved.yModes).slice(0, 256)) {
+  if (raw.yModes && typeof raw.yModes === "object") {
+    for (const [key, mode] of Object.entries(raw.yModes).slice(0, 256)) {
       if (mode === "auto" || mode === "memory" || mode === "dbc") {
         yModes[key] = mode;
       }
     }
   }
   const derivedReads: { id: string; name: string }[] = [];
-  if (Array.isArray(saved.derivedReads)) {
-    for (const entry of saved.derivedReads.slice(0, 64)) {
+  if (Array.isArray(raw.derivedReads)) {
+    for (const entry of raw.derivedReads.slice(0, 64)) {
       if (
         entry &&
         typeof entry.id === "string" &&
@@ -224,38 +248,39 @@ function normalizeView(saved: Partial<SavedView>): Partial<SavedView> {
       }
     }
   }
+  const shellMode: ShellMode =
+    raw.shellMode === "panel" || raw.shellMode === "standard"
+      ? raw.shellMode
+      : raw.mainView === "panel"
+        ? "panel"
+        : "standard";
   return {
-    tab: saved.tab && tabs.includes(saved.tab) ? saved.tab : undefined,
-    mainView:
-      saved.mainView === "trace" ||
-      saved.mainView === "messages" ||
-      saved.mainView === "panel"
-        ? saved.mainView
-        : undefined,
-    chartTab:
-      saved.chartTab && chartTabs.includes(saved.chartTab)
-        ? saved.chartTab
-        : undefined,
-    chartTab2:
-      saved.chartTab2 && chartTabs.includes(saved.chartTab2)
-        ? saved.chartTab2
-        : undefined,
-    chartSplit: typeof saved.chartSplit === "boolean" ? saved.chartSplit : false,
-    splitRatio: clamp(Number(saved.splitRatio) || 0.6, 0.25, 0.75),
-    overlay: typeof saved.overlay === "boolean" ? saved.overlay : false,
+    shellMode,
+    dock: docking,
+    overlay: typeof raw.overlay === "boolean" ? raw.overlay : false,
     yModes,
     derivedReads,
     signalView: { windowS, endS },
     cursors,
-    panelBook: parsePanelBook(saved.panelBook) ?? defaultPanelBook(),
+    panelBook: parsePanelBook(raw.panelBook) ?? defaultPanelBook(),
   };
+}
+
+function loadLegacyLayout(): unknown {
+  try {
+    const raw = localStorage.getItem(LAYOUT_KEY);
+    return raw ? JSON.parse(raw) : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function loadView(): Partial<SavedView> {
   try {
     const raw = localStorage.getItem(VIEW_KEY);
     if (!raw) return {};
-    return normalizeView(JSON.parse(raw));
+    const parsed = JSON.parse(raw) as SavedWorkspace;
+    return normalizeView(parsed, parsed.layout ?? loadLegacyLayout());
   } catch {
     return {};
   }
@@ -302,25 +327,6 @@ function rowKey(row: {
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
-}
-
-function parseLayout(value: unknown): Layout | null {
-  if (!value || typeof value !== "object") return null;
-  const saved = value as Partial<Layout>;
-  return {
-    main: clamp(Number(saved.main) || DEFAULT_LAYOUT.main, 0.4, 0.78),
-    right: clamp(Number(saved.right) || DEFAULT_LAYOUT.right, 0.34, 0.8),
-  };
-}
-
-function loadLayout(): Layout {
-  try {
-    const raw = localStorage.getItem(LAYOUT_KEY);
-    if (!raw) return DEFAULT_LAYOUT;
-    return parseLayout(JSON.parse(raw)) ?? DEFAULT_LAYOUT;
-  } catch {
-    return DEFAULT_LAYOUT;
-  }
 }
 
 function seconds(us: number, digits = 3): string {
@@ -476,24 +482,18 @@ export function App() {
   const [writeKind, setWriteKind] = useState("all");
   const [writeQuery, setWriteQuery] = useState("");
   const [savedView] = useState(loadView);
-  const [tab, setTab] = useState<RightTab>(savedView.tab ?? "statistics");
-  const [mainView, setMainView] = useState<MainView>(
-    savedView.mainView ?? "messages",
+  const [shellMode, setShellMode] = useState<ShellMode>(
+    savedView.shellMode ?? "standard",
+  );
+  const [dock, setDock] = useState<DockState>(
+    savedView.dock ?? defaultDock(),
   );
   const [panelBook, setPanelBook] = useState<PanelBook>(
     savedView.panelBook ?? defaultPanelBook(),
   );
-  const standardView = useRef<"trace" | "messages">(
-    savedView.mainView === "trace" ? "trace" : "messages",
-  );
-  const [chartTab, setChartTab] = useState<ChartTab>(
-    savedView.chartTab ?? "rate",
-  );
-  const [chartTab2, setChartTab2] = useState<ChartTab>(
-    savedView.chartTab2 ?? "monitor",
-  );
-  const [chartSplit, setChartSplit] = useState(savedView.chartSplit ?? false);
-  const [splitRatio, setSplitRatio] = useState(savedView.splitRatio ?? 0.6);
+  const [maximizedSlot, setMaximizedSlot] = useState<number | null>(null);
+  const [focusedSlot, setFocusedSlot] = useState(0);
+  const [dockDrag, setDockDrag] = useState<DockDrag>(null);
   const [signalOverlay, setSignalOverlay] = useState(
     savedView.overlay ?? false,
   );
@@ -536,8 +536,7 @@ export function App() {
   const [hardware, setHardware] = useState<Hardware | null>(null);
   const [hardwareLoading, setHardwareLoading] = useState(false);
   const [hardwareError, setHardwareError] = useState("");
-  const [layout, setLayout] = useState<Layout>(loadLayout);
-  const [drag, setDrag] = useState<Drag>(null);
+
   const [theme, setTheme] = useState<Theme>(loadTheme);
   const [menuOpen, setMenuOpen] = useState(false);
   const [runModeOpen, setRunModeOpen] = useState(false);
@@ -557,7 +556,6 @@ export function App() {
   const [derivedReads, setDerivedReads] = useState<{ id: string; name: string }[]>(
     savedView.derivedReads ?? [],
   );
-  const [chartFullscreen, setChartFullscreen] = useState(false);
   const [toast, setToast] = useState("");
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [timeJumpOpen, setTimeJumpOpen] = useState(false);
@@ -578,9 +576,7 @@ export function App() {
   const appliedReferenceRev = useRef(-1);
   const uiFps = useUiFps();
   const workspaceRef = useRef<HTMLDivElement>(null);
-  const rightRef = useRef<HTMLDivElement>(null);
-  const chartSplitRef = useRef<HTMLDivElement>(null);
-  const preSplitRight = useRef<number | null>(null);
+  const sideRef = useRef<HTMLDivElement>(null);
   const chartCursorSeq = useRef(
     Math.max(0, ...(savedView.cursors ?? []).map((cursor) => cursor.id)) + 1,
   );
@@ -605,31 +601,26 @@ export function App() {
 
   const applyWorkspace = (raw: unknown) => {
     if (!raw || typeof raw !== "object") {
-      setTab("statistics");
-      setMainView("messages");
-      setChartTab("rate");
-      setChartTab2("monitor");
-      setChartSplit(false);
-      setSplitRatio(0.6);
+      setShellMode("standard");
+      setDock(defaultDock());
+      setFocusedSlot(0);
+      setMaximizedSlot(null);
       setSignalOverlay(false);
       setSignalView({ windowS: 30, endS: null });
       setChartCursors([]);
       setReadSignals([]);
       setDerivedReads([]);
       setTraceColumns(DEFAULT_TRACE_COLUMNS);
-      setLayout(DEFAULT_LAYOUT);
       setPanelBook(defaultPanelBook());
       chartCursorSeq.current = 1;
       return;
     }
     const saved = raw as SavedWorkspace;
     const view = normalizeView(saved);
-    if (view.tab) setTab(view.tab);
-    if (view.mainView) setMainView(view.mainView);
-    if (view.chartTab) setChartTab(view.chartTab);
-    if (view.chartTab2) setChartTab2(view.chartTab2);
-    if (typeof view.chartSplit === "boolean") setChartSplit(view.chartSplit);
-    if (typeof view.splitRatio === "number") setSplitRatio(view.splitRatio);
+    setShellMode(view.shellMode ?? "standard");
+    setDock(view.dock ?? defaultDock());
+    setFocusedSlot(0);
+    setMaximizedSlot(null);
     if (typeof view.overlay === "boolean") setSignalOverlay(view.overlay);
     if (view.signalView) setSignalView(view.signalView);
     if (view.cursors) {
@@ -639,8 +630,6 @@ export function App() {
     }
     const columns = parseTraceColumns(saved.traceColumns);
     if (columns) setTraceColumns(columns);
-    const nextLayout = parseLayout(saved.layout);
-    if (nextLayout) setLayout(nextLayout);
     const savedReads = parseReadSignals(saved.readSignals);
     setReadSignals(savedReads);
     setDerivedReads(view.derivedReads ?? []);
@@ -756,17 +745,12 @@ export function App() {
         type: "set_web_workspace",
         rev: state.workspaceRev ?? 0,
         workspace: {
-          tab,
-          mainView,
-          chartTab,
-          chartTab2,
-          chartSplit,
-          splitRatio,
+          shellMode,
+          dock,
           overlay: signalOverlay,
           signalView,
           cursors: chartCursors,
           traceColumns,
-          layout,
           readSignals,
         },
       }).catch(() => {});
@@ -774,17 +758,12 @@ export function App() {
     return () => window.clearTimeout(timer);
   }, [
     workspaceHydrated,
-    tab,
-    mainView,
-    chartTab,
-    chartTab2,
-    chartSplit,
-    splitRatio,
+    shellMode,
+    dock,
     signalOverlay,
     signalView,
     chartCursors,
     traceColumns,
-    layout,
     readSignals,
     state?.workspaceRev,
   ]);
@@ -955,26 +934,18 @@ export function App() {
   }, [runModeOpen]);
 
   useEffect(() => {
-    if (!chartFullscreen) return;
+    if (maximizedSlot === null) return;
     const escape = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
-      // A menu opened inside fullscreen owns the first Escape.
+      // A menu opened inside the maximized page owns the first Escape.
       if (document.querySelector(".signal-menu, .trace-menu, .modal-backdrop")) {
         return;
       }
-      setChartFullscreen(false);
+      setMaximizedSlot(null);
     };
     window.addEventListener("keydown", escape);
     return () => window.removeEventListener("keydown", escape);
-  }, [chartFullscreen]);
-
-  useEffect(() => {
-    try {
-      localStorage.setItem(LAYOUT_KEY, JSON.stringify(layout));
-    } catch {
-      // Storage can be unavailable in private mode; the session layout still works.
-    }
-  }, [layout]);
+  }, [maximizedSlot]);
 
   useEffect(() => {
     saveTraceColumns(traceColumns);
@@ -985,12 +956,8 @@ export function App() {
       localStorage.setItem(
         VIEW_KEY,
         JSON.stringify({
-          tab,
-          mainView,
-          chartTab,
-          chartTab2,
-          chartSplit,
-          splitRatio,
+          shellMode,
+          dock,
           overlay: signalOverlay,
           signalView,
           yModes: chartYModes,
@@ -1003,12 +970,8 @@ export function App() {
       // Same fallback as the splitter layout.
     }
   }, [
-    tab,
-    mainView,
-    chartTab,
-    chartTab2,
-    chartSplit,
-    splitRatio,
+    shellMode,
+    dock,
     signalOverlay,
     signalView,
     chartYModes,
@@ -1119,26 +1082,38 @@ export function App() {
   }, [busesOpen, state?.hwRefresh]);
 
   useEffect(() => {
-    if (!drag) return;
+    if (!dockDrag) return;
     const move = (event: PointerEvent) => {
-      if (drag === "main" && workspaceRef.current) {
-        const rect = workspaceRef.current.getBoundingClientRect();
-        const next = (event.clientX - rect.left) / rect.width;
-        setLayout((old) => ({ ...old, main: clamp(next, 0.4, 0.78) }));
-      } else if (drag === "right" && rightRef.current) {
-        const rect = rightRef.current.getBoundingClientRect();
-        const next = (event.clientY - rect.top) / rect.height;
-        setLayout((old) => ({ ...old, right: clamp(next, 0.34, 0.8) }));
+      const dockRect = workspaceRef.current?.getBoundingClientRect();
+      if (!dockRect) return;
+      if (dockDrag === "x") {
+        const next = (event.clientX - dockRect.left) / dockRect.width;
+        setDock((old) => setRatio(old, old.layout, "x", next));
+        return;
       }
+      const yRect =
+        dock.layout === "main-side"
+          ? sideRef.current?.getBoundingClientRect()
+          : dockRect;
+      if (!yRect) return;
+      const next = (event.clientY - yRect.top) / yRect.height;
+      setDock((old) => setRatio(old, old.layout, "y", next));
     };
-    const up = () => setDrag(null);
+    const up = () => {
+      document.body.classList.remove("col-resizing", "row-resizing");
+      setDockDrag(null);
+    };
+    document.body.classList.add(
+      dockDrag === "x" ? "col-resizing" : "row-resizing",
+    );
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", up);
     return () => {
+      document.body.classList.remove("col-resizing", "row-resizing");
       window.removeEventListener("pointermove", move);
       window.removeEventListener("pointerup", up);
     };
-  }, [drag]);
+  }, [dockDrag, dock.layout]);
 
   const run = async (command: Command) => {
     setBusy(true);
@@ -1219,13 +1194,13 @@ export function App() {
         removeDerived(key);
       } else {
         void run({ type: "chart_signal", key, action });
-        setChartTab(action);
+        announceHidden(action);
       }
       return;
     }
     void run({ type: "chart_signal", key, action });
     if (action !== "remove") {
-      setChartTab(action);
+      announceHidden(action);
     }
   };
 
@@ -1246,7 +1221,7 @@ export function App() {
         ),
       );
       setError("");
-      setChartTab(target);
+      announceHidden(target);
       showToast(`Copied ${keys.length} signal(s) to ${target}`);
     } catch (e) {
       const message = describeError(e);
@@ -1357,7 +1332,7 @@ export function App() {
         ),
       );
       setError("");
-      setChartTab(target === "chart" ? "signals" : "monitor");
+      announceHidden(target === "chart" ? "signals" : "monitor");
       showToast(
         `${pending.length} signal(s) added to ${target === "chart" ? "the chart" : "Monitor"}`,
       );
@@ -1376,7 +1351,6 @@ export function App() {
     traceJumpSeq.current += 1;
     setTraceJump({ tUs: target, nonce: traceJumpSeq.current });
     setSignalView((old) => ({ ...old, endS: target / 1e6 + old.windowS / 2 }));
-    setChartTab(cursorSeries.length > 0 ? "signals" : "rate");
     return target;
   };
 
@@ -1428,32 +1402,39 @@ export function App() {
   }, [markerReferenceUs, state?.triggerFires]);
 
   const resetLayout = () => {
-    setLayout(DEFAULT_LAYOUT);
+    setShellMode("standard");
+    setDock(defaultDock());
+    setFocusedSlot(0);
+    setMaximizedSlot(null);
     setTraceColumns(DEFAULT_TRACE_COLUMNS);
     setSignalView({ windowS: 30, endS: null });
-    if (chartFullscreen) toggleChartFullscreen();
     showToast("Layout reset");
   };
 
-  const applyLayoutPreset = (preset: "trace" | "analysis" | "replay") => {
-    if (preset === "trace") {
-      setLayout({ main: 0.78, right: 0.5 });
-      setChartTab("rate");
-      setMainView("trace");
-      setTab("statistics");
-      showToast("Layout: Trace focus");
-    } else if (preset === "analysis") {
-      setLayout({ main: 0.52, right: 0.62 });
-      setChartTab("signals");
-      setMainView("trace");
-      setTab("statistics");
-      showToast("Layout: Analysis");
-    } else {
-      setLayout({ main: 0.64, right: 0.55 });
-      setChartTab("rate");
-      setMainView("trace");
-      setTab("statistics");
-      showToast("Layout: Replay");
+  const applyDockLayout = (layout: LayoutId) => {
+    setShellMode("standard");
+    setDock((old) => setLayout(old, layout));
+    setFocusedSlot(0);
+    setMaximizedSlot(null);
+    showToast("Layout: " + layoutInfo(layout).label);
+  };
+
+  const revealPanel = (panel: PanelId, preferredSlot = focusedSlot) => {
+    setShellMode("standard");
+    const slot = Math.max(
+      0,
+      Math.min(preferredSlot, panelsFor(dock).length - 1),
+    );
+    const result = showPanel(dock, panel, slot);
+    setDock(result.dock);
+    setFocusedSlot(result.slot);
+  };
+
+  const announceHidden = (panel: PanelId) => {
+    if (!panelsFor(dock).includes(panel)) {
+      showToast(
+        `${panelLabel(panel)} is not on screen; use a page header menu to show it`,
+      );
     }
   };
 
@@ -1477,7 +1458,7 @@ export function App() {
       return [...old, { id, t, label: slot }];
     });
     setSignalView((old) => ({ ...old, endS: t + old.windowS / 2 }));
-    setChartTab("signals");
+    announceHidden("signals");
   };
 
   const placeChartCursor = (tUs: number) => {
@@ -1486,51 +1467,7 @@ export function App() {
       addChartCursor(t);
     }
     setSignalView((old) => ({ ...old, endS: t + old.windowS / 2 }));
-    setChartTab("signals");
-  };
-
-  const toggleChartFullscreen = () => {
-    setChartFullscreen((old) => !old);
-  };
-
-  const toggleChartSplit = () => {
-    if (chartSplit) {
-      setChartSplit(false);
-      if (preSplitRight.current !== null) {
-        const right = preSplitRight.current;
-        preSplitRight.current = null;
-        setLayout((old) => ({ ...old, right }));
-      }
-      return;
-    }
-    preSplitRight.current = layout.right;
-    // Two panes need vertical room; give the chart column more of the right
-    // side while split, keeping the lower panel usable.
-    setLayout((old) => ({ ...old, right: Math.max(old.right, 0.72) }));
-    if (chartTab2 === chartTab) {
-      setChartTab2(chartTab === "signals" ? "monitor" : "signals");
-    }
-    setChartSplit(true);
-  };
-
-  const startSplitDrag = (event: PointerEvent) => {
-    event.preventDefault();
-    const area = chartSplitRef.current;
-    if (!area) return;
-    const rect = area.getBoundingClientRect();
-    const move = (moveEvent: PointerEvent) => {
-      setSplitRatio(
-        clamp((moveEvent.clientY - rect.top) / rect.height, 0.25, 0.75),
-      );
-    };
-    const up = () => {
-      document.body.classList.remove("row-resizing");
-      window.removeEventListener("pointermove", move);
-      window.removeEventListener("pointerup", up);
-    };
-    document.body.classList.add("row-resizing");
-    window.addEventListener("pointermove", move);
-    window.addEventListener("pointerup", up);
+    announceHidden("signals");
   };
 
   const resetChartTools = () => {
@@ -1560,17 +1497,12 @@ export function App() {
       type: "set_web_workspace",
       rev: state?.workspaceRev ?? 0,
       workspace: {
-        tab,
-        mainView,
-        chartTab,
-        chartTab2,
-        chartSplit,
-        splitRatio,
+        shellMode,
+        dock,
         overlay: signalOverlay,
         signalView,
         cursors: chartCursors,
         traceColumns,
-        layout,
         readSignals,
       },
     });
@@ -1628,7 +1560,7 @@ export function App() {
         }
         const added = addPanelPageFromFile(panelBook, result.page);
         setPanelBook(added.book);
-        setMainView("panel");
+        setShellMode("panel");
         showToast(`Imported ${added.page.name}`);
         return;
       }
@@ -1740,11 +1672,12 @@ export function App() {
   // also invalidated when buses/descriptions change: a Panel opened before
   // the DBC finished loading must not keep an empty message list.
   useEffect(() => {
-    if (mainView !== "panel" || catalogLoading) return;
+    if (shellMode !== "panel" || catalogLoading) return;
     if (!catalog || catalogKey !== catalogBusKey) void loadCatalog();
-  }, [mainView, catalog, catalogLoading, catalogKey, catalogBusKey]);
+  }, [shellMode, catalog, catalogLoading, catalogKey, catalogBusKey]);
 
   const openPicker = () => {
+    revealPanel("signals");
     setSessionOpen(false);
     setScriptsOpen(false);
     setBusesOpen(false);
@@ -1833,26 +1766,24 @@ export function App() {
       }
       const mod = event.ctrlKey || event.metaKey;
       const key = event.key.toLowerCase();
-      if (event.altKey && event.shiftKey && /^[1-3]$/.test(event.key)) {
+      if (event.altKey && event.shiftKey && key === "p") {
         event.preventDefault();
-        setMainView(
-          (["trace", "messages", "panel"] as MainView[])[
+        setShellMode((old) => (old === "panel" ? "standard" : "panel"));
+        setMaximizedSlot(null);
+        return;
+      }
+      if (event.altKey && event.shiftKey && /^[12]$/.test(event.key)) {
+        event.preventDefault();
+        revealPanel(event.key === "1" ? "trace" : "messages");
+        return;
+      }
+      if (event.altKey && !mod && /^[1-4]$/.test(event.key)) {
+        event.preventDefault();
+        applyDockLayout(
+          (["focus", "split", "main-side", "quad"] as LayoutId[])[
             Number(event.key) - 1
           ],
         );
-        return;
-      }
-      if (event.altKey && !mod && /^[1-5]$/.test(event.key)) {
-        if (mainView === "panel") return;
-        event.preventDefault();
-        const tabs: ChartTab[] = [
-          "rate",
-          "signals",
-          "monitor",
-          "data",
-          "state",
-        ];
-        setChartTab(tabs[Number(event.key) - 1]);
         return;
       }
       if (event.key === "F9") {
@@ -1881,8 +1812,11 @@ export function App() {
         void openProjectPicker();
       } else if (mod && key === "e") {
         event.preventDefault();
-        if (mainView !== "panel") {
-          openExport(mainView === "messages" ? "messages" : "trace");
+        if (shellMode !== "panel") {
+          const visibleMain = panelsFor(dock).find(
+            (panel) => panel === "trace" || panel === "messages",
+          );
+          openExport(visibleMain === "messages" ? "messages" : "trace");
         }
       } else if (mod && key === "k") {
         event.preventDefault();
@@ -1896,7 +1830,7 @@ export function App() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [state?.measuring, state?.projectPath, state?.tracePaused, mainView]);
+  }, [state?.measuring, state?.projectPath, state?.tracePaused, shellMode, dock]);
 
   const openDataPicker = () => {    setSessionOpen(false);
     setScriptsOpen(false);
@@ -2645,6 +2579,7 @@ export function App() {
   };
 
   const openExplorer = () => {
+    revealPanel("trace");
     setExplorerOpen((open) => !open);
     if (!catalog) void loadCatalog();
   };
@@ -2657,7 +2592,7 @@ export function App() {
     if (!selectedKeys.has(signal.key)) {
       toggleSignal(channel, message, signal, true);
     }
-    setChartTab("signals");
+    announceHidden("signals");
   };
 
   const addExplorerMonitor = (
@@ -2676,7 +2611,7 @@ export function App() {
         name: signal.name,
       });
     }
-    setChartTab("monitor");
+    announceHidden("monitor");
   };
 
   const addExplorerData = (
@@ -2695,20 +2630,23 @@ export function App() {
         name: signal.name,
       });
     }
-    setChartTab("data");
+    announceHidden("data");
   };
 
-  const dropCatalogSignal = (event: DragEvent) => {
+  const dropCatalogSignal = (event: DragEvent, target: PanelId) => {
     event.preventDefault();
+    if (target !== "signals" && target !== "monitor" && target !== "data") {
+      return;
+    }
     const key =
       event.dataTransfer?.getData("application/x-roxy-signal") ??
       event.dataTransfer?.getData("text/plain") ??
       "";
     const hit = findCatalogSignal(catalog, key);
     if (!hit) return;
-    if (chartTab === "monitor") {
+    if (target === "monitor") {
       addExplorerMonitor(hit.channel, hit.message, hit.signal);
-    } else if (chartTab === "data") {
+    } else if (target === "data") {
       addExplorerData(hit.channel, hit.message, hit.signal);
     } else {
       addExplorerChart(hit.channel, hit.message, hit.signal);
@@ -2758,7 +2696,7 @@ export function App() {
     }
     const end = signalView.endS ?? last;
     addChartCursor(end - signalView.windowS / 2);
-    setChartTab("signals");
+    announceHidden("signals");
   };
 
   const paletteCommands: PaletteCommand[] = [
@@ -2878,34 +2816,39 @@ export function App() {
       run: () => void copyChartSelection("state"),
     },
     {
-      id: "chart-rate",
+      id: "show-rate",
       label: "Show Rate",
-      group: "Chart",
-      run: () => setChartTab("rate"),
+      group: "Pages",
+      hint: "Focused slot",
+      run: () => revealPanel("rate"),
     },
     {
-      id: "chart-signals",
+      id: "show-signals",
       label: "Show Signals",
-      group: "Chart",
-      run: () => setChartTab("signals"),
+      group: "Pages",
+      hint: "Focused slot",
+      run: () => revealPanel("signals"),
     },
     {
-      id: "chart-monitor",
+      id: "show-monitor",
       label: "Show Monitor",
-      group: "Chart",
-      run: () => setChartTab("monitor"),
+      group: "Pages",
+      hint: "Focused slot",
+      run: () => revealPanel("monitor"),
     },
     {
-      id: "chart-data",
+      id: "show-data",
       label: "Show Data",
-      group: "Chart",
-      run: () => setChartTab("data"),
+      group: "Pages",
+      hint: "Focused slot",
+      run: () => revealPanel("data"),
     },
     {
-      id: "chart-state",
+      id: "show-state",
       label: "Show State",
-      group: "Chart",
-      run: () => setChartTab("state"),
+      group: "Pages",
+      hint: "Focused slot",
+      run: () => revealPanel("state"),
     },
     {
       id: "go-to-time",
@@ -2939,44 +2882,53 @@ export function App() {
     {
       id: "view-trace",
       label: "Show Trace",
-      group: "Main view",
-      run: () => setMainView("trace"),
+      group: "Pages",
+      hint: "Focused slot",
+      run: () => revealPanel("trace"),
     },
     {
       id: "view-messages",
       label: "Show Messages",
-      group: "Main view",
-      run: () => setMainView("messages"),
+      group: "Pages",
+      hint: "Focused slot",
+      run: () => revealPanel("messages"),
     },
     {
-      id: "tab-statistics",
+      id: "show-statistics",
       label: "Show message statistics",
-      group: "Lower panel",
-      run: () => setTab("statistics"),
+      group: "Pages",
+      hint: "Focused slot",
+      run: () => revealPanel("statistics"),
     },
     {
-      id: "tab-bus",
+      id: "show-bus",
       label: "Show bus load statistics",
-      group: "Lower panel",
-      run: () => setTab("bus"),
+      group: "Pages",
+      hint: "Focused slot",
+      run: () => revealPanel("bus"),
     },
     {
-      id: "tab-spec",
+      id: "show-spec",
       label: "Show Spec",
-      group: "Lower panel",
-      run: () => setTab("spec"),
+      group: "Pages",
+      hint: "Focused slot",
+      run: () => revealPanel("spec"),
     },
     {
-      id: "tab-write",
+      id: "show-write",
       label: "Show Write log",
-      group: "Lower panel",
-      run: () => setTab("activity"),
+      group: "Pages",
+      hint: "Focused slot",
+      run: () => revealPanel("write"),
     },
     {
-      id: "fullscreen",
-      label: chartFullscreen ? "Exit fullscreen chart" : "Fullscreen chart",
+      id: "maximize-page",
+      label: maximizedSlot === null ? "Maximize focused page" : "Restore page",
       group: "View",
-      run: toggleChartFullscreen,
+      run: () => {
+        setShellMode("standard");
+        setMaximizedSlot((old) => (old === null ? focusedSlot : null));
+      },
     },
     {
       id: "theme",
@@ -2985,33 +2937,38 @@ export function App() {
       group: "View",
       run: () => setTheme(theme === "dark" ? "light" : "dark"),
     },
-    {
-      id: "layout-trace",
-      label: "Layout: Trace focus",
-      group: "View",
-      hint: "Wide Trace, compact observers",
-      run: () => applyLayoutPreset("trace"),
-    },
-    {
-      id: "layout-analysis",
-      label: "Layout: Analysis",
-      group: "View",
-      hint: "Signals and Statistics side by side",
-      run: () => applyLayoutPreset("analysis"),
-    },
-    {
-      id: "layout-replay",
-      label: "Layout: Replay",
-      group: "View",
-      hint: "Trace with Rate and room for the replay bar",
-      run: () => applyLayoutPreset("replay"),
-    },
+    ...LAYOUTS.map((layout) => ({
+      id: `layout-${layout.id}`,
+      label: `Layout: ${layout.label}`,
+      group: "Layout",
+      hint: layout.hint,
+      run: () => applyDockLayout(layout.id),
+    })),
     {
       id: "reset-layout",
       label: "Reset layout",
-      group: "View",
-      hint: "Splitters, Trace columns and chart window",
+      group: "Layout",
+      hint: "Panels, splitters and Trace columns",
       run: resetLayout,
+    },
+    {
+      id: "show-standard",
+      label: "Show Standard workspace",
+      group: "View",
+      run: () => {
+        setShellMode("standard");
+        setMaximizedSlot(null);
+      },
+    },
+    {
+      id: "show-panel-page",
+      label: "Show Panel page",
+      group: "View",
+      run: () => {
+        setShellMode("panel");
+        setMaximizedSlot(null);
+        setExplorerOpen(false);
+      },
     },
     ...(canControl && !measuring && !needsLog
       ? [
@@ -3062,12 +3019,338 @@ export function App() {
       />
     );
 
-  const renderSecondary = (tab: ChartTab) => {
-    if (tab === "rate") {
-      return renderRate();
-    }
-    if (tab === "signals") {
-      return (
+  const slotPick = (slot: number, panel: PanelId) => {
+    setDock((old) => assignPanel(old, slot, panel));
+  };
+
+  const slotMove = (slot: number, to: number) => {
+    setDock((old) => moveSlot(old, slot, to));
+    if (maximizedSlot === slot) setMaximizedSlot(to);
+  };
+
+  const toggleSlotMaximize = (slot: number) => {
+    setMaximizedSlot((old) => (old === slot ? null : slot));
+  };
+
+  const slotMenu = (slot: number, panel: PanelId) => (
+    <SlotMenu
+      dock={dock}
+      slot={slot}
+      panel={panel}
+      onPick={(next) => slotPick(slot, next)}
+      onMove={(to) => slotMove(slot, to)}
+    />
+  );
+
+  const slotMax = (slot: number) => (
+    <SlotMaximizeButton
+      maximized={maximizedSlot === slot}
+      onClick={() => toggleSlotMaximize(slot)}
+      theme={theme}
+      onTheme={() => setTheme(theme === "dark" ? "light" : "dark")}
+    />
+  );
+
+  const slotHeader = (
+    slot: number,
+    panel: PanelId,
+    props: {
+      leading?: ComponentChildren;
+      meta?: ComponentChildren;
+      actions?: ComponentChildren;
+    },
+  ) => (
+    <SlotHeader
+      dock={dock}
+      slot={slot}
+      panel={panel}
+      onPick={(next) => slotPick(slot, next)}
+      onMove={(to) => slotMove(slot, to)}
+      onMaximize={() => toggleSlotMaximize(slot)}
+      maximized={maximizedSlot === slot}
+      theme={theme}
+      onTheme={() => setTheme(theme === "dark" ? "light" : "dark")}
+      {...props}
+    />
+  );
+
+  const renderTracePanel = (slot: number) => (
+    <>
+      <TraceTable
+        key={`${bus}:${traceEpoch}`}
+        rows={visibleRows}
+        filterKey={traceFilterKey}
+        columns={traceColumns}
+        onColumnsChange={setTraceColumns}
+        jump={traceJump}
+        onJumpDone={() => setTraceJump(null)}
+        leading={slotMenu(slot, "trace")}
+        title={
+          <span class="meta">
+            {visibleRows.length.toLocaleString()} shown /{" "}
+            {traceRows.length.toLocaleString()} rows
+          </span>
+        }
+        tools={
+          <>
+            <button
+              type="button"
+              class={`mini ${explorerOpen ? "on" : ""}`}
+              title="Browse DBC signals and add them to the chart or Monitor"
+              onClick={openExplorer}
+            >
+              DBC
+            </button>
+            <button
+              type="button"
+              class="mini"
+              onClick={() => openExport("trace")}
+              title="Export the trace to an ASC or PCAP host file"
+            >
+              Export…
+            </button>
+            <button
+              type="button"
+              class={`mini filter-button ${traceFilterActive(traceFilter) ? "on" : ""}`}
+              onClick={() => setTraceFilterOpen(true)}
+              title="Direction, DBC-only, payload and time filters"
+            >
+              Filters{traceFilterCount > 0 ? ` · ${traceFilterCount}` : ""}
+            </button>
+            <button
+              type="button"
+              class={`mini ${clearArmed ? "danger" : ""}`}
+              disabled={!canControl || traceRows.length === 0}
+              title={
+                clearArmed
+                  ? "Click again to clear the visible trace"
+                  : "Clear the visible trace; measurement keeps running"
+              }
+              onClick={() => {
+                if (!clearArmed) {
+                  setClearArmed(true);
+                  return;
+                }
+                setClearArmed(false);
+                void run({ type: "clear_trace" });
+              }}
+            >
+              {clearArmed ? "Confirm" : "Clear"}
+            </button>
+            <ColumnsMenu
+              columns={traceColumns}
+              onChange={setTraceColumns}
+            />
+            <select
+              value={bus}
+              onChange={(e) => {
+                setBus((e.target as HTMLSelectElement).value);
+              }}
+            >
+              <option value="all">All buses</option>
+              {state?.buses.map((entry) => (
+                <option key={`${entry.kind}:${entry.index}`} value={entry.name}>
+                  {entry.name}
+                </option>
+              ))}
+            </select>
+            <input
+              type="search"
+              value={query}
+              placeholder="Filter id, name, data…"
+              title={
+                "Space-separated, all must match. Fields: id:0x100, bus:CAN1, dir:tx, name:RPM, data:A00F, addr, kind. Prefix - excludes (-tx, -id:0x100). Quotes keep spaces."
+              }
+              onInput={(e) => setQuery((e.target as HTMLInputElement).value)}
+            />
+            {slotMax(slot)}
+          </>
+        }
+        onQuery={setQuery}
+        empty={state && state.buses.length === 0 ? emptyWorkspace : undefined}
+        onChartCursor={placeChartCursor}
+        onSetChartCursor={setChartCursorAt}
+        onAddToChart={(frame) => void addFrameSignals(frame, "chart")}
+        onWatch={(frame) => void addFrameSignals(frame, "monitor")}
+        onShowTime={(tUs) => goToTimeUs(tUs, false)}
+        onTrigger={triggerFromTrace}
+      />
+      {explorerOpen && (
+        <DbcExplorer
+          catalog={catalog}
+          loading={catalogLoading}
+          error={catalogError}
+          charted={selectedKeys}
+          watched={monitorKeys}
+          onAddChart={addExplorerChart}
+          onAddMonitor={addExplorerMonitor}
+          onClose={() => setExplorerOpen(false)}
+        />
+      )}
+    </>
+  );
+
+  const renderMessagesPanel = (slot: number) => (
+    <>
+      {slotHeader(slot, "messages", {
+        meta: `${mainMessages.length} ids`,
+        actions: (
+          <>
+            <select
+              value={bus}
+              title="Bus filter; shared with Trace"
+              onChange={(event) =>
+                setBus((event.target as HTMLSelectElement).value)
+              }
+            >
+              <option value="all">All buses</option>
+              {state?.buses.map((entry) => (
+                <option key={`${entry.kind}:${entry.index}`} value={entry.name}>
+                  {entry.name}
+                </option>
+              ))}
+            </select>
+            <input
+              class="panel-filter"
+              type="search"
+              value={messageQuery}
+              placeholder="Filter bus, name or id…"
+              onInput={(event) =>
+                setMessageQuery((event.target as HTMLInputElement).value)
+              }
+            />
+            <button
+              type="button"
+              class="mini"
+              disabled={mainMessages.length === 0}
+              title="Copy the visible messages as tab-separated rows"
+              onClick={() => {
+                const text = mainMessages
+                  .map(
+                    (message) =>
+                      `${message.busName}\t${message.addr || `0x${message.id.toString(16).toUpperCase()}`}\t${message.name}\t${message.cycleMs.toFixed(1)}\t${message.data}`,
+                  )
+                  .join("\n");
+                void navigator.clipboard
+                  .writeText(text)
+                  .then(() =>
+                    showToast(`Copied ${mainMessages.length} messages`),
+                  )
+                  .catch(() => showToast("Clipboard is unavailable"));
+              }}
+            >
+              Copy
+            </button>
+            <button
+              type="button"
+              class="mini message-clear"
+              disabled={mainMessages.length === 0}
+              title={
+                messageClearArmed
+                  ? "Click again to reset message counters"
+                  : "Reset message counters; Trace data is kept"
+              }
+              onClick={() => {
+                if (!messageClearArmed) {
+                  setMessageClearArmed(true);
+                  return;
+                }
+                setMessageClearArmed(false);
+                void run({ type: "clear_messages" });
+              }}
+            >
+              {messageClearArmed ? "Confirm" : "Clear"}
+            </button>
+            <button
+              type="button"
+              class="mini"
+              disabled={mainMessages.length === 0}
+              title={
+                allMessagesExpanded
+                  ? "Collapse all decoded signal rows"
+                  : "Expand all decoded signal rows"
+              }
+              onClick={() => {
+                const next = !allMessagesExpanded;
+                setAllMessagesExpanded(next);
+                void run({ type: "set_all_messages_expanded", on: next });
+              }}
+            >
+              {allMessagesExpanded ? "Collapse" : "Expand"}
+            </button>
+            <button
+              type="button"
+              class="mini"
+              onClick={() => openExport("messages")}
+              title="Export messages to a host CSV file"
+            >
+              Export…
+            </button>
+          </>
+        ),
+      })}
+      <MessageTable
+        key={state?.log ?? state?.projectPath ?? "untitled"}
+        rows={mainMessages}
+        filtered={messageQuery.trim() !== ""}
+        empty={state && state.buses.length === 0 ? emptyWorkspace : undefined}
+        onExpand={(key, on) =>
+          void run({ type: "set_message_expanded", key, on })
+        }
+      />
+    </>
+  );
+
+  const renderRatePanel = (slot: number) => (
+    <>
+      {slotHeader(slot, "rate", {
+        meta: "solid f/s · dashed load",
+        actions: (
+          <strong class="readout">
+            {state ? state.fps.toFixed(0) : "—"} f/s
+          </strong>
+        ),
+      })}
+      {(!state || state.buses.length > 0) && (
+        <div class="chart-legend">
+          <span class="legend-key">
+            <i style={{ background: chartPalette.rateTotal }} />
+            Total <b>{state ? state.fps.toFixed(0) : "—"}</b> f/s
+          </span>
+          {state?.channels.map((channel, index) => (
+            <span class="legend-key" key={channel.name}>
+              <i
+                style={{
+                  background:
+                    chartPalette.buses[index % chartPalette.buses.length],
+                }}
+              />
+              {channel.name}{" "}
+              <b>{(latest?.busRates[index] ?? 0).toFixed(0)}</b> f/s
+              <em>{(latest?.busLoads[index] ?? 0).toFixed(1)}%</em>
+            </span>
+          ))}
+        </div>
+      )}
+      {renderRate()}
+    </>
+  );
+
+  const renderSignalsPanel = (slot: number) => (
+    <>
+      {slotHeader(slot, "signals", {
+        actions: (
+          <button
+            type="button"
+            class="mini"
+            title="Choose signals to plot or read at cursors"
+            onClick={() => void openPicker()}
+          >
+            + Signals
+          </button>
+        ),
+      })}
+      <div class="signal-stack">
         <SignalChart
           series={chartSeries}
           markers={state?.markers ?? []}
@@ -3081,7 +3364,7 @@ export function App() {
           onClearCursors={clearChartCursors}
           onSignalAction={chartSignalAction}
           onTriggerSignal={triggerFromSignal}
-          fullscreen={chartFullscreen}
+          fullscreen={maximizedSlot === slot}
           measuring={measuring}
           paused={state?.tracePaused ?? false}
           reference={reference}
@@ -3091,89 +3374,471 @@ export function App() {
           yModes={chartYModes}
           onYMode={setSignalYMode}
           ranges={signalRanges}
+          hasReadout={readSeries.length > 0}
+          readRange={readRange}
+          readCount={readSeries.length}
         />
-      );
-    }
-    if (tab === "monitor") {
-      return (
-        <MonitorPanel
-          rows={monitorRows}
-          theme={theme}
-          onEdit={editMonitor}
-          onRemove={(row) =>
-            row.kind === "derived"
-              ? removeDerived(row.frame)
-              : void run({
-                  type: "remove_monitor",
-                  kind: row.kind,
-                  ch: row.ch,
-                  id: row.id,
-                  ext: row.ext,
-                  frame: row.frame,
-                  name: row.name,
-                })
-          }
-        />
-      );
-    }
-    if (tab === "data") {
-      return (
-        <DataPanel
-          rows={dataRows}
-          onVisible={(row, visible) =>
-            row.kind === "derived"
-              ? showToast("Derived rows are always visible")
-              : void run({
-                  type: "set_data_visible",
-                  kind: row.kind,
-                  ch: row.ch,
-                  id: row.id,
-                  ext: row.ext,
-                  frame: row.frame,
-                  name: row.name,
-                  visible,
-                })
-          }
-          onRemove={(row) =>
-            row.kind === "derived"
-              ? removeDerived(row.frame)
-              : void run({
-                  type: "remove_data",
-                  kind: row.kind,
-                  ch: row.ch,
-                  id: row.id,
-                  ext: row.ext,
-                  frame: row.frame,
-                  name: row.name,
-                })
-          }
-        />
-      );
-    }
-    return (
+        {maximizedSlot === slot && (
+          <CursorAnalysis
+            series={cursorSeries}
+            cursors={chartCursors}
+            onDownloadRange={downloadChartCsv}
+            onExportRange={
+              exportRange
+                ? () => {
+                    setExportKind("signals");
+                    setExportOpen(true);
+                  }
+                : undefined
+            }
+          />
+        )}
+      </div>
+    </>
+  );
+
+  const renderMonitorPanel = (slot: number) => (
+    <>
+      {slotHeader(slot, "monitor", {
+        actions: (
+          <>
+            <button
+              type="button"
+              class="mini"
+              title="Choose the signals to watch"
+              onClick={() => void openMonitorPicker()}
+            >
+              + Signals
+            </button>
+            <button
+              type="button"
+              class="mini"
+              disabled={!(state?.monitor.length ?? 0)}
+              onClick={() => void run({ type: "clear_monitor" })}
+            >
+              Clear
+            </button>
+          </>
+        ),
+      })}
+      <MonitorPanel
+        rows={monitorRows}
+        theme={theme}
+        onEdit={editMonitor}
+        onRemove={(row) =>
+          row.kind === "derived"
+            ? removeDerived(row.frame)
+            : void run({
+                type: "remove_monitor",
+                kind: row.kind,
+                ch: row.ch,
+                id: row.id,
+                ext: row.ext,
+                frame: row.frame,
+                name: row.name,
+              })
+        }
+      />
+    </>
+  );
+
+  const renderDataPanel = (slot: number) => (
+    <>
+      {slotHeader(slot, "data", {
+        actions: (
+          <>
+            <button
+              type="button"
+              class="mini"
+              title="Choose the signals to track"
+              onClick={() => void openDataPicker()}
+            >
+              + Signals
+            </button>
+            <button
+              type="button"
+              class="mini"
+              disabled={!(state?.data.length ?? 0)}
+              onClick={() => void run({ type: "clear_data" })}
+            >
+              Clear
+            </button>
+          </>
+        ),
+      })}
+      <DataPanel
+        rows={dataRows}
+        onVisible={(row, visible) =>
+          row.kind === "derived"
+            ? showToast("Derived rows are always visible")
+            : void run({
+                type: "set_data_visible",
+                kind: row.kind,
+                ch: row.ch,
+                id: row.id,
+                ext: row.ext,
+                frame: row.frame,
+                name: row.name,
+                visible,
+              })
+        }
+        onRemove={(row) =>
+          row.kind === "derived"
+            ? removeDerived(row.frame)
+            : void run({
+                type: "remove_data",
+                kind: row.kind,
+                ch: row.ch,
+                id: row.id,
+                ext: row.ext,
+                frame: row.frame,
+                name: row.name,
+              })
+        }
+      />
+    </>
+  );
+
+  const renderStatePanel = (slot: number) => (
+    <>
+      {slotHeader(slot, "state", {
+        actions: (
+          <>
+            <button
+              type="button"
+              class="mini"
+              title="Choose the signals to show as bands"
+              onClick={() => void openStatePicker()}
+            >
+              + Signals
+            </button>
+            <button
+              type="button"
+              class="mini"
+              disabled={!(state?.stateRows.length ?? 0)}
+              onClick={() => void run({ type: "clear_state" })}
+            >
+              Clear
+            </button>
+          </>
+        ),
+      })}
       <StatePanel
         rows={stateRows}
         windowS={state?.stateWindowS ?? 20}
         theme={theme}
-        onWindow={(seconds) =>
-          void run({ type: "set_state_window", seconds })
-        }
+        onWindow={(seconds) => void run({ type: "set_state_window", seconds })}
         onRule={stateRowRule}
         onRemove={stateRowRemove}
       />
+    </>
+  );
+
+  const renderStatisticsPanel = (slot: number) => (
+    <>
+      {slotHeader(slot, "statistics", {
+        meta: `${lowerStats.length} rows`,
+        actions: (
+          <button
+            type="button"
+            class="mini lower-export"
+            onClick={() => openExport("stats")}
+            title="Export this panel to a host file"
+          >
+            Export…
+          </button>
+        ),
+      })}
+      <div class="panel-list">
+        <div class="panel-filter-row">
+          <input
+            class="panel-filter"
+            type="search"
+            value={panelQuery}
+            placeholder="Filter bus, name or id…"
+            onInput={(event) =>
+              setPanelQuery((event.target as HTMLInputElement).value)
+            }
+          />
+          {panelQuery && (
+            <button
+              type="button"
+              class="mini"
+              onClick={() => setPanelQuery("")}
+            >
+              Clear
+            </button>
+          )}
+        </div>
+        <StatsTable rows={lowerStats} filtered={panelQuery.trim() !== ""} />
+      </div>
+    </>
+  );
+
+  const renderBusPanel = (slot: number) => (
+    <>
+      {slotHeader(slot, "bus", {
+        meta: `${state?.busStats.length ?? 0} buses`,
+      })}
+      <BusStatsPanel buses={state?.busStats ?? []} theme={theme} />
+    </>
+  );
+
+  const renderSpecPanel = (slot: number) => (
+    <>
+      {slotHeader(slot, "spec", {
+        meta: `${state?.specRows.length ?? 0} violations`,
+      })}
+      <SpecPanel
+        rows={state?.specRows ?? []}
+        tolerance={state?.specTolerance ?? 5}
+        grace={state?.specGrace ?? 3}
+        periodic={state?.specPeriodic ?? 0}
+        onTolerance={(value) =>
+          void run({ type: "set_spec_tolerance", value })
+        }
+        onGrace={(value) => void run({ type: "set_spec_grace", value })}
+        onClear={() => void run({ type: "clear_spec" })}
+        onExport={() => openExport("spec")}
+      />
+    </>
+  );
+
+  const renderSomeIpPanel = (slot: number) => (
+    <>
+      {slotHeader(slot, "someip", {
+        meta: `${state?.someip?.length ?? 0} message${
+          (state?.someip?.length ?? 0) === 1 ? "" : "s"
+        }`,
+      })}
+      <SomeIpPanel
+        rows={state?.someip ?? []}
+        services={state?.someipServices ?? []}
+        subscriptions={state?.someipSubscriptions ?? []}
+        issues={state?.someipIssues ?? []}
+      />
+    </>
+  );
+
+  const renderWritePanel = (slot: number) => (
+    <>
+      {slotHeader(slot, "write", {
+        meta: `${writeRows.length} line${writeRows.length === 1 ? "" : "s"}`,
+        actions: (
+          <button
+            type="button"
+            class="mini lower-export"
+            onClick={() => openExport("write")}
+            title="Export this panel to a host file"
+          >
+            Export…
+          </button>
+        ),
+      })}
+      <div class="panel-list">
+        <div class="panel-filter-row">
+          <select
+            value={writeKind}
+            onChange={(event) =>
+              setWriteKind((event.target as HTMLSelectElement).value)
+            }
+          >
+            <option value="all">All lines</option>
+            <option value="script">Script</option>
+            <option value="info">Info</option>
+            <option value="warn">Warn</option>
+            <option value="error">Error</option>
+          </select>
+          <input
+            class="panel-filter"
+            type="search"
+            value={writeQuery}
+            placeholder="Filter text…"
+            onInput={(event) =>
+              setWriteQuery((event.target as HTMLInputElement).value)
+            }
+          />
+          {writeQuery && (
+            <button
+              type="button"
+              class="mini"
+              onClick={() => setWriteQuery("")}
+            >
+              Clear
+            </button>
+          )}
+        </div>
+        <Activity
+          rows={writeRows}
+          clock={clock}
+          filtered={writeKind !== "all" || writeQuery.trim() !== ""}
+          onFind={(query) => {
+            setQuery(query);
+            revealPanel("trace");
+          }}
+        />
+      </div>
+    </>
+  );
+
+  const renderDockPanel = (panel: PanelId, slot: number) => {
+    switch (panel) {
+      case "trace":
+        return renderTracePanel(slot);
+      case "messages":
+        return renderMessagesPanel(slot);
+      case "rate":
+        return renderRatePanel(slot);
+      case "signals":
+        return renderSignalsPanel(slot);
+      case "monitor":
+        return renderMonitorPanel(slot);
+      case "data":
+        return renderDataPanel(slot);
+      case "state":
+        return renderStatePanel(slot);
+      case "statistics":
+        return renderStatisticsPanel(slot);
+      case "bus":
+        return renderBusPanel(slot);
+      case "spec":
+        return renderSpecPanel(slot);
+      case "someip":
+        return renderSomeIpPanel(slot);
+      case "write":
+        return renderWritePanel(slot);
+      default:
+        return renderMessagesPanel(slot);
+    }
+  };
+
+  const renderSlot = (slot: number, style?: JSX.CSSProperties) => {
+    const panel = panelsFor(dock)[slot] ?? "messages";
+    const acceptsDrop =
+      panel === "signals" || panel === "monitor" || panel === "data";
+    return (
+      <DockSlotSurface
+        panel={panel}
+        slot={slot}
+        maximized={maximizedSlot === slot}
+        style={style}
+        onFocus={() => setFocusedSlot(slot)}
+        onDragOver={
+          acceptsDrop
+            ? (event) => {
+                if (
+                  event.dataTransfer?.types.includes(
+                    "application/x-roxy-signal",
+                  )
+                ) {
+                  event.preventDefault();
+                }
+              }
+            : undefined
+        }
+        onDrop={
+          acceptsDrop ? (event) => dropCatalogSignal(event, panel) : undefined
+        }
+      >
+        {renderDockPanel(panel, slot)}
+      </DockSlotSurface>
     );
   };
 
-  const switchMainView = (view: MainView) => {
-    if (view !== "panel") standardView.current = view;
-    if (view === "panel") {
-      setChartFullscreen(false);
-      setExplorerOpen(false);
+  const renderDock = () => {
+    const ratio = dock.ratios[dock.layout];
+    if (dock.layout === "focus") {
+      return <div class="dock-body focus">{renderSlot(0)}</div>;
     }
-    setMainView(view);
+    if (dock.layout === "split") {
+      return (
+        <div class="dock-body split">
+          {renderSlot(0, { flex: `${ratio.x} 1 0` })}
+          <div
+            class="splitter vertical dock-splitter"
+            title="Drag to resize the pages"
+            onPointerDown={(event) => {
+              event.preventDefault();
+              setDockDrag("x");
+            }}
+          />
+          {renderSlot(1, { flex: `${1 - ratio.x} 1 0` })}
+        </div>
+      );
+    }
+    if (dock.layout === "main-side") {
+      return (
+        <div class="dock-body main-side">
+          {renderSlot(0, { flex: `${ratio.x} 1 0` })}
+          <div
+            class="splitter vertical dock-splitter"
+            title="Drag to resize the main page and the side column"
+            onPointerDown={(event) => {
+              event.preventDefault();
+              setDockDrag("x");
+            }}
+          />
+          <div
+            class="dock-side"
+            ref={sideRef}
+            style={{ flex: `${1 - ratio.x} 1 0` }}
+          >
+            {renderSlot(1, { flex: `${ratio.y} 1 0` })}
+            <div
+              class="splitter horizontal dock-splitter"
+              title="Drag to resize the two side pages"
+              onPointerDown={(event) => {
+                event.preventDefault();
+                setDockDrag("y");
+              }}
+            />
+            {renderSlot(2, { flex: `${1 - ratio.y} 1 0` })}
+          </div>
+        </div>
+      );
+    }
+    return (
+      <div
+        class="dock-body quad"
+        style={{
+          gridTemplateColumns: `${ratio.x}fr 3px ${1 - ratio.x}fr`,
+          gridTemplateRows: `${ratio.y}fr 3px ${1 - ratio.y}fr`,
+        }}
+      >
+        {renderSlot(0, { gridColumn: "1", gridRow: "1" })}
+        {renderSlot(1, { gridColumn: "3", gridRow: "1" })}
+        <div
+          class="splitter vertical dock-splitter quad-v"
+          title="Drag to resize the two columns"
+          onPointerDown={(event) => {
+            event.preventDefault();
+            setDockDrag("x");
+          }}
+        />
+        <div
+          class="splitter horizontal dock-splitter quad-h"
+          title="Drag to resize the two rows"
+          onPointerDown={(event) => {
+            event.preventDefault();
+            setDockDrag("y");
+          }}
+        />
+        {renderSlot(2, { gridColumn: "1", gridRow: "3" })}
+        {renderSlot(3, { gridColumn: "3", gridRow: "3" })}
+      </div>
+    );
   };
 
-  const showStandard = () => switchMainView(standardView.current);
+  const showStandard = () => {
+    setShellMode("standard");
+    setMaximizedSlot(null);
+  };
+
+  const showPanelPage = () => {
+    setShellMode("panel");
+    setMaximizedSlot(null);
+    setExplorerOpen(false);
+  };
 
   // The physical mode ships chosen signal values; the core encodes them and
   // keeps the database's start value for everything else.
@@ -3477,25 +4142,6 @@ export function App() {
     }
   };
 
-  const mainTabs = (
-    <div class="tabs main-tabs">
-      <button
-        type="button"
-        class={mainView === "trace" ? "on" : ""}
-        onClick={() => switchMainView("trace")}
-      >
-        Trace
-      </button>
-      <button
-        type="button"
-        class={mainView === "messages" ? "on" : ""}
-        onClick={() => switchMainView("messages")}
-      >
-        Messages
-      </button>
-    </div>
-  );
-
   return (
     <div class={`app ${state && !online ? "offline" : ""}`}>
       <header class="topbar">
@@ -3688,22 +4334,95 @@ export function App() {
           </div>
         </div>
         <div class="actions">
-          <div class="view-switch" role="group" aria-label="Main view">
+          <div class="view-switch" role="group" aria-label="Workspace">
             <button
               type="button"
-              class={mainView !== "panel" ? "on" : ""}
+              class={shellMode !== "panel" ? "on" : ""}
               onClick={showStandard}
             >
               Standard
             </button>
             <button
               type="button"
-              class={mainView === "panel" ? "on" : ""}
-              onClick={() => switchMainView("panel")}
+              class={shellMode === "panel" ? "on" : ""}
+              onClick={showPanelPage}
             >
               Panel
             </button>
           </div>
+          {shellMode !== "panel" && (
+            <MenuButton
+              className="top-menu layout-menu"
+              menuClass="app-menu-top layout-panel"
+              menuLabel="Layout"
+              title="Choose a page layout; each page then picks its own panel"
+              ariaLabel="Layout"
+              label={
+                <>
+                  <span class="layout-glyph" aria-hidden="true">
+                    ▦
+                  </span>
+                  <span class="layout-menu-label">Layout</span>
+                  <span class="top-menu-caret" aria-hidden="true">
+                    ▾
+                  </span>
+                </>
+              }
+            >
+              {(close) => (
+                <>
+                  <div class="app-menu-group">Presets</div>
+                  {LAYOUTS.map((layout) => (
+                    <button
+                      type="button"
+                      key={layout.id}
+                      class={dock.layout === layout.id ? "on" : ""}
+                      aria-pressed={dock.layout === layout.id}
+                      title={layout.hint}
+                      onClick={() => {
+                        applyDockLayout(layout.id);
+                        close();
+                      }}
+                    >
+                      <span class="layout-check">
+                        {dock.layout === layout.id ? "✓" : ""}
+                      </span>
+                      <span class="menu-copy">
+                        <strong>{layout.label}</strong>
+                        <small>{layout.hint}</small>
+                      </span>
+                    </button>
+                  ))}
+                  <div class="app-menu-sep" />
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setDock((old) => resetLayoutPanels(old));
+                      setMaximizedSlot(null);
+                      showToast("Panels reset for this layout");
+                      close();
+                    }}
+                  >
+                    <span class="layout-check" />
+                    <span>Reset this layout's panels</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setDock(defaultDock());
+                      setFocusedSlot(0);
+                      setMaximizedSlot(null);
+                      showToast("Layouts reset");
+                      close();
+                    }}
+                  >
+                    <span class="layout-check" />
+                    <span>Reset all layouts</span>
+                  </button>
+                </>
+              )}
+            </MenuButton>
+          )}
           <button
             type="button"
             class="buses-button"
@@ -4163,7 +4882,7 @@ export function App() {
       )}
 
       <main
-        class="workspace"
+        class={`workspace ${shellMode === "panel" ? "workspace-panel" : "workspace-dock"}`}
         ref={workspaceRef}
         onDragOver={(event) => {
           if (event.dataTransfer?.types.includes("Files")) {
@@ -4171,14 +4890,8 @@ export function App() {
           }
         }}
         onDrop={handleDrop}
-        style={{
-          gridTemplateColumns:
-            mainView === "panel"
-              ? "minmax(0, 1fr)"
-              : `calc((100% - 3px) * ${layout.main}) 3px minmax(0, 1fr)`,
-        }}
       >
-        {mainView === "panel" ? (
+        {shellMode === "panel" ? (
           <PagePanel
             book={panelBook}
             revision={state?.workspaceRev ?? 0}
@@ -4196,799 +4909,7 @@ export function App() {
             onNotice={showToast}
           />
         ) : (
-          <>
-        <section class={`panel trace-panel ${mainView}`}>
-          {mainView === "trace" ? (
-          <TraceTable
-            key={`${bus}:${traceEpoch}`}
-            rows={visibleRows}
-            filterKey={traceFilterKey}
-            columns={traceColumns}
-            onColumnsChange={setTraceColumns}
-            jump={traceJump}
-            onJumpDone={() => setTraceJump(null)}
-            leading={mainTabs}
-            title={
-              <span class="meta">
-                {visibleRows.length.toLocaleString()} shown /{" "}
-                {traceRows.length.toLocaleString()} rows
-              </span>
-            }
-            tools={
-              <>
-                <button
-                  type="button"
-                  class={`mini ${explorerOpen ? "on" : ""}`}
-                  title="Browse DBC signals and add them to the chart or Monitor"
-                  onClick={openExplorer}
-                >
-                  DBC
-                </button>
-                <button
-                  type="button"
-                  class="mini"
-                  onClick={() => openExport("trace")}
-                  title="Export the trace to an ASC or PCAP host file"
-                >
-                  Export…
-                </button>
-                <button
-                  type="button"
-                  class={`mini filter-button ${traceFilterActive(traceFilter) ? "on" : ""}`}
-                  onClick={() => setTraceFilterOpen(true)}
-                  title="Direction, DBC-only, payload and time filters"
-                >
-                  Filters{traceFilterCount > 0 ? ` · ${traceFilterCount}` : ""}
-                </button>
-                <button
-                  type="button"
-                  class={`mini ${clearArmed ? "danger" : ""}`}
-                  disabled={!canControl || traceRows.length === 0}
-                  title={
-                    clearArmed
-                      ? "Click again to clear the visible trace"
-                      : "Clear the visible trace; measurement keeps running"
-                  }
-                  onClick={() => {
-                    if (!clearArmed) {
-                      setClearArmed(true);
-                      return;
-                    }
-                    setClearArmed(false);
-                    void run({ type: "clear_trace" });
-                  }}
-                >
-                  {clearArmed ? "Confirm" : "Clear"}
-                </button>
-                <ColumnsMenu
-                  columns={traceColumns}
-                  onChange={setTraceColumns}
-                />
-                <select
-                  value={bus}
-                  onChange={(e) => {
-                    setBus((e.target as HTMLSelectElement).value);
-                  }}
-                >
-                  <option value="all">All buses</option>
-                  {state?.buses.map((bus) => (
-                    <option
-                      key={`${bus.kind}:${bus.index}`}
-                      value={bus.name}
-                    >
-                      {bus.name}
-                    </option>
-                  ))}
-                </select>
-                <input
-                  type="search"
-                  value={query}
-                  placeholder="Filter id, name, data…"
-                  title={
-                    "Space-separated, all must match. Fields: id:0x100, bus:CAN1, dir:tx, name:RPM, data:A00F, addr, kind. Prefix - excludes (-tx, -id:0x100). Quotes keep spaces."
-                  }
-                  onInput={(e) =>
-                    setQuery((e.target as HTMLInputElement).value)
-                  }
-                />
-              </>
-            }
-            onQuery={setQuery}
-            empty={
-              state && state.buses.length === 0 ? emptyWorkspace : undefined
-            }
-            onChartCursor={placeChartCursor}
-            onSetChartCursor={setChartCursorAt}
-            onAddToChart={(frame) => void addFrameSignals(frame, "chart")}
-            onWatch={(frame) => void addFrameSignals(frame, "monitor")}
-            onShowTime={(tUs) => goToTimeUs(tUs, false)}
-            onTrigger={triggerFromTrace}
-          />
-          ) : (
-            <>
-              <div class="panel-head">
-                {mainTabs}
-                <span class="meta">{mainMessages.length} ids</span>
-                <div class="panel-tools">
-                  <select
-                    value={bus}
-                    title="Bus filter; shared with Trace"
-                    onChange={(event) =>
-                      setBus((event.target as HTMLSelectElement).value)
-                    }
-                  >
-                    <option value="all">All buses</option>
-                    {state?.buses.map((entry) => (
-                      <option
-                        key={`${entry.kind}:${entry.index}`}
-                        value={entry.name}
-                      >
-                        {entry.name}
-                      </option>
-                    ))}
-                  </select>
-                  <input
-                    class="panel-filter"
-                    type="search"
-                    value={messageQuery}
-                    placeholder="Filter bus, name or id…"
-                    onInput={(event) =>
-                      setMessageQuery(
-                        (event.target as HTMLInputElement).value,
-                      )
-                    }
-                  />
-                  <button
-                    type="button"
-                    class="mini"
-                    disabled={mainMessages.length === 0}
-                    title="Copy the visible messages as tab-separated rows"
-                    onClick={() => {
-                      const text = mainMessages
-                        .map(
-                          (message) =>
-                            `${message.busName}\t${message.addr || `0x${message.id.toString(16).toUpperCase()}`}\t${message.name}\t${message.cycleMs.toFixed(1)}\t${message.data}`,
-                        )
-                        .join("\n");
-                      void navigator.clipboard
-                        .writeText(text)
-                        .then(() =>
-                          showToast(`Copied ${mainMessages.length} messages`),
-                        )
-                        .catch(() => showToast("Clipboard is unavailable"));
-                    }}
-                  >
-                    Copy
-                  </button>
-                  <button
-                    type="button"
-                    class="mini message-clear"
-                    disabled={mainMessages.length === 0}
-                    title={
-                      messageClearArmed
-                        ? "Click again to reset message counters"
-                        : "Reset message counters; Trace data is kept"
-                    }
-                    onClick={() => {
-                      if (!messageClearArmed) {
-                        setMessageClearArmed(true);
-                        return;
-                      }
-                      setMessageClearArmed(false);
-                      void run({ type: "clear_messages" });
-                    }}
-                  >
-                    {messageClearArmed ? "Confirm" : "Clear"}
-                  </button>
-                  <button
-                    type="button"
-                    class="mini"
-                    disabled={mainMessages.length === 0}
-                    title={
-                      allMessagesExpanded
-                        ? "Collapse all decoded signal rows"
-                        : "Expand all decoded signal rows"
-                    }
-                    onClick={() => {
-                      const next = !allMessagesExpanded;
-                      setAllMessagesExpanded(next);
-                      void run({
-                        type: "set_all_messages_expanded",
-                        on: next,
-                      });
-                    }}
-                  >
-                    {allMessagesExpanded ? "Collapse" : "Expand"}
-                  </button>
-                  <button
-                    type="button"
-                    class="mini"
-                    onClick={() => openExport("messages")}
-                    title="Export messages to a host CSV file"
-                  >
-                    Export…
-                  </button>
-                </div>
-              </div>
-              <MessageTable
-                key={state?.log ?? state?.projectPath ?? "untitled"}
-                rows={mainMessages}
-                filtered={messageQuery.trim() !== ""}
-                empty={
-                  state && state.buses.length === 0
-                    ? emptyWorkspace
-                    : undefined
-                }
-                onExpand={(key, on) =>
-                  void run({ type: "set_message_expanded", key, on })
-                }
-              />
-            </>
-          )}
-          {mainView === "trace" && explorerOpen && (
-            <DbcExplorer
-              catalog={catalog}
-              loading={catalogLoading}
-              error={catalogError}
-              charted={selectedKeys}
-              watched={monitorKeys}
-              onAddChart={addExplorerChart}
-              onAddMonitor={addExplorerMonitor}
-              onClose={() => setExplorerOpen(false)}
-            />
-          )}
-        </section>
-
-        <div
-          class={`splitter vertical ${drag === "main" ? "active" : ""}`}
-          onPointerDown={(e) => {
-            e.preventDefault();
-            setDrag("main");
-          }}
-        />
-
-        <div
-          class="right-column"
-          ref={rightRef}
-          style={{
-            gridTemplateRows: `minmax(0, ${layout.right}fr) 3px minmax(0, ${1 - layout.right}fr)`,
-          }}
-        >
-          <section
-            class={`panel chart-panel ${chartFullscreen ? "chart-fullscreen" : ""}`}
-            onDragOver={(event) => {
-              if (event.dataTransfer?.types.includes("application/x-roxy-signal")) {
-                event.preventDefault();
-              }
-            }}
-            onDrop={dropCatalogSignal}
-          >
-            <div class="panel-head">
-              <div class="tabs chart-tabs">
-                <button
-                  type="button"
-                  class={chartTab === "rate" ? "on" : ""}
-                  onClick={() => setChartTab("rate")}
-                >
-                  Rate
-                </button>
-                <button
-                  type="button"
-                  class={chartTab === "signals" ? "on" : ""}
-                  onClick={() => setChartTab("signals")}
-                >
-                  Signals
-                </button>
-                <button
-                  type="button"
-                  class={chartTab === "monitor" ? "on" : ""}
-                  onClick={() => setChartTab("monitor")}
-                >
-                  Monitor
-                </button>
-                <button
-                  type="button"
-                  class={chartTab === "data" ? "on" : ""}
-                  onClick={() => setChartTab("data")}
-                >
-                  Data
-                </button>
-                <button
-                  type="button"
-                  class={chartTab === "state" ? "on" : ""}
-                  onClick={() => setChartTab("state")}
-                >
-                  State
-                </button>
-              </div>
-              {chartTab === "signals" && (
-                <button
-                  type="button"
-                  class="mini"
-                  title="Choose signals to plot or read at cursors"
-                  onClick={() => void openPicker()}
-                >
-                  + Signals
-                </button>
-              )}
-              {chartTab === "monitor" && (
-                <>
-                  <button
-                    type="button"
-                    class="mini"
-                    title="Choose the signals to watch"
-                    onClick={() => void openMonitorPicker()}
-                  >
-                    + Signals
-                  </button>
-                  <button
-                    type="button"
-                    class="mini"
-                    disabled={!(state?.monitor.length ?? 0)}
-                    onClick={() => void run({ type: "clear_monitor" })}
-                  >
-                    Clear
-                  </button>
-                </>
-              )}
-              {chartTab === "data" && (
-                <>
-                  <button
-                    type="button"
-                    class="mini"
-                    title="Choose the signals to track"
-                    onClick={() => void openDataPicker()}
-                  >
-                    + Signals
-                  </button>
-                  <button
-                    type="button"
-                    class="mini"
-                    disabled={!(state?.data.length ?? 0)}
-                    onClick={() => void run({ type: "clear_data" })}
-                  >
-                    Clear
-                  </button>
-                </>
-              )}
-              {chartTab === "state" && (
-                <>
-                  <button
-                    type="button"
-                    class="mini"
-                    title="Choose the signals to show as bands"
-                    onClick={() => void openStatePicker()}
-                  >
-                    + Signals
-                  </button>
-                  <button
-                    type="button"
-                    class="mini"
-                    disabled={!(state?.stateRows.length ?? 0)}
-                    onClick={() => void run({ type: "clear_state" })}
-                  >
-                    Clear
-                  </button>
-                </>
-              )}
-              {chartTab === "rate" && (
-                <span class="meta">solid f/s · dashed load</span>
-              )}
-              {chartTab === "rate" && (
-                <strong class="readout">
-                  {state ? state.fps.toFixed(0) : "—"} f/s
-                </strong>
-              )}
-              <div class="chart-head-tools">
-                <button
-                  type="button"
-                  class={`chart-focus ${chartSplit ? "on" : ""}`}
-                  aria-label="Split the chart panel"
-                  title={
-                    chartSplit
-                      ? "Remove the second chart pane"
-                      : "Show a second chart pane"
-                  }
-                  onClick={toggleChartSplit}
-                >
-                  <svg viewBox="0 0 16 16" aria-hidden="true">
-                    <rect x="2" y="2" width="12" height="5" rx="1" />
-                    <rect x="2" y="9" width="12" height="5" rx="1" />
-                  </svg>
-                </button>
-                {chartFullscreen && (
-                  <button
-                    type="button"
-                    class="chart-theme"
-                    aria-label={
-                      theme === "dark"
-                        ? "Switch to light theme"
-                        : "Switch to dark theme"
-                    }
-                    title={
-                      theme === "dark"
-                        ? "Switch to light theme"
-                        : "Switch to dark theme"
-                    }
-                    onClick={() =>
-                      setTheme(theme === "dark" ? "light" : "dark")
-                    }
-                  >
-                    <svg viewBox="0 0 16 16" aria-hidden="true">
-                      {theme === "dark" ? (
-                        <path d="M8 1.5v2M8 12.5v2M1.5 8h2M12.5 8h2M3.4 3.4l1.4 1.4M11.2 11.2l1.4 1.4M12.6 3.4l-1.4 1.4M4.8 11.2l-1.4 1.4M8 5a3 3 0 1 0 3 3" />
-                      ) : (
-                        <path d="M13 10.2A5.6 5.6 0 0 1 5.8 3a5.5 5.5 0 1 0 7.2 7.2z" />
-                      )}
-                    </svg>
-                  </button>
-                )}
-                <button
-                  type="button"
-                  class="chart-focus"
-                  aria-label={
-                    chartFullscreen ? "Exit fullscreen" : "Fullscreen chart"
-                  }
-                  title={
-                    chartFullscreen ? "Exit fullscreen" : "Fullscreen chart"
-                  }
-                  onClick={toggleChartFullscreen}
-                >
-                  <svg viewBox="0 0 16 16" aria-hidden="true">
-                    {chartFullscreen ? (
-                      <path d="M6 2v4H2M10 2v4h4M6 14v-4H2M10 14v-4h4" />
-                    ) : (
-                      <path d="M2 6V2h4M14 6V2h-4M2 10v4h4M14 10v4h-4" />
-                    )}
-                  </svg>
-                </button>
-              </div>
-            </div>
-            <div class="chart-split-area" ref={chartSplitRef}>
-              <div
-                class="chart-pane"
-                style={chartSplit ? { flex: `${splitRatio} 1 0` } : undefined}
-              >
-            {chartTab === "rate" ? (
-              <>
-                {(!state || state.buses.length > 0) && (
-                  <div class="chart-legend">
-                    <span class="legend-key">
-                      <i style={{ background: chartPalette.rateTotal }} />
-                      Total <b>{state ? state.fps.toFixed(0) : "—"}</b> f/s
-                    </span>
-                    {state?.channels.map((channel, index) => (
-                      <span class="legend-key" key={channel.name}>
-                        <i
-                          style={{
-                            background:
-                              chartPalette.buses[
-                                index % chartPalette.buses.length
-                              ],
-                          }}
-                        />
-                        {channel.name}{" "}
-                        <b>{(latest?.busRates[index] ?? 0).toFixed(0)}</b> f/s
-                        <em>{(latest?.busLoads[index] ?? 0).toFixed(1)}%</em>
-                      </span>
-                    ))}
-                  </div>
-                )}
-                {renderRate()}
-              </>
-            ) : chartTab === "signals" ? (
-              <div class="signal-stack">
-                <SignalChart
-                  series={chartSeries}
-                  markers={state?.markers ?? []}
-                  theme={theme}
-                  onReorder={moveSignal}
-                  view={signalView}
-                  onView={(update) => setSignalView(update)}
-                  cursors={chartCursors}
-                  onAddCursor={addChartCursor}
-                  onMoveCursor={moveChartCursor}
-                  onClearCursors={clearChartCursors}
-                  onSignalAction={chartSignalAction}
-                  onTriggerSignal={triggerFromSignal}
-                  fullscreen={chartFullscreen}
-                  measuring={measuring}
-                  paused={state?.tracePaused ?? false}
-                  reference={reference}
-                  onOpenReference={() => setReferenceOpen(true)}
-                  overlay={signalOverlay}
-                  onToggleOverlay={() => setSignalOverlay((value) => !value)}
-                  yModes={chartYModes}
-                  onYMode={setSignalYMode}
-                  ranges={signalRanges}
-                  hasReadout={readSeries.length > 0}
-                  readRange={readRange}
-                  readCount={readSeries.length}
-                />
-                {!chartSplit && chartFullscreen && (
-                  <CursorAnalysis
-                    series={cursorSeries}
-                    cursors={chartCursors}
-                    onDownloadRange={downloadChartCsv}
-                    onExportRange={
-                      exportRange
-                        ? () => {
-                            setExportKind("signals");
-                            setExportOpen(true);
-                          }
-                        : undefined
-                    }
-                  />
-                )}
-              </div>
-            ) : chartTab === "monitor" ? (
-              <MonitorPanel
-                rows={monitorRows}
-                theme={theme}
-                onEdit={editMonitor}
-                onRemove={(row) =>
-                  row.kind === "derived"
-                    ? removeDerived(row.frame)
-                    : void run({
-                        type: "remove_monitor",
-                        kind: row.kind,
-                        ch: row.ch,
-                        id: row.id,
-                        ext: row.ext,
-                        frame: row.frame,
-                        name: row.name,
-                      })
-                }
-              />
-            ) : chartTab === "data" ? (
-              <DataPanel
-                rows={dataRows}
-                onVisible={(row, visible) =>
-                  row.kind === "derived"
-                    ? showToast("Derived rows are always visible")
-                    : void run({
-                        type: "set_data_visible",
-                        kind: row.kind,
-                        ch: row.ch,
-                        id: row.id,
-                        ext: row.ext,
-                        frame: row.frame,
-                        name: row.name,
-                        visible,
-                      })
-                }
-                onRemove={(row) =>
-                  row.kind === "derived"
-                    ? removeDerived(row.frame)
-                    : void run({
-                        type: "remove_data",
-                        kind: row.kind,
-                        ch: row.ch,
-                        id: row.id,
-                        ext: row.ext,
-                        frame: row.frame,
-                        name: row.name,
-                      })
-                }
-              />
-            ) : (
-              <StatePanel
-                rows={stateRows}
-                windowS={state?.stateWindowS ?? 20}
-                theme={theme}
-                onWindow={(seconds) =>
-                  void run({ type: "set_state_window", seconds })
-                }
-                onRule={stateRowRule}
-                onRemove={stateRowRemove}
-              />
-            )}
-              </div>
-              {chartSplit && (
-                <>
-                  <div class="chart-splitter" onPointerDown={startSplitDrag} />
-                  <div
-                    class="chart-pane"
-                    style={{ flex: `${1 - splitRatio} 1 0` }}
-                  >
-                    <div class="chart-subhead">
-                      <select
-                        value={chartTab2}
-                        aria-label="Second chart pane"
-                        onChange={(event) =>
-                          setChartTab2(
-                            (event.target as HTMLSelectElement)
-                              .value as ChartTab,
-                          )
-                        }
-                      >
-                        <option value="rate">Rate</option>
-                        <option value="signals">Signals</option>
-                        <option value="monitor">Monitor</option>
-                        <option value="data">Data</option>
-                        <option value="state">State</option>
-                      </select>
-                    </div>
-                    {renderSecondary(chartTab2)}
-                  </div>
-                </>
-              )}
-            </div>
-          </section>
-
-          <div
-            class={`splitter horizontal ${drag === "right" ? "active" : ""}`}
-            title="Drag to resize the chart and lower panel"
-            onPointerDown={(e) => {
-              e.preventDefault();
-              setDrag("right");
-            }}
-          />
-
-          <section class="panel lower-panel">
-            <div class="panel-head">
-              <div class="tabs">
-                <button
-                  type="button"
-                  class={tab === "statistics" ? "on" : ""}
-                  onClick={() => setTab("statistics")}
-                >
-                  Messages stats
-                </button>
-                <button
-                  type="button"
-                  class={tab === "bus" ? "on" : ""}
-                  onClick={() => setTab("bus")}
-                >
-                  Bus load
-                </button>
-                <button
-                  type="button"
-                  class={tab === "spec" ? "on" : ""}
-                  onClick={() => setTab("spec")}
-                >
-                  Spec
-                </button>
-                <button
-                  type="button"
-                  class={tab === "someip" ? "on" : ""}
-                  onClick={() => setTab("someip")}
-                >
-                  SOME/IP
-                </button>
-                <button
-                  type="button"
-                  class={tab === "activity" ? "on" : ""}
-                  onClick={() => setTab("activity")}
-                >
-                  Write
-                </button>
-              </div>
-              <span class="meta">
-                {tab === "statistics"
-                  ? `${lowerStats.length} rows`
-                  : tab === "bus"
-                    ? `${state?.busStats.length ?? 0} buses`
-                    : tab === "spec"
-                      ? `${state?.specRows.length ?? 0} violations`
-                      : tab === "someip"
-                        ? `${state?.someip?.length ?? 0} message${
-                            (state?.someip?.length ?? 0) === 1 ? "" : "s"
-                          }`
-                        : `${writeRows.length} line${writeRows.length === 1 ? "" : "s"}`}
-              </span>
-              {tab !== "bus" && tab !== "spec" && tab !== "someip" && (
-                <button
-                  type="button"
-                  class="mini lower-export"
-                  onClick={() =>
-                    openExport(tab === "statistics" ? "stats" : "write")
-                  }
-                  title="Export this panel to a host file"
-                >
-                  Export…
-                </button>
-              )}
-            </div>
-            {tab === "statistics" ? (
-              <div class="panel-list">
-                <div class="panel-filter-row">
-                  <input
-                    class="panel-filter"
-                    type="search"
-                    value={panelQuery}
-                    placeholder="Filter bus, name or id…"
-                    onInput={(event) =>
-                      setPanelQuery((event.target as HTMLInputElement).value)
-                    }
-                  />
-                  {panelQuery && (
-                    <button
-                      type="button"
-                      class="mini"
-                      onClick={() => setPanelQuery("")}
-                    >
-                      Clear
-                    </button>
-                  )}
-                </div>
-                <StatsTable
-                  rows={lowerStats}
-                  filtered={panelQuery.trim() !== ""}
-                />
-              </div>
-            ) : tab === "bus" ? (
-              <BusStatsPanel buses={state?.busStats ?? []} theme={theme} />
-            ) : tab === "spec" ? (
-              <SpecPanel
-                rows={state?.specRows ?? []}
-                tolerance={state?.specTolerance ?? 5}
-                grace={state?.specGrace ?? 3}
-                periodic={state?.specPeriodic ?? 0}
-                onTolerance={(value) =>
-                  void run({ type: "set_spec_tolerance", value })
-                }
-                onGrace={(value) =>
-                  void run({ type: "set_spec_grace", value })
-                }
-                onClear={() => void run({ type: "clear_spec" })}
-                onExport={() => openExport("spec")}
-              />
-            ) : tab === "someip" ? (
-              <SomeIpPanel
-                rows={state?.someip ?? []}
-                services={state?.someipServices ?? []}
-                subscriptions={state?.someipSubscriptions ?? []}
-                issues={state?.someipIssues ?? []}
-              />
-            ) : (
-              <div class="panel-list">
-                <div class="panel-filter-row">
-                  <select
-                    value={writeKind}
-                    onChange={(event) =>
-                      setWriteKind((event.target as HTMLSelectElement).value)
-                    }
-                  >
-                    <option value="all">All lines</option>
-                    <option value="script">Script</option>
-                    <option value="info">Info</option>
-                    <option value="warn">Warn</option>
-                    <option value="error">Error</option>
-                  </select>
-                  <input
-                    class="panel-filter"
-                    type="search"
-                    value={writeQuery}
-                    placeholder="Filter text…"
-                    onInput={(event) =>
-                      setWriteQuery((event.target as HTMLInputElement).value)
-                    }
-                  />
-                  {writeQuery && (
-                    <button
-                      type="button"
-                      class="mini"
-                      onClick={() => setWriteQuery("")}
-                    >
-                      Clear
-                    </button>
-                  )}
-                </div>
-                <Activity
-                  rows={writeRows}
-                  clock={clock}
-                  filtered={writeKind !== "all" || writeQuery.trim() !== ""}
-                  onFind={(query) => {
-                    setQuery(query);
-                    setMainView("trace");
-                  }}
-                />
-              </div>
-            )}
-          </section>
-        </div>
-          </>
+          renderDock()
         )}
       </main>
 
