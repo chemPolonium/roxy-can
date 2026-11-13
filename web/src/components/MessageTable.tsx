@@ -2,6 +2,23 @@ import { Fragment } from "preact";
 import { useLayoutEffect, useRef, useState } from "preact/hooks";
 import type { ComponentChildren } from "preact";
 import type { Message } from "../types";
+import {
+  ColumnResizeHandle,
+  useColumnWidths,
+  type ColumnWidthDef,
+} from "../tableColumns";
+
+/// Bus and Cycle keep the page readable at a glance; Name carries the frame
+/// name and Data absorbs the remaining width. All but Data can be dragged.
+const MESSAGE_COLUMNS: ColumnWidthDef[] = [
+  { id: "bus", width: 46, min: 36, max: 120 },
+  { id: "id", width: 70, min: 60, max: 140 },
+  { id: "name", width: 180, min: 90, max: 420 },
+  { id: "cycle", width: 80, min: 60, max: 140 },
+  { id: "data", width: 0, min: 0, max: 0, flex: true },
+];
+
+const MESSAGE_COLUMNS_KEY = "roxy-can-web.message-columns";
 
 function hexId(message: Message): string {
   const width = message.extended ? 8 : 3;
@@ -21,6 +38,10 @@ export function MessageTable({
 }) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const [showBus, setShowBus] = useState(true);
+  const { widths, startResize } = useColumnWidths(
+    MESSAGE_COLUMNS_KEY,
+    MESSAGE_COLUMNS,
+  );
   useLayoutEffect(() => {
     const element = wrapRef.current;
     if (!element) return;
@@ -53,18 +74,40 @@ export function MessageTable({
     <div class="table-scroll" ref={wrapRef}>
       <table class="data-table message-table">
         <colgroup>
-          {showBus && <col style={{ width: "46px" }} />}
-          <col style={{ width: "70px" }} />
-          <col />
-          <col style={{ width: "80px" }} />
+          {showBus && <col style={{ width: `${widths.bus}px` }} />}
+          <col style={{ width: `${widths.id}px` }} />
+          <col style={{ width: `${widths.name}px` }} />
+          <col style={{ width: `${widths.cycle}px` }} />
           <col />
         </colgroup>
         <thead>
           <tr>
-            {showBus && <th>Bus</th>}
-            <th>ID</th>
-            <th>Name</th>
-            <th class="num">Cycle</th>
+            {showBus && (
+              <th>
+                Bus
+                <ColumnResizeHandle
+                  onResize={(event) => startResize(event, "bus")}
+                />
+              </th>
+            )}
+            <th>
+              ID
+              <ColumnResizeHandle
+                onResize={(event) => startResize(event, "id")}
+              />
+            </th>
+            <th>
+              Name
+              <ColumnResizeHandle
+                onResize={(event) => startResize(event, "name")}
+              />
+            </th>
+            <th class="num">
+              Cycle
+              <ColumnResizeHandle
+                onResize={(event) => startResize(event, "cycle")}
+              />
+            </th>
             <th class="num" title="Raw payload on a message row; decoded values on its signal rows">Data</th>
           </tr>
         </thead>
