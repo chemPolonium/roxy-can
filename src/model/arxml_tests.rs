@@ -389,6 +389,78 @@ fn system_signal_data_constr_and_initial_value_fill_the_signal() {
     assert_eq!(signal.max, Some(9.0));
     assert!(signal.max_open);
     assert_eq!(signal.initial_raw, Some(7.0));
+    assert!(
+        signal.system_signal.is_some(),
+        "a real SYSTEM-SIGNAL keeps the logical link"
+    );
+}
+
+/// The matrix writer adds a SYSTEM-SIGNAL only to carry an I-SIGNAL's
+/// physical properties. The reference must not turn the signal into a fan-out
+/// instance, but its compu method and unit still apply.
+#[test]
+fn a_synthetic_system_signal_carries_properties_without_linking() {
+    const TEXT: &str = r#"<AUTOSAR><AR-PACKAGES><AR-PACKAGE><SHORT-NAME>P</SHORT-NAME><ELEMENTS>
+ <CAN-CLUSTER><SHORT-NAME>C</SHORT-NAME>
+  <CAN-CLUSTER-VARIANTS><CAN-CLUSTER-CONDITIONAL>
+   <CAN-FRAME-TRIGGERINGS><CAN-FRAME-TRIGGERING><SHORT-NAME>FT</SHORT-NAME>
+    <FRAME-REF DEST="CAN-FRAME">/P/F</FRAME-REF><IDENTIFIER>256</IDENTIFIER>
+   </CAN-FRAME-TRIGGERING></CAN-FRAME-TRIGGERINGS>
+  </CAN-CLUSTER-CONDITIONAL></CAN-CLUSTER-VARIANTS>
+ </CAN-CLUSTER>
+ <CAN-FRAME><SHORT-NAME>F</SHORT-NAME><FRAME-LENGTH>8</FRAME-LENGTH>
+  <PDU-TO-FRAME-MAPPING><SHORT-NAME>FM</SHORT-NAME>
+   <PDU-REF DEST="I-SIGNAL-I-PDU">/P/Pdu</PDU-REF>
+  </PDU-TO-FRAME-MAPPING>
+ </CAN-FRAME>
+ <I-SIGNAL-I-PDU><SHORT-NAME>Pdu</SHORT-NAME><LENGTH>8</LENGTH>
+  <I-SIGNAL-TO-I-PDU-MAPPING><SHORT-NAME>SM</SHORT-NAME>
+   <I-SIGNAL-REF DEST="I-SIGNAL">/P/Sig</I-SIGNAL-REF>
+  </I-SIGNAL-TO-I-PDU-MAPPING>
+ </I-SIGNAL-I-PDU>
+ <I-SIGNAL><SHORT-NAME>Sig</SHORT-NAME><LENGTH>16</LENGTH>
+  <SYSTEM-SIGNAL-REF DEST="SYSTEM-SIGNAL">/P/Sys</SYSTEM-SIGNAL-REF>
+ </I-SIGNAL>
+ <SYSTEM-SIGNAL><SHORT-NAME>Sys</SHORT-NAME>
+  <DESC><L-2 L="FOR-ALL">Roxy synthetic SYSTEM-SIGNAL: the matrix has no system signal for this I-SIGNAL.</L-2></DESC>
+  <PHYSICAL-PROPS><SW-DATA-DEF-PROPS-VARIANTS><SW-DATA-DEF-PROPS-CONDITIONAL>
+   <COMPU-METHOD-REF DEST="COMPU-METHOD">/P/Cm</COMPU-METHOD-REF>
+  </SW-DATA-DEF-PROPS-CONDITIONAL></SW-DATA-DEF-PROPS-VARIANTS></PHYSICAL-PROPS>
+ </SYSTEM-SIGNAL>
+ <COMPU-METHOD><SHORT-NAME>Cm</SHORT-NAME><COMPU-INTERNAL-TO-PHYS><COMPU-SCALES><COMPU-SCALE>
+  <COMPU-RATIONAL-COEFFS>
+   <COMPU-NUMERATOR><V>0</V><V>0.1</V></COMPU-NUMERATOR>
+   <COMPU-DENOMINATOR><V>1</V></COMPU-DENOMINATOR>
+  </COMPU-RATIONAL-COEFFS>
+  <UNIT-REF DEST="UNIT">/P/Kmh</UNIT-REF>
+ </COMPU-SCALE></COMPU-SCALES></COMPU-INTERNAL-TO-PHYS></COMPU-METHOD>
+ <UNIT><SHORT-NAME>Kmh</SHORT-NAME><DISPLAY-NAME>km/h</DISPLAY-NAME></UNIT>
+</ELEMENTS></AR-PACKAGE></AR-PACKAGES></AUTOSAR>"#;
+    let comm = import(TEXT, "C", 1);
+    let signal = comm
+        .signals
+        .values()
+        .find(|signal| signal.name == "Sig")
+        .expect("Sig imported");
+    assert_eq!(
+        signal.system_signal, None,
+        "a synthetic system signal must not become a logical link"
+    );
+    assert_eq!(signal.factor, 0.1, "its compu method still applies");
+    assert_eq!(signal.unit, "km/h", "its unit still applies");
+    assert!(
+        comm.system_signals
+            .values()
+            .any(|system| system.name == "Sys"),
+        "the catalog entry stays so the reference is not dangling"
+    );
+    assert!(
+        comm.issues
+            .iter()
+            .all(|issue| issue.severity != IssueSeverity::Error),
+        "no dangling-reference error: {:?}",
+        comm.issues
+    );
 }
 
 #[test]
@@ -814,4 +886,129 @@ fn the_real_42_system_extract_imports_secured_and_group_e2e() {
     let mut encoded = [0u8; 8];
     crate::model::encode_payload(&comm, &plan, &[(crc, 0x55 as f64)], &mut encoded);
     assert_eq!(encoded[0], 0x55, "the secured frame writes the inner bits");
+}
+
+/// A TEXTTABLE scale names its label with COMPU-CONST/VT and keys it by the
+/// internal LOWER-LIMIT (the V override is optional). The scale limits are
+/// raw code ranges: they must not leak into the signal's physical min/max.
+#[test]
+fn a_text_table_keeps_labels_and_does_not_become_a_range() {
+    let text = r#"<?xml version="1.0"?>
+<AUTOSAR><AR-PACKAGES><AR-PACKAGE><SHORT-NAME>P</SHORT-NAME><ELEMENTS>
+ <CAN-CLUSTER><SHORT-NAME>C</SHORT-NAME><CAN-CLUSTER-VARIANTS><CAN-CLUSTER-CONDITIONAL>
+  <CAN-FRAME-TRIGGERINGS>
+   <CAN-FRAME-TRIGGERING><SHORT-NAME>T</SHORT-NAME>
+    <FRAME-REF DEST="CAN-FRAME">/P/F</FRAME-REF><IDENTIFIER>256</IDENTIFIER>
+   </CAN-FRAME-TRIGGERING>
+  </CAN-FRAME-TRIGGERINGS>
+ </CAN-CLUSTER-CONDITIONAL></CAN-CLUSTER-VARIANTS></CAN-CLUSTER>
+ <CAN-FRAME><SHORT-NAME>F</SHORT-NAME><FRAME-LENGTH>8</FRAME-LENGTH>
+  <PDU-TO-FRAME-MAPPINGS><PDU-TO-FRAME-MAPPING><SHORT-NAME>FM</SHORT-NAME>
+   <START-POSITION>0</START-POSITION>
+   <PDU-REF DEST="I-SIGNAL-I-PDU">/P/Pdu</PDU-REF>
+  </PDU-TO-FRAME-MAPPING></PDU-TO-FRAME-MAPPINGS>
+ </CAN-FRAME>
+ <I-SIGNAL-I-PDU><SHORT-NAME>Pdu</SHORT-NAME><LENGTH>8</LENGTH>
+  <I-SIGNAL-TO-I-PDU-MAPPINGS><I-SIGNAL-TO-I-PDU-MAPPING><SHORT-NAME>SM</SHORT-NAME>
+   <START-POSITION>0</START-POSITION>
+   <I-SIGNAL-REF DEST="I-SIGNAL">/P/Gear</I-SIGNAL-REF>
+  </I-SIGNAL-TO-I-PDU-MAPPING></I-SIGNAL-TO-I-PDU-MAPPINGS>
+ </I-SIGNAL-I-PDU>
+ <I-SIGNAL><SHORT-NAME>Gear</SHORT-NAME><LENGTH>4</LENGTH>
+  <COMPU-METHOD-REF DEST="COMPU-METHOD">/P/GearEncoding</COMPU-METHOD-REF>
+ </I-SIGNAL>
+ <COMPU-METHOD><SHORT-NAME>GearEncoding</SHORT-NAME><CATEGORY>TEXTTABLE</CATEGORY>
+  <COMPU-INTERNAL-TO-PHYS><COMPU-SCALES>
+   <COMPU-SCALE><LOWER-LIMIT>0</LOWER-LIMIT><UPPER-LIMIT>0</UPPER-LIMIT>
+    <COMPU-CONST><VT>Park</VT></COMPU-CONST></COMPU-SCALE>
+   <COMPU-SCALE><LOWER-LIMIT>1</LOWER-LIMIT><UPPER-LIMIT>1</UPPER-LIMIT>
+    <COMPU-CONST><V>5</V><VT>Drive</VT></COMPU-CONST></COMPU-SCALE>
+  </COMPU-SCALES></COMPU-INTERNAL-TO-PHYS>
+ </COMPU-METHOD>
+</ELEMENTS></AR-PACKAGE></AR-PACKAGES></AUTOSAR>"#;
+    let comm = import(text, "C", 1);
+    let signal = comm
+        .signals
+        .values()
+        .find(|signal| signal.name == "Gear")
+        .expect("Gear signal imported");
+    assert_eq!(
+        signal.values,
+        vec![(0, "Park".to_string()), (5, "Drive".to_string())],
+        "the LOWER-LIMIT keys the label; the explicit V overrides it"
+    );
+    assert_eq!(signal.factor, 1.0);
+    assert_eq!(signal.offset, 0.0);
+    assert_eq!(signal.min, None, "a text-table limit is not a physical min");
+    assert_eq!(signal.max, None, "a text-table limit is not a physical max");
+    assert_eq!(
+        comm.compu_methods
+            .values()
+            .find(|method| method.name == "GearEncoding")
+            .map(|method| method.category),
+        Some(CompuCategory::TextTable)
+    );
+}
+
+/// Two packages may declare the same COMPU-METHOD short name. A reference
+/// written as a path must resolve to that object, not to the last short name
+/// the catalog happened to see.
+#[test]
+fn a_compu_reference_by_path_beats_a_duplicate_short_name() {
+    const TEXT: &str = r#"<AUTOSAR><AR-PACKAGES>
+ <AR-PACKAGE><SHORT-NAME>P1</SHORT-NAME><ELEMENTS>
+  <COMPU-METHOD><SHORT-NAME>Scale</SHORT-NAME><COMPU-INTERNAL-TO-PHYS><COMPU-SCALES><COMPU-SCALE>
+   <COMPU-RATIONAL-COEFFS>
+    <COMPU-NUMERATOR><V>0</V><V>0.1</V></COMPU-NUMERATOR>
+    <COMPU-DENOMINATOR><V>1</V></COMPU-DENOMINATOR>
+   </COMPU-RATIONAL-COEFFS>
+  </COMPU-SCALE></COMPU-SCALES></COMPU-INTERNAL-TO-PHYS></COMPU-METHOD>
+ </ELEMENTS></AR-PACKAGE>
+ <AR-PACKAGE><SHORT-NAME>P2</SHORT-NAME><ELEMENTS>
+  <COMPU-METHOD><SHORT-NAME>Scale</SHORT-NAME><COMPU-INTERNAL-TO-PHYS><COMPU-SCALES><COMPU-SCALE>
+   <COMPU-RATIONAL-COEFFS>
+    <COMPU-NUMERATOR><V>0</V><V>0.5</V></COMPU-NUMERATOR>
+    <COMPU-DENOMINATOR><V>1</V></COMPU-DENOMINATOR>
+   </COMPU-RATIONAL-COEFFS>
+  </COMPU-SCALE></COMPU-SCALES></COMPU-INTERNAL-TO-PHYS></COMPU-METHOD>
+ </ELEMENTS></AR-PACKAGE>
+ <AR-PACKAGE><SHORT-NAME>Net</SHORT-NAME><ELEMENTS>
+  <CAN-CLUSTER><SHORT-NAME>C</SHORT-NAME>
+   <CAN-CLUSTER-VARIANTS><CAN-CLUSTER-CONDITIONAL>
+    <CAN-FRAME-TRIGGERINGS><CAN-FRAME-TRIGGERING><SHORT-NAME>FT</SHORT-NAME>
+     <FRAME-REF DEST="CAN-FRAME">/Net/F</FRAME-REF><IDENTIFIER>256</IDENTIFIER>
+    </CAN-FRAME-TRIGGERING></CAN-FRAME-TRIGGERINGS>
+   </CAN-CLUSTER-CONDITIONAL></CAN-CLUSTER-VARIANTS>
+  </CAN-CLUSTER>
+  <CAN-FRAME><SHORT-NAME>F</SHORT-NAME><FRAME-LENGTH>8</FRAME-LENGTH>
+   <PDU-TO-FRAME-MAPPING><SHORT-NAME>FM</SHORT-NAME>
+    <PDU-REF DEST="I-SIGNAL-I-PDU">/Net/Pdu</PDU-REF>
+   </PDU-TO-FRAME-MAPPING>
+  </CAN-FRAME>
+  <I-SIGNAL-I-PDU><SHORT-NAME>Pdu</SHORT-NAME><LENGTH>8</LENGTH>
+   <I-SIGNAL-TO-I-PDU-MAPPING><SHORT-NAME>MA</SHORT-NAME><START-POSITION>0</START-POSITION>
+    <I-SIGNAL-REF DEST="I-SIGNAL">/Net/A</I-SIGNAL-REF>
+   </I-SIGNAL-TO-I-PDU-MAPPING>
+   <I-SIGNAL-TO-I-PDU-MAPPING><SHORT-NAME>MB</SHORT-NAME><START-POSITION>8</START-POSITION>
+    <I-SIGNAL-REF DEST="I-SIGNAL">/Net/B</I-SIGNAL-REF>
+   </I-SIGNAL-TO-I-PDU-MAPPING>
+  </I-SIGNAL-I-PDU>
+  <I-SIGNAL><SHORT-NAME>A</SHORT-NAME><LENGTH>8</LENGTH>
+   <COMPU-METHOD-REF DEST="COMPU-METHOD">/P1/Scale</COMPU-METHOD-REF>
+  </I-SIGNAL>
+  <I-SIGNAL><SHORT-NAME>B</SHORT-NAME><LENGTH>8</LENGTH>
+   <COMPU-METHOD-REF DEST="COMPU-METHOD">/P2/Scale</COMPU-METHOD-REF>
+  </I-SIGNAL>
+ </ELEMENTS></AR-PACKAGE>
+</AR-PACKAGES></AUTOSAR>"#;
+    let comm = import(TEXT, "C", 1);
+    let factor = |name: &str| {
+        comm.signals
+            .values()
+            .find(|signal| signal.name == name)
+            .map(|signal| signal.factor)
+            .unwrap()
+    };
+    assert_eq!(factor("A"), 0.1);
+    assert_eq!(factor("B"), 0.5);
 }

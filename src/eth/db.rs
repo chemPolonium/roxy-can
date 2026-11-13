@@ -216,6 +216,7 @@ impl EthDb {
         };
         let pdus = by_name("I-SIGNAL-I-PDU");
         let signals = by_name("I-SIGNAL");
+        let system_signals = by_name("SYSTEM-SIGNAL");
         let compus = by_name("COMPU-METHOD");
         let units = by_name("UNIT");
         let base_types = by_name("SW-BASE-TYPE");
@@ -323,7 +324,14 @@ impl EthDb {
             let Some(node) = pdu_nodes.get(&name) else {
                 continue;
             };
-            if let Some(pdu) = read_pdu(*node, &signals, &compus, &units, &base_types) {
+            if let Some(pdu) = read_pdu(
+                *node,
+                &signals,
+                &system_signals,
+                &compus,
+                &units,
+                &base_types,
+            ) {
                 db.pdus.push(pdu);
             } else {
                 db.pdus.push(EthPdu {
@@ -466,7 +474,14 @@ impl EthDb {
                     continue;
                 };
                 let start_bit = number(map, "START-POSITION").unwrap_or(0.0) as usize;
-                if let Some(mut pdu) = read_pdu(pdu_node, &signals, &compus, &units, &base_types) {
+                if let Some(mut pdu) = read_pdu(
+                    pdu_node,
+                    &signals,
+                    &system_signals,
+                    &compus,
+                    &units,
+                    &base_types,
+                ) {
                     pdu.start_bit = start_bit;
                     frame.pdus.push(pdu);
                 }
@@ -729,6 +744,7 @@ impl EthDb {
 fn read_pdu(
     node: Node,
     signals: &HashMap<String, Node>,
+    system_signals: &HashMap<String, Node>,
     compus: &HashMap<String, Node>,
     units: &HashMap<String, Node>,
     base_types: &HashMap<String, Node>,
@@ -761,18 +777,26 @@ fn read_pdu(
         if size == 0 || size > 64 {
             continue;
         }
-        let signed = child_text(sig_node, "BASE-TYPE-REF")
-            .and_then(|r| base_types.get(&ref_tail(&r)))
-            .and_then(|b| child_text(*b, "BASE-TYPE-ENCODING"))
-            .is_some_and(|e| e == "2C");
-        let compu = child_text(sig_node, "COMPU-METHOD-REF")
-            .and_then(|r| compus.get(&ref_tail(&r)).copied());
+        // The physical properties (compu method/base type/unit) may sit on
+        // the I-SIGNAL or, as Roxy writes them, on its SYSTEM-SIGNAL.
+        let system_node = descendant_text(sig_node, "SYSTEM-SIGNAL-REF")
+            .and_then(|reference| system_signals.get(&ref_tail(&reference)).copied());
+        let property = |tag: &str| {
+            descendant_text(sig_node, tag)
+                .or_else(|| system_node.and_then(|node| descendant_text(node, tag)))
+        };
+        let signed = property("BASE-TYPE-REF")
+            .and_then(|reference| base_types.get(&ref_tail(&reference)).copied())
+            .and_then(|base| child_text(base, "BASE-TYPE-ENCODING"))
+            .is_some_and(|encoding| encoding == "2C");
+        let compu = property("COMPU-METHOD-REF")
+            .and_then(|reference| compus.get(&ref_tail(&reference)).copied());
         let (factor, offset) = compu.map(read_linear).unwrap_or((1.0, 0.0));
         let values = compu.map(read_text_table).unwrap_or_default();
         let unit = compu
             .and_then(|c| child_text(c, "UNIT-REF"))
-            .or_else(|| child_text(sig_node, "UNIT-REF"))
-            .and_then(|r| units.get(&ref_tail(&r)).copied())
+            .or_else(|| property("UNIT-REF"))
+            .and_then(|reference| units.get(&ref_tail(&reference)).copied())
             .map(|u| {
                 child_text(u, "DISPLAY-NAME")
                     .filter(|s| !s.is_empty())
@@ -939,6 +963,16 @@ fn child_text(node: Node, tag: &str) -> Option<String> {
         .filter(|t| !t.is_empty())
 }
 
+/// Like [`child_text`], but searches the whole subtree: AUTOSAR nests the
+/// physical-property references under `PHYSICAL-PROPS`.
+fn descendant_text(node: Node, tag: &str) -> Option<String> {
+    node.descendants()
+        .find(|n| n.has_tag_name(tag))
+        .and_then(|n| n.text())
+        .map(|t| t.trim().to_string())
+        .filter(|t| !t.is_empty())
+}
+
 fn number(node: Node, tag: &str) -> Option<f64> {
     child_text(node, tag).and_then(|t| t.trim().parse::<f64>().ok())
 }
@@ -1017,6 +1051,89 @@ mod tests {
         assert_eq!(frame.length, 22);
         assert_eq!(frame.pdus[0].signals[0].name, "Sig");
         assert_eq!(frame.pdus[0].signals[0].factor, 0.1);
+    }
+
+    /// The matrix writer puts physical properties on the SYSTEM-SIGNAL; the
+    /// I-SIGNAL only references it. Scaling, unit, base type and text table
+    /// must still be read from there.
+    #[test]
+    fn physical_props_fall_back_to_the_system_signal() {
+        const TEXT: &str = r#"<?xml version="1.0"?>
+<AUTOSAR><AR-PACKAGES><AR-PACKAGE><SHORT-NAME>Net</SHORT-NAME><ELEMENTS>
+ <ETHERNET-CLUSTER><SHORT-NAME>EthCluster</SHORT-NAME>
+  <ETHERNET-PHYSICAL-CHANNEL><SHORT-NAME>Vlan100</SHORT-NAME>
+   <VLAN-CONFIG><VLAN-IDENTIFIER>100</VLAN-IDENTIFIER></VLAN-CONFIG>
+   <ETHERNET-FRAME-TRIGGERING><SHORT-NAME>Trig</SHORT-NAME>
+    <FRAME-REF DEST="ETHERNET-FRAME">/Net/EthFrame</FRAME-REF>
+   </ETHERNET-FRAME-TRIGGERING>
+  </ETHERNET-PHYSICAL-CHANNEL>
+ </ETHERNET-CLUSTER>
+ <ETHERNET-FRAME><SHORT-NAME>EthFrame</SHORT-NAME><FRAME-LENGTH>16</FRAME-LENGTH>
+  <PDU-TO-FRAME-MAPPING><SHORT-NAME>Map</SHORT-NAME><START-POSITION>0</START-POSITION>
+   <PDU-REF DEST="I-SIGNAL-I-PDU">/Net/Pdu</PDU-REF>
+  </PDU-TO-FRAME-MAPPING>
+ </ETHERNET-FRAME>
+ <I-SIGNAL-I-PDU><SHORT-NAME>Pdu</SHORT-NAME><LENGTH>16</LENGTH>
+  <I-SIGNAL-TO-I-PDU-MAPPING><SHORT-NAME>LevelMap</SHORT-NAME>
+   <START-POSITION>0</START-POSITION>
+   <I-SIGNAL-REF DEST="I-SIGNAL">/Net/Level</I-SIGNAL-REF>
+  </I-SIGNAL-TO-I-PDU-MAPPING>
+  <I-SIGNAL-TO-I-PDU-MAPPING><SHORT-NAME>StateMap</SHORT-NAME>
+   <START-POSITION>8</START-POSITION>
+   <I-SIGNAL-REF DEST="I-SIGNAL">/Net/State</I-SIGNAL-REF>
+  </I-SIGNAL-TO-I-PDU-MAPPING>
+ </I-SIGNAL-I-PDU>
+ <I-SIGNAL><SHORT-NAME>Level</SHORT-NAME><LENGTH>8</LENGTH>
+  <SYSTEM-SIGNAL-REF DEST="SYSTEM-SIGNAL">/Net/SysLevel</SYSTEM-SIGNAL-REF>
+ </I-SIGNAL>
+ <I-SIGNAL><SHORT-NAME>State</SHORT-NAME><LENGTH>8</LENGTH>
+  <SYSTEM-SIGNAL-REF DEST="SYSTEM-SIGNAL">/Net/SysState</SYSTEM-SIGNAL-REF>
+ </I-SIGNAL>
+ <SYSTEM-SIGNAL><SHORT-NAME>SysLevel</SHORT-NAME><PHYSICAL-PROPS>
+  <SW-DATA-DEF-PROPS-VARIANTS><SW-DATA-DEF-PROPS-CONDITIONAL>
+   <COMPU-METHOD-REF DEST="COMPU-METHOD">/Net/LevelCm</COMPU-METHOD-REF>
+  </SW-DATA-DEF-PROPS-CONDITIONAL></SW-DATA-DEF-PROPS-VARIANTS>
+ </PHYSICAL-PROPS></SYSTEM-SIGNAL>
+ <SYSTEM-SIGNAL><SHORT-NAME>SysState</SHORT-NAME><PHYSICAL-PROPS>
+  <SW-DATA-DEF-PROPS-VARIANTS><SW-DATA-DEF-PROPS-CONDITIONAL>
+   <BASE-TYPE-REF DEST="SW-BASE-TYPE">/Net/s8</BASE-TYPE-REF>
+   <COMPU-METHOD-REF DEST="COMPU-METHOD">/Net/StateCm</COMPU-METHOD-REF>
+  </SW-DATA-DEF-PROPS-CONDITIONAL></SW-DATA-DEF-PROPS-VARIANTS>
+ </PHYSICAL-PROPS></SYSTEM-SIGNAL>
+ <SW-BASE-TYPE><SHORT-NAME>s8</SHORT-NAME><BASE-TYPE-ENCODING>2C</BASE-TYPE-ENCODING></SW-BASE-TYPE>
+ <COMPU-METHOD><SHORT-NAME>LevelCm</SHORT-NAME><COMPU-INTERNAL-TO-PHYS><COMPU-SCALES>
+  <COMPU-SCALE><COMPU-RATIONAL-COEFFS>
+   <COMPU-NUMERATOR><V>0</V><V>0.5</V></COMPU-NUMERATOR>
+   <COMPU-DENOMINATOR><V>1</V></COMPU-DENOMINATOR>
+  </COMPU-RATIONAL-COEFFS></COMPU-SCALE>
+ </COMPU-SCALES></COMPU-INTERNAL-TO-PHYS><UNIT-REF>/Net/Percent</UNIT-REF></COMPU-METHOD>
+ <COMPU-METHOD><SHORT-NAME>StateCm</SHORT-NAME><CATEGORY>TEXTTABLE</CATEGORY>
+  <COMPU-INTERNAL-TO-PHYS><COMPU-SCALES>
+   <COMPU-SCALE><LOWER-LIMIT>0</LOWER-LIMIT>
+    <COMPU-CONST><VT>Off</VT></COMPU-CONST></COMPU-SCALE>
+   <COMPU-SCALE><LOWER-LIMIT>1</LOWER-LIMIT>
+    <COMPU-CONST><VT>On</VT></COMPU-CONST></COMPU-SCALE>
+  </COMPU-SCALES></COMPU-INTERNAL-TO-PHYS>
+ </COMPU-METHOD>
+ <UNIT><SHORT-NAME>Percent</SHORT-NAME><DISPLAY-NAME>%</DISPLAY-NAME></UNIT>
+</ELEMENTS></AR-PACKAGE></AR-PACKAGES></AUTOSAR>"#;
+        let db = EthDb::parse(TEXT).expect("parse");
+        let signals = &db.frames[0].pdus[0].signals;
+        let level = signals
+            .iter()
+            .find(|signal| signal.name == "Level")
+            .expect("Level");
+        assert_eq!(level.factor, 0.5);
+        assert_eq!(level.unit, "%");
+        let state = signals
+            .iter()
+            .find(|signal| signal.name == "State")
+            .expect("State");
+        assert!(state.signed, "the base type on the system signal applies");
+        assert_eq!(
+            state.values,
+            vec![(0, "Off".to_string()), (1, "On".to_string())]
+        );
     }
 
     #[test]

@@ -13,6 +13,12 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 
 use super::*;
 
+/// The writer adds a SYSTEM-SIGNAL only to carry an I-SIGNAL's physical
+/// properties. Referencing it does not make the signal a fan-out instance, so
+/// the reader keeps the properties but leaves `Signal::system_signal` empty.
+const SYNTHETIC_SYSTEM_SIGNAL_MARKER: &str =
+    "Roxy synthetic SYSTEM-SIGNAL: the matrix has no system signal for this I-SIGNAL.";
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ScannedCluster {
     pub kind: ClusterKind,
@@ -125,6 +131,7 @@ struct Importer<'a> {
     system_base_types: HashMap<String, BaseType>,
     base_types: HashMap<String, BaseType>,
     system_signals: HashMap<String, SystemSignalId>,
+    synthetic_system_ids: HashSet<SystemSignalId>,
     e2e_ids: HashMap<String, E2eProtectionId>,
     system_e2e: HashMap<SystemSignalId, E2eProtectionId>,
     signal_ids: HashMap<String, SignalId>,
@@ -155,6 +162,7 @@ impl<'a> Importer<'a> {
             system_base_types: HashMap::new(),
             base_types: HashMap::new(),
             system_signals: HashMap::new(),
+            synthetic_system_ids: HashSet::new(),
             e2e_ids: HashMap::new(),
             system_e2e: HashMap::new(),
             signal_ids: HashMap::new(),
@@ -226,7 +234,9 @@ impl<'a> Importer<'a> {
             if name.is_empty() {
                 continue;
             }
+            let path = object_path(node);
             let display = child_text(node, "DISPLAY-NAME").unwrap_or_else(|| name.clone());
+            self.units.insert(path, display.clone());
             self.units.insert(name, display);
         }
 
@@ -250,6 +260,7 @@ impl<'a> Importer<'a> {
                 size: child_number(node, "BASE-TYPE-SIZE").unwrap_or(0.0) as u32,
                 encoding: child_text(node, "BASE-TYPE-ENCODING").unwrap_or_default(),
             };
+            self.base_types.insert(path, base.clone());
             self.base_types.insert(name, base.clone());
             self.comm.base_types.insert(id, base);
         }
@@ -269,6 +280,7 @@ impl<'a> Importer<'a> {
                 &source_key(self.cluster_id, "compu", &path),
             ) as u32);
             let compu = read_compu(node, id, &self.units);
+            self.compus.insert(path, compu.clone());
             self.compus.insert(name, compu.clone());
             self.comm.compu_methods.insert(id, compu);
         }
@@ -284,14 +296,17 @@ impl<'a> Importer<'a> {
             if name.is_empty() {
                 continue;
             }
+            let path = object_path(node);
             if let Some(reference) = text_of(node, "COMPU-METHOD-REF")
-                && let Some(compu) = self.compus.get(ref_tail(&reference))
+                && let Some(compu) = lookup(&self.compus, &reference)
             {
+                self.system_compus.insert(path.clone(), compu.clone());
                 self.system_compus.insert(name.clone(), compu.clone());
             }
             if let Some(reference) = text_of(node, "BASE-TYPE-REF")
-                && let Some(base) = self.base_types.get(ref_tail(&reference))
+                && let Some(base) = lookup(&self.base_types, &reference)
             {
+                self.system_base_types.insert(path, base.clone());
                 self.system_base_types.insert(name, base.clone());
             }
         }
@@ -379,6 +394,9 @@ impl<'a> Importer<'a> {
             ) as u32);
             self.system_signals.insert(path.clone(), id);
             self.system_signals.insert(name.clone(), id);
+            if desc(node).is_some_and(|text| text.contains(SYNTHETIC_SYSTEM_SIGNAL_MARKER)) {
+                self.synthetic_system_ids.insert(id);
+            }
             self.comm
                 .system_signals
                 .insert(id, SystemSignal { id, name });
@@ -674,17 +692,24 @@ impl<'a> Importer<'a> {
     ) -> Signal {
         let name = short_name(node);
         let system_ref = text_of(node, "SYSTEM-SIGNAL-REF");
-        let system_tail = system_ref.as_deref().map(ref_tail);
         let base_ref = text_of(node, "BASE-TYPE-REF");
         let base = base_ref
             .as_deref()
-            .and_then(|r| self.base_types.get(ref_tail(r)))
-            .or_else(|| system_tail.and_then(|n| self.system_base_types.get(n)));
+            .and_then(|reference| lookup(&self.base_types, reference))
+            .or_else(|| {
+                system_ref
+                    .as_deref()
+                    .and_then(|reference| lookup(&self.system_base_types, reference))
+            });
         let compu_ref = text_of(node, "COMPU-METHOD-REF");
         let compu = compu_ref
             .as_deref()
-            .and_then(|r| self.compus.get(ref_tail(r)))
-            .or_else(|| system_tail.and_then(|n| self.system_compus.get(n)))
+            .and_then(|reference| lookup(&self.compus, reference))
+            .or_else(|| {
+                system_ref
+                    .as_deref()
+                    .and_then(|reference| lookup(&self.system_compus, reference))
+            })
             .cloned();
         let factor = compu.as_ref().map_or(1.0, |c| c.factor);
         let offset = compu.as_ref().map_or(0.0, |c| c.offset);
@@ -1208,10 +1233,12 @@ impl<'a> Importer<'a> {
     }
 
     fn system_signal_id(&self, reference: &str) -> Option<SystemSignalId> {
-        self.system_signals
+        let id = self
+            .system_signals
             .get(reference)
             .or_else(|| self.system_signals.get(ref_tail(reference)))
-            .copied()
+            .copied()?;
+        (!self.synthetic_system_ids.contains(&id)).then_some(id)
     }
 
     fn data_constr_limits(
@@ -1521,17 +1548,20 @@ fn read_compu(
     let mut min_open = false;
     let mut max_open = false;
     for scale in node.descendants().filter(|n| n.has_tag_name("COMPU-SCALE")) {
-        if let Some(limit) = scale.descendants().find(|n| n.has_tag_name("LOWER-LIMIT")) {
-            min = limit.text().and_then(|t| t.trim().parse().ok());
-            min_open = limit
-                .attribute("INTERVAL-TYPE")
-                .is_some_and(|v| v.eq_ignore_ascii_case("OPEN"));
-        }
-        if let Some(limit) = scale.descendants().find(|n| n.has_tag_name("UPPER-LIMIT")) {
-            max = limit.text().and_then(|t| t.trim().parse().ok());
-            max_open = limit
-                .attribute("INTERVAL-TYPE")
-                .is_some_and(|v| v.eq_ignore_ascii_case("OPEN"));
+        let constant = scale.descendants().find(|n| n.has_tag_name("COMPU-CONST"));
+        if constant.is_none() {
+            if let Some(limit) = scale.descendants().find(|n| n.has_tag_name("LOWER-LIMIT")) {
+                min = limit.text().and_then(|t| t.trim().parse().ok());
+                min_open = limit
+                    .attribute("INTERVAL-TYPE")
+                    .is_some_and(|v| v.eq_ignore_ascii_case("OPEN"));
+            }
+            if let Some(limit) = scale.descendants().find(|n| n.has_tag_name("UPPER-LIMIT")) {
+                max = limit.text().and_then(|t| t.trim().parse().ok());
+                max_open = limit
+                    .attribute("INTERVAL-TYPE")
+                    .is_some_and(|v| v.eq_ignore_ascii_case("OPEN"));
+            }
         }
         if let Some(coeffs) = scale
             .descendants()
@@ -1555,18 +1585,26 @@ fn read_compu(
             factor = numerator.get(1).copied().unwrap_or(1.0) / den;
             offset = numerator.first().copied().unwrap_or(0.0) / den;
         }
-        if let Some(constant) = scale.descendants().find(|n| n.has_tag_name("COMPU-CONST")) {
-            let code = child_number(constant, "V").map(|v| v as i64);
+        if let Some(constant) = constant {
+            // AUTOSAR normally keys a text-table entry by its internal
+            // LOWER-LIMIT; the optional COMPU-CONST/V is only a shorthand.
+            // A text-table scale's limits describe the raw code range, not
+            // the physical range, so they never fill the method's min/max.
+            let code = child_number(constant, "V").map(|v| v as i64).or_else(|| {
+                scale
+                    .descendants()
+                    .find(|n| n.has_tag_name("LOWER-LIMIT"))
+                    .and_then(|n| n.text())
+                    .and_then(|text| text.trim().parse::<f64>().ok())
+                    .map(|v| v as i64)
+            });
             let text = child_text(constant, "VT");
             if let (Some(code), Some(text)) = (code, text) {
                 values.push((code, text));
             }
         }
     }
-    let unit = text_of(node, "UNIT-REF")
-        .as_deref()
-        .map(ref_tail)
-        .and_then(|name| units.get(name).cloned());
+    let unit = text_of(node, "UNIT-REF").and_then(|reference| lookup(units, &reference).cloned());
     let category = if !values.is_empty() {
         CompuCategory::TextTable
     } else if factor == 1.0 && offset == 0.0 {
@@ -1760,6 +1798,13 @@ fn byte_order(node: Node<'_, '_>) -> ByteOrder {
 
 fn ref_tail(reference: &str) -> &str {
     reference.rsplit('/').next().unwrap_or(reference)
+}
+
+/// Resolves a catalog object by its full ARXML path first, then by its short
+/// name. Two packages may declare the same short name; a reference written as
+/// a path must keep pointing at its own object.
+fn lookup<'a, T>(map: &'a HashMap<String, T>, reference: &str) -> Option<&'a T> {
+    map.get(reference).or_else(|| map.get(ref_tail(reference)))
 }
 
 fn desc(node: Node<'_, '_>) -> Option<String> {
