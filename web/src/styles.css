@@ -2201,12 +2201,17 @@ body.col-resizing {
 }
 
 /* Icon-only action buttons: the label lives in the tooltip and the accessible
-   name, so the glyph only has to match the rest of the chrome. */
-button.mini.icon-btn {
+   name, so the glyph only has to match the rest of the chrome. This also
+   covers the transport buttons, whose SVG would otherwise sit on the text
+   baseline and read a little high. */
+button.icon-btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 3px;
+}
+
+button.mini.icon-btn {
   min-width: 24px;
   padding: 0 5px;
 }
