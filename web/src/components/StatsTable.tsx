@@ -36,6 +36,10 @@ function statsNumber(value: string): number {
   return Number.parseFloat(value) || 0;
 }
 
+function statsKey(row: StatsRow): string {
+  return `${row.bus}\u0000${row.label}`;
+}
+
 function compareStats(a: StatsRow, b: StatsRow, key: StatsSortKey): number {
   switch (key) {
     case "message":
@@ -60,32 +64,56 @@ function compareStats(a: StatsRow, b: StatsRow, key: StatsSortKey): number {
 export function StatsTable({
   rows,
   filtered = false,
+  columnWidths,
+  onColumnWidthsChange,
 }: {
   rows: StatsRow[];
   filtered?: boolean;
+  /// Widths from the project workspace; localStorage is only the fallback.
+  columnWidths?: unknown;
+  onColumnWidthsChange?: (widths: Record<string, number>) => void;
 }) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const [available, setAvailable] = useState(0);
   const { widths, startResize } = useColumnWidths(
     STATS_COLUMNS_KEY,
     STATS_COLUMNS,
+    { widths: columnWidths, onChange: onColumnWidthsChange },
   );
-  const [sortKey, setSortKey] = useState<StatsSortKey | null>(null);
-  const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
+  const [sort, setSort] = useState<{
+    key: StatsSortKey;
+    dir: "asc" | "desc";
+    order: string[];
+  } | null>(null);
+  const sortKey = sort?.key ?? null;
+  const sortDir = sort?.dir ?? "asc";
   const sortedRows = useMemo(() => {
-    if (!sortKey) return rows;
-    const sign = sortDir === "asc" ? 1 : -1;
-    return [...rows].sort((a, b) => sign * compareStats(a, b, sortKey));
-  }, [rows, sortKey, sortDir]);
+    if (!sort) return rows;
+    const byKey = new Map(rows.map((row) => [statsKey(row), row]));
+    const ordered = sort.order
+      .map((key) => byKey.get(key))
+      .filter((row): row is StatsRow => !!row);
+    const seen = new Set(sort.order);
+    const fresh = rows.filter((row) => !seen.has(statsKey(row)));
+    // New arrivals stay on top; the clicked order is a stable snapshot.
+    return [...fresh, ...ordered];
+  }, [rows, sort]);
+  const statsOrder = (key: StatsSortKey, dir: "asc" | "desc") => {
+    const sign = dir === "asc" ? 1 : -1;
+    return [...rows]
+      .sort((a, b) => sign * compareStats(a, b, key))
+      .map(statsKey);
+  };
   const cycleSort = (key: StatsSortKey) => {
-    if (sortKey !== key) {
-      setSortKey(key);
-      setSortDir("asc");
-    } else if (sortDir === "asc") {
-      setSortDir("desc");
-    } else {
-      setSortKey(null);
-    }
+    setSort((old) => {
+      if (!old || old.key !== key) {
+        return { key, dir: "asc", order: statsOrder(key, "asc") };
+      }
+      if (old.dir === "asc") {
+        return { key, dir: "desc", order: statsOrder(key, "desc") };
+      }
+      return null;
+    });
   };
   const sortButton = (label: string, key: StatsSortKey) => (
     <button

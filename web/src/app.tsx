@@ -90,6 +90,7 @@ import {
   SlotMenu,
 } from "./components/DockSlot";
 import { UiIcon } from "./components/icons";
+import { useModalFocus } from "./modalFocus";
 import {
   LAYOUTS,
   assignPanel,
@@ -194,6 +195,8 @@ interface SavedView {
 
 interface SavedWorkspace extends Partial<SavedView>, LegacyView {
   traceColumns?: unknown;
+  messageColumns?: unknown;
+  statsColumns?: unknown;
   readSignals?: unknown;
 }
 
@@ -558,10 +561,13 @@ export function App() {
     savedView.derivedReads ?? [],
   );
   const [toast, setToast] = useState("");
+  useModalFocus();
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [timeJumpOpen, setTimeJumpOpen] = useState(false);
   const [traceJump, setTraceJump] = useState<TraceJump | null>(null);
   const [traceColumns, setTraceColumns] = useState(loadTraceColumns);
+  const [messageColumns, setMessageColumns] = useState<unknown>(undefined);
+  const [statsColumns, setStatsColumns] = useState<unknown>(undefined);
   const [traceAtTop, setTraceAtTop] = useState(true);
   const [traceNewCount, setTraceNewCount] = useState(0);
   const traceTopRef = useRef<(() => void) | null>(null);
@@ -615,6 +621,8 @@ export function App() {
       setReadSignals([]);
       setDerivedReads([]);
       setTraceColumns(DEFAULT_TRACE_COLUMNS);
+      setMessageColumns(undefined);
+      setStatsColumns(undefined);
       setPanelBook(defaultPanelBook());
       chartCursorSeq.current = 1;
       return;
@@ -634,6 +642,8 @@ export function App() {
     }
     const columns = parseTraceColumns(saved.traceColumns);
     if (columns) setTraceColumns(columns);
+    setMessageColumns(saved.messageColumns);
+    setStatsColumns(saved.statsColumns);
     const savedReads = parseReadSignals(saved.readSignals);
     setReadSignals(savedReads);
     setDerivedReads(view.derivedReads ?? []);
@@ -755,6 +765,8 @@ export function App() {
           signalView,
           cursors: chartCursors,
           traceColumns,
+          messageColumns,
+          statsColumns,
           readSignals,
         },
       }).catch(() => {});
@@ -768,6 +780,8 @@ export function App() {
     signalView,
     chartCursors,
     traceColumns,
+    messageColumns,
+    statsColumns,
     readSignals,
     state?.workspaceRev,
   ]);
@@ -1760,6 +1774,18 @@ export function App() {
     setExportKind(kind);
     setExportOpen(true);
   };
+
+  /// Escape parks a filter box: clear it and hand the keyboard back to the
+  /// table. F2 is the matching way in.
+  const filterEscape =
+    (clear: () => void) =>
+    (event: JSX.TargetedKeyboardEvent<HTMLInputElement>) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      event.stopPropagation();
+      clear();
+      event.currentTarget.blur();
+    };
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -3191,6 +3217,7 @@ export function App() {
                 "Space-separated, all must match. Fields: id:0x100, bus:CAN1, dir:tx, name:RPM, data:A00F, addr, kind. Prefix - excludes (-tx, -id:0x100). Quotes keep spaces."
               }
               onInput={(e) => setQuery((e.target as HTMLInputElement).value)}
+              onKeyDown={filterEscape(() => setQuery(""))}
             />
             <button
               type="button"
@@ -3269,6 +3296,7 @@ export function App() {
               onInput={(event) =>
                 setMessageQuery((event.target as HTMLInputElement).value)
               }
+              onKeyDown={filterEscape(() => setMessageQuery(""))}
             />
             <button
               type="button"
@@ -3354,6 +3382,8 @@ export function App() {
         key={state?.log ?? state?.projectPath ?? "untitled"}
         rows={mainMessages}
         filtered={messageQuery.trim() !== ""}
+        columnWidths={messageColumns}
+        onColumnWidthsChange={setMessageColumns}
         empty={state && state.buses.length === 0 ? emptyWorkspace : undefined}
         onExpand={(key, on) =>
           void run({ type: "set_message_expanded", key, on })
@@ -3688,6 +3718,7 @@ export function App() {
               onInput={(event) =>
                 setPanelQuery((event.target as HTMLInputElement).value)
               }
+              onKeyDown={filterEscape(() => setPanelQuery(""))}
             />
             {panelQuery && (
               <button
@@ -3713,7 +3744,12 @@ export function App() {
         ),
       })}
       <div class="panel-list">
-        <StatsTable rows={lowerStats} filtered={panelQuery.trim() !== ""} />
+        <StatsTable
+          rows={lowerStats}
+          filtered={panelQuery.trim() !== ""}
+          columnWidths={statsColumns}
+          onColumnWidthsChange={setStatsColumns}
+        />
       </div>
     </>
   );
@@ -3801,6 +3837,7 @@ export function App() {
             onInput={(event) =>
               setWriteQuery((event.target as HTMLInputElement).value)
             }
+            onKeyDown={filterEscape(() => setWriteQuery(""))}
           />
           {writeQuery && (
             <button
@@ -4946,7 +4983,7 @@ export function App() {
             <button
               type="button"
               disabled={!state.measuring}
-              title="Resume and pause after this much log time"
+              title={`Play ${replayForS} s, then pause`}
               onClick={() =>
                 void run({
                   type: "replay_play_for",
@@ -4954,7 +4991,7 @@ export function App() {
                 })
               }
             >
-              Play
+              Play {replayForS} s
             </button>
             <form
               class="replay-to"

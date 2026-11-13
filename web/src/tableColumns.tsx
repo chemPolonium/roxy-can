@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from "preact/hooks";
+import { useCallback, useEffect, useRef, useState } from "preact/hooks";
 
 /// One table column that can be dragged to a new width. The flexible column
 /// absorbs whatever is left and has no drag handle (same model as Trace).
@@ -71,10 +71,39 @@ export function saveColumnWidths(
 
 /// Drag a header edge and keep the new width. Widths persist per table, the
 /// same way Trace keeps its column widths.
-export function useColumnWidths(key: string, defs: ColumnWidthDef[]) {
-  const [widths, setWidths] = useState(() => loadColumnWidths(key, defs));
+export function useColumnWidths(
+  key: string,
+  defs: ColumnWidthDef[],
+  external?: {
+    widths?: unknown;
+    onChange?: (widths: Record<string, number>) => void;
+  },
+) {
+  const [widths, setWidths] = useState(
+    () =>
+      parseColumnWidths(external?.widths, defs) ?? loadColumnWidths(key, defs),
+  );
   const latest = useRef(widths);
   latest.current = widths;
+  const lastExternal = useRef<unknown>(external?.widths);
+  useEffect(() => {
+    const incoming = external?.widths;
+    if (lastExternal.current === incoming) return;
+    lastExternal.current = incoming;
+    const parsed = parseColumnWidths(incoming, defs);
+    // A project that carries no widths starts from the defaults; an absent
+    // external map on first mount kept the localStorage widths above.
+    setWidths(parsed ?? defaultColumnWidths(defs));
+  }, [external?.widths, defs]);
+  const commit = useCallback(
+    (next: Record<string, number>) => {
+      setWidths(next);
+      saveColumnWidths(key, next);
+      lastExternal.current = next;
+      external?.onChange?.(next);
+    },
+    [key, external?.onChange],
+  );
   const lastDown = useRef<{ id: string; at: number } | null>(null);
   const startResize = useCallback(
     (event: PointerEvent, id: string) => {
@@ -87,11 +116,7 @@ export function useColumnWidths(key: string, defs: ColumnWidthDef[]) {
       // restores that column's default width instead of another drag.
       if (lastDown.current?.id === id && now - lastDown.current.at < 500) {
         lastDown.current = null;
-        setWidths((old) => {
-          const next = { ...old, [id]: def.width };
-          saveColumnWidths(key, next);
-          return next;
-        });
+        commit({ ...latest.current, [id]: def.width });
         return;
       }
       lastDown.current = { id, at: now };
@@ -107,7 +132,7 @@ export function useColumnWidths(key: string, defs: ColumnWidthDef[]) {
         setWidths((old) => ({ ...old, [id]: width }));
       };
       const up = () => {
-        saveColumnWidths(key, { ...latest.current, [id]: width });
+        commit({ ...latest.current, [id]: width });
         document.body.classList.remove("col-resizing");
         window.removeEventListener("pointermove", move);
         window.removeEventListener("pointerup", up);
@@ -116,7 +141,7 @@ export function useColumnWidths(key: string, defs: ColumnWidthDef[]) {
       window.addEventListener("pointermove", move);
       window.addEventListener("pointerup", up);
     },
-    [key, defs],
+    [commit, defs],
   );
   return { widths, startResize };
 }

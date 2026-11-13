@@ -1987,6 +1987,30 @@ export function PagePanel({
     onBook(added.book);
   };
 
+  /// Arrow keys move between page tabs; Home/End jump to the ends. The
+  /// rename input keeps its own key handling.
+  const movePageTab = (event: KeyboardEvent) => {
+    if ((event.target as HTMLElement).tagName === "INPUT") return;
+    if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+    const index = book.pages.findIndex((entry) => entry.id === page.id);
+    if (index < 0 || book.pages.length < 2) return;
+    const last = book.pages.length - 1;
+    const next =
+      event.key === "Home"
+        ? 0
+        : event.key === "End"
+          ? last
+          : (index + (event.key === "ArrowRight" ? 1 : -1) + book.pages.length) %
+            book.pages.length;
+    const target = book.pages[next];
+    if (!target) return;
+    event.preventDefault();
+    if (target.id !== page.id) switchPage(target.id);
+    requestAnimationFrame(() => {
+      document.querySelectorAll<HTMLElement>(".page-tab")[next]?.focus();
+    });
+  };
+
   const copyPageById = (id: string) => {
     const copy = duplicatePanelPage(book, id);
     if (!copy) {
@@ -2488,7 +2512,12 @@ export function PagePanel({
           {page.width * PAGE_GRID}×{page.height * PAGE_GRID} · {PAGE_GRID}px grid
         </span>
         <div class="page-tabs">
-          <div class="page-tab-list" role="tablist" aria-label="Panel pages">
+          <div
+            class="page-tab-list"
+            role="tablist"
+            aria-label="Panel pages"
+            onKeyDown={movePageTab}
+          >
             {book.pages.map((entry) =>
               renaming?.id === entry.id ? (
                 <input
@@ -2522,7 +2551,11 @@ export function PagePanel({
                   aria-selected={entry.id === page.id}
                   class={`page-tab ${entry.id === page.id ? "on" : ""}`}
                   key={entry.id}
-                  title={editing ? "Double-click to rename" : entry.name}
+                  title={
+                    editing
+                      ? "Double-click to rename · right-click for page actions"
+                      : entry.name
+                  }
                   onClick={() => switchPage(entry.id)}
                   onDblClick={() => {
                     if (editing) {

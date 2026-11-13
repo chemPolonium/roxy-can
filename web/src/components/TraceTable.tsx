@@ -236,13 +236,24 @@ export function TraceTable({
     y: number;
     frame: Frame;
   } | null>(null);
-  const [sortKey, setSortKey] = useState<SortKey | null>(null);
-  const [sortDir, setSortDir] = useState<SortDir>("asc");
+  const [sort, setSort] = useState<{
+    key: SortKey;
+    dir: SortDir;
+    order: string[];
+  } | null>(null);
+  const sortKey = sort?.key ?? null;
+  const sortDir = sort?.dir ?? "asc";
   const sortedRows = useMemo(() => {
-    if (!sortKey) return rows;
-    const sign = sortDir === "asc" ? 1 : -1;
-    return [...rows].sort((a, b) => sign * compareFrames(a, b, sortKey));
-  }, [rows, sortKey, sortDir]);
+    if (!sort) return rows;
+    const byKey = new Map(rows.map((frame) => [frameKey(frame), frame]));
+    const ordered = sort.order
+      .map((key) => byKey.get(key))
+      .filter((frame): frame is Frame => !!frame);
+    const seen = new Set(sort.order);
+    const fresh = rows.filter((frame) => !seen.has(frameKey(frame)));
+    // New arrivals stay on top; the clicked order is a stable snapshot.
+    return [...fresh, ...ordered];
+  }, [rows, sort]);
   const total = sortedRows.length;
   const visible = useMemo(
     () => fittingTraceColumns(columns, available),
@@ -535,15 +546,22 @@ export function TraceTable({
   );
   const topHeight = start * ROW_H;
   const bottomHeight = Math.max(0, (total - end) * ROW_H);
+  const frameOrder = (key: SortKey, dir: SortDir) => {
+    const sign = dir === "asc" ? 1 : -1;
+    return [...rows]
+      .sort((a, b) => sign * compareFrames(a, b, key))
+      .map(frameKey);
+  };
   const cycleSort = (key: SortKey) => {
-    if (sortKey !== key) {
-      setSortKey(key);
-      setSortDir("asc");
-    } else if (sortDir === "asc") {
-      setSortDir("desc");
-    } else {
-      setSortKey(null);
-    }
+    setSort((old) => {
+      if (!old || old.key !== key) {
+        return { key, dir: "asc", order: frameOrder(key, "asc") };
+      }
+      if (old.dir === "asc") {
+        return { key, dir: "desc", order: frameOrder(key, "desc") };
+      }
+      return null;
+    });
   };
   const sortButton = (label: string, key: SortKey) => (
     <button

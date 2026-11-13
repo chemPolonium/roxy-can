@@ -7,18 +7,19 @@ interface Props {
 const SHORTCUTS: [string, string][] = [
   ["Ctrl+K", "Command palette"],
   ["Ctrl+G", "Go to time in Trace, chart and replay"],
-  ["Alt+1…4", "Switch Focus / Split / Main + side / Quad layout"],
+  ["Alt+1…4", "Switch Focus / Split / Main + side / Quad layout (Standard)"],
   ["Alt+Shift+1…2", "Show Trace / Messages in the focused page"],
   ["Alt+Shift+P", "Switch Standard / Panel"],
   ["F9", "Start / stop the measurement"],
   ["F10", "Pause / resume the measurement"],
-  ["F2", "Focus the current filter box"],
+  ["F2", "Focus the current filter box; Esc clears it"],
+  ["← / →", "Previous / next page tab on the Panel page"],
   ["Ctrl+S", "Save the open project; asks for a file when untitled"],
   ["Ctrl+Shift+S", "Save the project under a new name"],
   ["Ctrl+O", "Open a project"],
   ["Ctrl+E", "Export the visible Trace or Messages page"],
   ["?", "This help"],
-  ["Esc", "Restore a maximized page / close the front dialog"],
+  ["Esc", "Clear the focused filter / restore a maximized page / close the front dialog"],
 ];
 
 export function HelpModal({ onClose }: Props) {

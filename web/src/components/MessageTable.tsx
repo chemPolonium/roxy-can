@@ -45,34 +45,58 @@ export function MessageTable({
   filtered = false,
   onExpand,
   empty,
+  columnWidths,
+  onColumnWidthsChange,
 }: {
   rows: Message[];
   filtered?: boolean;
   onExpand?: (key: string, on: boolean) => void;
   empty?: ComponentChildren;
+  /// Widths from the project workspace; localStorage is only the fallback.
+  columnWidths?: unknown;
+  onColumnWidthsChange?: (widths: Record<string, number>) => void;
 }) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const [showBus, setShowBus] = useState(true);
   const { widths, startResize } = useColumnWidths(
     MESSAGE_COLUMNS_KEY,
     MESSAGE_COLUMNS,
+    { widths: columnWidths, onChange: onColumnWidthsChange },
   );
-  const [sortKey, setSortKey] = useState<MessageSortKey | null>(null);
-  const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
+  const [sort, setSort] = useState<{
+    key: MessageSortKey;
+    dir: "asc" | "desc";
+    order: string[];
+  } | null>(null);
+  const sortKey = sort?.key ?? null;
+  const sortDir = sort?.dir ?? "asc";
   const sortedRows = useMemo(() => {
-    if (!sortKey) return rows;
-    const sign = sortDir === "asc" ? 1 : -1;
-    return [...rows].sort((a, b) => sign * compareMessages(a, b, sortKey));
-  }, [rows, sortKey, sortDir]);
+    if (!sort) return rows;
+    const byKey = new Map(rows.map((row) => [row.key, row]));
+    const ordered = sort.order
+      .map((key) => byKey.get(key))
+      .filter((row): row is Message => !!row);
+    const seen = new Set(sort.order);
+    const fresh = rows.filter((row) => !seen.has(row.key));
+    // New arrivals stay on top; the clicked order is a stable snapshot.
+    return [...fresh, ...ordered];
+  }, [rows, sort]);
+  const messageOrder = (key: MessageSortKey, dir: "asc" | "desc") => {
+    const sign = dir === "asc" ? 1 : -1;
+    return [...rows]
+      .sort((a, b) => sign * compareMessages(a, b, key))
+      .map((row) => row.key);
+  };
   const cycleSort = (key: MessageSortKey) => {
-    if (sortKey !== key) {
-      setSortKey(key);
-      setSortDir("asc");
-    } else if (sortDir === "asc") {
-      setSortDir("desc");
-    } else {
-      setSortKey(null);
-    }
+    setSort((old) => {
+      if (!old || old.key !== key) {
+        return { key, dir: "asc", order: messageOrder(key, "asc") };
+      }
+      if (old.dir === "asc") {
+        return { key, dir: "desc", order: messageOrder(key, "desc") };
+      }
+      return null;
+    });
   };
   const sortButton = (label: string, key: MessageSortKey) => (
     <button
