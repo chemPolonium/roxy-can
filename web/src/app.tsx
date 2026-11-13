@@ -4461,79 +4461,82 @@ export function App() {
               Panel
             </button>
           </div>
-          {shellMode !== "panel" && (
-            <MenuButton
-              className="top-menu layout-menu"
-              menuClass="app-menu-top layout-panel"
-              menuLabel="Layout"
-              title="Choose a page layout; each page then picks its own panel"
-              ariaLabel="Layout"
-              label={
-                <>
-                  <span class="layout-glyph" aria-hidden="true">
-                    ▦
-                  </span>
-                  <span class="layout-menu-label">Layout</span>
-                  <span class="top-menu-caret" aria-hidden="true">
-                    ▾
-                  </span>
-                </>
-              }
-            >
-              {(close) => (
-                <>
-                  <div class="app-menu-group">Presets</div>
-                  {LAYOUTS.map((layout) => (
-                    <button
-                      type="button"
-                      key={layout.id}
-                      class={dock.layout === layout.id ? "on" : ""}
-                      aria-pressed={dock.layout === layout.id}
-                      title={layout.hint}
-                      onClick={() => {
-                        applyDockLayout(layout.id);
-                        close();
-                      }}
-                    >
-                      <span class="layout-check">
-                        {dock.layout === layout.id ? "✓" : ""}
-                      </span>
-                      <span class="menu-copy">
-                        <strong>{layout.label}</strong>
-                        <small>{layout.hint}</small>
-                      </span>
-                    </button>
-                  ))}
-                  <div class="app-menu-sep" />
+          <MenuButton
+            className="top-menu layout-menu"
+            menuClass="app-menu-top layout-panel"
+            menuLabel="Layout"
+            disabled={shellMode === "panel"}
+            title={
+              shellMode === "panel"
+                ? "Switch to Standard to change the page layout"
+                : "Choose a page layout; each page then picks its own panel"
+            }
+            ariaLabel="Layout"
+            label={
+              <>
+                <span class="layout-glyph" aria-hidden="true">
+                  ▦
+                </span>
+                <span class="layout-menu-label">Layout</span>
+                <span class="top-menu-caret" aria-hidden="true">
+                  ▾
+                </span>
+              </>
+            }
+          >
+            {(close) => (
+              <>
+                <div class="app-menu-group">Presets</div>
+                {LAYOUTS.map((layout) => (
                   <button
                     type="button"
+                    key={layout.id}
+                    class={dock.layout === layout.id ? "on" : ""}
+                    aria-pressed={dock.layout === layout.id}
+                    title={layout.hint}
                     onClick={() => {
-                      setDock((old) => resetLayoutPanels(old));
-                      setMaximizedSlot(null);
-                      showToast("Panels reset for this layout");
+                      applyDockLayout(layout.id);
                       close();
                     }}
                   >
-                    <span class="layout-check" />
-                    <span>Reset this layout's panels</span>
+                    <span class="layout-check">
+                      {dock.layout === layout.id ? "✓" : ""}
+                    </span>
+                    <span class="menu-copy">
+                      <strong>{layout.label}</strong>
+                      <small>{layout.hint}</small>
+                    </span>
                   </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setDock(defaultDock());
-                      setFocusedSlot(0);
-                      setMaximizedSlot(null);
-                      showToast("Layouts reset");
-                      close();
-                    }}
-                  >
-                    <span class="layout-check" />
-                    <span>Reset all layouts</span>
-                  </button>
-                </>
-              )}
-            </MenuButton>
-          )}
+                ))}
+                <div class="app-menu-sep" />
+                <button
+                  type="button"
+                  onClick={() => {
+                    setDock((old) => resetLayoutPanels(old));
+                    setMaximizedSlot(null);
+                    showToast("Panels reset for this layout");
+                    close();
+                  }}
+                >
+                  <span class="layout-check" />
+                  <span>Reset this layout's panels</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setDock(defaultDock());
+                    setFocusedSlot(0);
+                    setMaximizedSlot(null);
+                    showToast("Layouts reset");
+                    close();
+                  }}
+                >
+                  <span class="layout-check" />
+                  <span>Reset all layouts</span>
+                </button>
+              </>
+            )}
+          </MenuButton>
           <button
             type="button"
             class="buses-button"
