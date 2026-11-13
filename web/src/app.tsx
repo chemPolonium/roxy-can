@@ -89,6 +89,7 @@ import {
   SlotMaximizeButton,
   SlotMenu,
 } from "./components/DockSlot";
+import { UiIcon } from "./components/icons";
 import {
   LAYOUTS,
   assignPanel,
@@ -3100,27 +3101,35 @@ export function App() {
           <>
             <button
               type="button"
-              class={`mini ${explorerOpen ? "on" : ""}`}
+              class={`mini icon-btn ${explorerOpen ? "on" : ""}`}
               title="Browse DBC signals and add them to the chart or Monitor"
+              aria-label="DBC signals"
               onClick={openExplorer}
             >
-              DBC
+              <UiIcon name="book" />
             </button>
             <button
               type="button"
-              class="mini"
+              class="mini icon-btn"
               onClick={() => openExport("trace")}
               title="Export the trace to an ASC or PCAP host file"
+              aria-label="Export trace"
             >
-              Export…
+              <UiIcon name="download" />
             </button>
             <button
               type="button"
-              class={`mini filter-button ${traceFilterActive(traceFilter) ? "on" : ""}`}
+              class={`mini icon-btn filter-button ${traceFilterActive(traceFilter) ? "on" : ""}`}
               onClick={() => setTraceFilterOpen(true)}
-              title="Direction, DBC-only, payload and time filters"
+              title={`Direction, DBC-only, payload and time filters${
+                traceFilterCount > 0 ? ` · ${traceFilterCount} active` : ""
+              }`}
+              aria-label="Trace filters"
             >
-              Filters{traceFilterCount > 0 ? ` · ${traceFilterCount}` : ""}
+              <UiIcon name="funnel" />
+              {traceFilterCount > 0 && (
+                <span class="mini-count">{traceFilterCount}</span>
+              )}
             </button>
             <button
               type="button"
@@ -3226,9 +3235,10 @@ export function App() {
             />
             <button
               type="button"
-              class="mini"
+              class="mini icon-btn"
               disabled={mainMessages.length === 0}
               title="Copy the visible messages as tab-separated rows"
+              aria-label="Copy messages"
               onClick={() => {
                 const text = mainMessages
                   .map(
@@ -3244,7 +3254,7 @@ export function App() {
                   .catch(() => showToast("Clipboard is unavailable"));
               }}
             >
-              Copy
+              <UiIcon name="clipboard" />
             </button>
             <button
               type="button"
@@ -3268,28 +3278,32 @@ export function App() {
             </button>
             <button
               type="button"
-              class="mini"
+              class="mini icon-btn"
               disabled={mainMessages.length === 0}
               title={
                 allMessagesExpanded
                   ? "Collapse all decoded signal rows"
                   : "Expand all decoded signal rows"
               }
+              aria-label={allMessagesExpanded ? "Collapse all" : "Expand all"}
               onClick={() => {
                 const next = !allMessagesExpanded;
                 setAllMessagesExpanded(next);
                 void run({ type: "set_all_messages_expanded", on: next });
               }}
             >
-              {allMessagesExpanded ? "Collapse" : "Expand"}
+              <UiIcon
+                name={allMessagesExpanded ? "chevrons-up" : "chevrons-down"}
+              />
             </button>
             <button
               type="button"
-              class="mini"
+              class="mini icon-btn"
               onClick={() => openExport("messages")}
               title="Export messages to a host CSV file"
+              aria-label="Export messages"
             >
-              Export…
+              <UiIcon name="download" />
             </button>
           </>
         ),
@@ -3354,12 +3368,13 @@ export function App() {
             <>
               <button
                 type="button"
-                class="mini"
+                class="mini icon-btn"
                 disabled={chartSeries.length === 0 && readSeries.length === 0}
                 title="Add a time cursor at the middle of the visible data"
+                aria-label="Add cursor"
                 onClick={addChartCursorCenter}
               >
-                + Cursor
+                <UiIcon name="cursor" />
               </button>
               {chartCursors.length > 0 && (
                 <button
@@ -3373,15 +3388,16 @@ export function App() {
               )}
               <button
                 type="button"
-                class={`mini ${signalOverlay ? "on" : ""}`}
+                class={`mini icon-btn ${signalOverlay ? "on" : ""}`}
                 title={
                   signalOverlay
                     ? "Back to one lane per signal"
                     : "Overlay all signals on one normalized plot"
                 }
+                aria-label="Overlay signals"
                 onClick={() => setSignalOverlay((value) => !value)}
               >
-                Overlay
+                <UiIcon name="layers" />
               </button>
               {cursorA && cursorB && (
                 <span
@@ -3393,11 +3409,12 @@ export function App() {
               )}
               <button
                 type="button"
-                class="mini"
+                class="mini icon-btn"
                 title="Overlay an aligned CSV from a previous run"
+                aria-label="Reference CSV"
                 onClick={() => setReferenceOpen(true)}
               >
-                Ref…
+                <UiIcon name="file" />
               </button>
               {reference && (
                 <span
@@ -3410,11 +3427,12 @@ export function App() {
               )}
               <button
                 type="button"
-                class="mini"
+                class="mini icon-btn"
                 title="Choose signals to plot or read at cursors"
+                aria-label="Add signals"
                 onClick={() => void openPicker()}
               >
-                + Signals
+                <UiIcon name="plus-signal" />
               </button>
             </>
           ),
@@ -3474,11 +3492,12 @@ export function App() {
           <>
             <button
               type="button"
-              class="mini"
+              class="mini icon-btn"
               title="Choose the signals to watch"
+              aria-label="Add signals"
               onClick={() => void openMonitorPicker()}
             >
-              + Signals
+              <UiIcon name="plus-signal" />
             </button>
             <button
               type="button"
@@ -3519,11 +3538,12 @@ export function App() {
           <>
             <button
               type="button"
-              class="mini"
+              class="mini icon-btn"
               title="Choose the signals to track"
+              aria-label="Add signals"
               onClick={() => void openDataPicker()}
             >
-              + Signals
+              <UiIcon name="plus-signal" />
             </button>
             <button
               type="button"
@@ -3576,11 +3596,12 @@ export function App() {
           <>
             <button
               type="button"
-              class="mini"
+              class="mini icon-btn"
               title="Choose the signals to show as bands"
+              aria-label="Add signals"
               onClick={() => void openStatePicker()}
             >
-              + Signals
+              <UiIcon name="plus-signal" />
             </button>
             <button
               type="button"
@@ -3630,11 +3651,12 @@ export function App() {
             )}
             <button
               type="button"
-              class="mini lower-export"
+              class="mini icon-btn lower-export"
               onClick={() => openExport("stats")}
               title="Export this panel to a host file"
+              aria-label="Export statistics"
             >
-              Export…
+              <UiIcon name="download" />
             </button>
           </>
         ),
@@ -3697,11 +3719,12 @@ export function App() {
         actions: (
           <button
             type="button"
-            class="mini lower-export"
+            class="mini icon-btn lower-export"
             onClick={() => openExport("write")}
             title="Export this panel to a host file"
+            aria-label="Export log"
           >
-            Export…
+            <UiIcon name="download" />
           </button>
         ),
       })}
@@ -4672,7 +4695,8 @@ export function App() {
           </MenuButton>
           <button
             type="button"
-            class="primary transport-button"
+            class="primary transport-button icon-btn"
+            aria-label="Start measurement"
             disabled={
               !canControl || measuring || needsLog || (!replaying && noBuses)
             }
@@ -4689,20 +4713,22 @@ export function App() {
             }
             onClick={() => void run({ type: "start" })}
           >
-            Start
+            <UiIcon name="play" />
           </button>
           <button
             type="button"
-            class="transport-button"
+            class="transport-button icon-btn"
+            aria-label="Stop measurement"
             disabled={!canControl || !measuring}
             title={measuring ? "Stop measurement" : "Measurement is not running"}
             onClick={() => void run({ type: "stop" })}
           >
-            Stop
+            <UiIcon name="stop" />
           </button>
           <button
             type="button"
-            class="transport-button pause-button"
+            class="transport-button pause-button icon-btn"
+            aria-label={state?.tracePaused ? "Resume measurement" : "Pause measurement"}
             disabled={!canControl || !measuring}
             title={
               measuring
@@ -4713,7 +4739,7 @@ export function App() {
             }
             onClick={() => void run({ type: "pause", on: !state?.tracePaused })}
           >
-            {state?.tracePaused ? "Resume" : "Pause"}
+            <UiIcon name={state?.tracePaused ? "play" : "pause"} />
           </button>
         </div>
       </header>

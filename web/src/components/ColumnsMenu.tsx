@@ -3,6 +3,7 @@ import {
   TRACE_COLUMNS,
   type TraceColumnPrefs,
 } from "../traceLayout";
+import { UiIcon } from "./icons";
 
 export function ColumnsMenu({
   columns,
@@ -40,8 +41,9 @@ export function ColumnsMenu({
     <div class="columns-menu" ref={ref}>
       <button
         type="button"
-        class={`mini ${columns.hidden.length > 0 ? "on" : ""}`}
+        class={`mini icon-btn ${columns.hidden.length > 0 ? "on" : ""}`}
         title="Show or hide Trace columns"
+        aria-label="Trace columns"
         aria-expanded={open}
         onClick={(event) => {
           if (open) {
@@ -56,7 +58,7 @@ export function ColumnsMenu({
           setOpen(true);
         }}
       >
-        Columns <span aria-hidden="true">▾</span>
+        <UiIcon name="columns" /> <span aria-hidden="true">▾</span>
       </button>
       {open && pos && (
         <div

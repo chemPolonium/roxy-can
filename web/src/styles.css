@@ -330,8 +330,23 @@ select:disabled {
   min-width: 58px;
 }
 
+.transport-button.icon-btn {
+  min-width: 34px;
+  padding: 0 9px;
+}
+
+.transport-button.icon-btn svg {
+  width: 15px;
+  height: 15px;
+  stroke-width: 1.5;
+}
+
 .pause-button {
   min-width: 68px;
+}
+
+.pause-button.icon-btn {
+  min-width: 34px;
 }
 
 .view-switch {
@@ -2169,6 +2184,32 @@ body.col-resizing {
   line-height: 1;
 }
 
+/* Icon-only action buttons: the label lives in the tooltip and the accessible
+   name, so the glyph only has to match the rest of the chrome. */
+button.mini.icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  min-width: 24px;
+  padding: 0 5px;
+}
+
+button.icon-btn svg {
+  width: 13px;
+  height: 13px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.3;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.mini-count {
+  font-size: 9.5px;
+  line-height: 1;
+}
+
 .trace-help {
   display: inline-grid;
   place-items: center;
@@ -3104,33 +3145,6 @@ body.row-resizing {
 .tabs button.on {
   background: #1b2836;
   color: #dce7f5;
-}
-
-.lower-panel .panel-head .tabs button {
-  flex: 0 0 auto;
-  white-space: nowrap;
-}
-
-.lower-panel .lower-export {
-  min-width: 24px;
-  padding-inline: 6px;
-}
-
-@media (max-width: 1100px) {
-  .lower-panel .lower-export {
-    width: 24px;
-    padding: 0;
-    font-size: 0;
-  }
-
-  .lower-panel .lower-export::before {
-    content: "↓";
-    font-size: 13px;
-  }
-}
-
-.lower-panel .meta {
-  margin-left: auto;
 }
 
 .activity {
@@ -7634,14 +7648,6 @@ button.danger:hover:not(:disabled) {
   }
 }
 
-@media (max-width: 1100px) {
-  /* The lower panel now carries Export next to three tabs; at this width
-     the row count would push the Write tab out of the header. */
-  .lower-panel .panel-head .meta {
-    display: none;
-  }
-}
-
 /* 窄窗口下固定外壳改为堆叠，避免 Trace 表被压到只剩两列。 */
 @media (max-width: 900px) {
   .topbar {
@@ -8237,6 +8243,10 @@ button.danger:hover:not(:disabled) {
 
 .dock-slot.dock-narrow .dock-head-actions .mini {
   padding-inline: 6px;
+}
+
+.dock-slot.dock-narrow .dock-head-actions .mini.icon-btn {
+  padding-inline: 5px;
 }
 
 .page-someip-fields {
