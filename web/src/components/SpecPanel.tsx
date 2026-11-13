@@ -1,5 +1,6 @@
 import { useEffect, useState } from "preact/hooks";
 import type { SpecRow } from "../types";
+import { UiIcon } from "./icons";
 
 interface Props {
   rows: SpecRow[];
@@ -106,11 +107,23 @@ export function SpecPanel({
         />
         <span class="spec-periodic">{periodic} periodic messages declared</span>
         <span class="spacer" />
-        <button type="button" class="mini" onClick={onExport}>
-          Export…
+        <button
+          type="button"
+          class="mini icon-btn"
+          title="Export violations to CSV"
+          aria-label="Export violations"
+          onClick={onExport}
+        >
+          <UiIcon name="download" />
         </button>
-        <button type="button" class="mini" onClick={onClear}>
-          Clear
+        <button
+          type="button"
+          class="mini icon-btn"
+          title="Clear verdicts; the next run starts fresh"
+          aria-label="Clear verdicts"
+          onClick={onClear}
+        >
+          <UiIcon name="trash" />
         </button>
       </div>
       <div class="spec-filters">
@@ -151,7 +164,7 @@ export function SpecPanel({
       <p class="hint">
         Rules judge the database's promises: unknown ids, DLC mismatches,
         cycle deviation beyond tolerance, and messages absent past the grace
-        window. Verdicts latch until Clear or the next run.
+        window. Verdicts latch until the clear icon or the next run.
       </p>
     </div>
   );

@@ -8,6 +8,7 @@ import {
 } from "preact/hooks";
 import type { Frame } from "../types";
 import { copyText } from "../clipboard";
+import { UiIcon } from "./icons";
 import {
   columnWidth,
   fittingTraceColumns,
@@ -566,13 +567,15 @@ export function TraceTable({
           {(cursorA || cursorB) && (
             <button
               type="button"
+              class="mini icon-btn"
               title="Clear both cursors"
+              aria-label="Clear cursors"
               onClick={() => {
                 setCursorA(null);
                 setCursorB(null);
               }}
             >
-              Clear
+              <UiIcon name="trash" />
             </button>
           )}
           <span class="spacer" />

@@ -3133,13 +3133,14 @@ export function App() {
             </button>
             <button
               type="button"
-              class={`mini ${clearArmed ? "danger" : ""}`}
+              class={`mini icon-btn ${clearArmed ? "danger" : ""}`}
               disabled={!canControl || traceRows.length === 0}
               title={
                 clearArmed
                   ? "Click again to clear the visible trace"
                   : "Clear the visible trace; measurement keeps running"
               }
+              aria-label={clearArmed ? "Confirm clear trace" : "Clear trace"}
               onClick={() => {
                 if (!clearArmed) {
                   setClearArmed(true);
@@ -3149,7 +3150,7 @@ export function App() {
                 void run({ type: "clear_trace" });
               }}
             >
-              {clearArmed ? "Confirm" : "Clear"}
+              <UiIcon name={clearArmed ? "check" : "trash"} />
             </button>
             <ColumnsMenu
               columns={traceColumns}
@@ -3258,12 +3259,17 @@ export function App() {
             </button>
             <button
               type="button"
-              class="mini message-clear"
+              class={`mini icon-btn message-clear ${messageClearArmed ? "danger" : ""}`}
               disabled={mainMessages.length === 0}
               title={
                 messageClearArmed
                   ? "Click again to reset message counters"
                   : "Reset message counters; Trace data is kept"
+              }
+              aria-label={
+                messageClearArmed
+                  ? "Confirm reset message counters"
+                  : "Reset message counters"
               }
               onClick={() => {
                 if (!messageClearArmed) {
@@ -3274,7 +3280,7 @@ export function App() {
                 void run({ type: "clear_messages" });
               }}
             >
-              {messageClearArmed ? "Confirm" : "Clear"}
+              <UiIcon name={messageClearArmed ? "check" : "trash"} />
             </button>
             <button
               type="button"
@@ -3379,11 +3385,12 @@ export function App() {
               {chartCursors.length > 0 && (
                 <button
                   type="button"
-                  class="mini"
+                  class="mini icon-btn"
                   title="Remove all time cursors"
+                  aria-label="Clear cursors"
                   onClick={clearChartCursors}
                 >
-                  Clear
+                  <UiIcon name="trash" />
                 </button>
               )}
               <button
@@ -3501,11 +3508,13 @@ export function App() {
             </button>
             <button
               type="button"
-              class="mini"
+              class="mini icon-btn"
               disabled={!(state?.monitor.length ?? 0)}
+              title="Clear watched signals"
+              aria-label="Clear watched signals"
               onClick={() => void run({ type: "clear_monitor" })}
             >
-              Clear
+              <UiIcon name="trash" />
             </button>
           </>
         ),
@@ -3547,11 +3556,13 @@ export function App() {
             </button>
             <button
               type="button"
-              class="mini"
+              class="mini icon-btn"
               disabled={!(state?.data.length ?? 0)}
+              title="Clear tracked signals"
+              aria-label="Clear tracked signals"
               onClick={() => void run({ type: "clear_data" })}
             >
-              Clear
+              <UiIcon name="trash" />
             </button>
           </>
         ),
@@ -3605,11 +3616,13 @@ export function App() {
             </button>
             <button
               type="button"
-              class="mini"
+              class="mini icon-btn"
               disabled={!(state?.stateRows.length ?? 0)}
+              title="Clear state bands"
+              aria-label="Clear state bands"
               onClick={() => void run({ type: "clear_state" })}
             >
-              Clear
+              <UiIcon name="trash" />
             </button>
           </>
         ),
@@ -3643,10 +3656,12 @@ export function App() {
             {panelQuery && (
               <button
                 type="button"
-                class="mini"
+                class="mini icon-btn"
+                title="Clear the filter"
+                aria-label="Clear filter"
                 onClick={() => setPanelQuery("")}
               >
-                Clear
+                <UiIcon name="close" />
               </button>
             )}
             <button
@@ -3754,10 +3769,12 @@ export function App() {
           {writeQuery && (
             <button
               type="button"
-              class="mini"
+              class="mini icon-btn"
+              title="Clear the filter"
+              aria-label="Clear filter"
               onClick={() => setWriteQuery("")}
             >
-              Clear
+              <UiIcon name="close" />
             </button>
           )}
         </div>

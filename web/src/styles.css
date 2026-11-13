@@ -2151,10 +2151,6 @@ body.col-resizing {
   min-width: 68px;
 }
 
-.message-clear {
-  min-width: 52px;
-}
-
 .bus-filter {
   width: 150px;
   min-width: 90px;

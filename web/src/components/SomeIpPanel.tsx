@@ -4,6 +4,7 @@ import type { SomeIpEvent, SomeIpService, SomeIpSubscription } from "../types";
 import { groupSomeIpServices } from "../someipView";
 import { copyText } from "../clipboard";
 import { sdServiceStatuses } from "../sdView";
+import { UiIcon } from "./icons";
 
 const SD_KINDS: Record<number, string> = {
   0x00: "Find",
@@ -183,8 +184,14 @@ export function SomeIpPanel({
           }
         />
         {query && (
-          <button type="button" class="mini" onClick={() => setQuery("")}>
-            Clear
+          <button
+            type="button"
+            class="mini icon-btn"
+            title="Clear the filter"
+            aria-label="Clear filter"
+            onClick={() => setQuery("")}
+          >
+            <UiIcon name="close" />
           </button>
         )}
       </div>

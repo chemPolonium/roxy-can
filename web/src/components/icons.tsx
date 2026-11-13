@@ -15,7 +15,10 @@ export type UiIconName =
   | "file"
   | "play"
   | "stop"
-  | "pause";
+  | "pause"
+  | "trash"
+  | "check"
+  | "close";
 
 export function UiIcon({ name }: { name: UiIconName }) {
   switch (name) {
@@ -107,6 +110,24 @@ export function UiIcon({ name }: { name: UiIconName }) {
       return (
         <svg viewBox="0 0 16 16" aria-hidden="true">
           <path d="M5.5 4v8M10.5 4v8" />
+        </svg>
+      );
+    case "trash":
+      return (
+        <svg viewBox="0 0 16 16" aria-hidden="true">
+          <path d="M3 4.5h10M6.5 2.5h3M5 4.5l.6 9h4.8l.6-9M7 7v4M9 7v4" />
+        </svg>
+      );
+    case "check":
+      return (
+        <svg viewBox="0 0 16 16" aria-hidden="true">
+          <path d="M3.5 8.4 6.6 11.5 12.5 4.5" />
+        </svg>
+      );
+    case "close":
+      return (
+        <svg viewBox="0 0 16 16" aria-hidden="true">
+          <path d="M4.5 4.5l7 7M11.5 4.5l-7 7" />
         </svg>
       );
   }
