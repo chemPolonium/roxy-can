@@ -2534,11 +2534,14 @@ export function PagePanel({
                     if (!editing) return;
                     event.preventDefault();
                     if (entry.id !== page.id) switchPage(entry.id);
+                    const rect = event.currentTarget.getBoundingClientRect();
                     setMenu({
                       kind: "page",
                       id: entry.id,
-                      x: event.clientX,
-                      y: event.clientY,
+                      // The keyboard context-menu key reports 0,0; anchor to
+                      // the tab so the menu still lands next to it.
+                      x: event.clientX || rect.left,
+                      y: event.clientY || rect.bottom + 4,
                     });
                   }}
                 >
@@ -2556,23 +2559,6 @@ export function PagePanel({
                 onClick={newPage}
               >
                 +
-              </button>
-              <button
-                type="button"
-                class="mini"
-                title="Page actions: rename, duplicate, import, export, delete"
-                aria-haspopup="menu"
-                onClick={(event) => {
-                  const rect = event.currentTarget.getBoundingClientRect();
-                  setMenu({
-                    kind: "page",
-                    id: page.id,
-                    x: rect.left,
-                    y: rect.bottom + 4,
-                  });
-                }}
-              >
-                …
               </button>
             </div>
           )}
