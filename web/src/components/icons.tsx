@@ -9,6 +9,7 @@ export type UiIconName =
   | "clipboard"
   | "chevrons-down"
   | "chevrons-up"
+  | "arrow-up"
   | "plus-signal"
   | "cursor"
   | "layers"
@@ -65,6 +66,12 @@ export function UiIcon({ name }: { name: UiIconName }) {
       return (
         <svg viewBox="0 0 16 16" aria-hidden="true">
           <path d="M4 11l4-4 4 4M4 7l4-4 4 4" />
+        </svg>
+      );
+    case "arrow-up":
+      return (
+        <svg viewBox="0 0 16 16" aria-hidden="true">
+          <path d="M8 13V3M4 7l4-4 4 4" />
         </svg>
       );
     case "plus-signal":

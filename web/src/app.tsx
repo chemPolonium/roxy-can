@@ -562,6 +562,8 @@ export function App() {
   const [timeJumpOpen, setTimeJumpOpen] = useState(false);
   const [traceJump, setTraceJump] = useState<TraceJump | null>(null);
   const [traceColumns, setTraceColumns] = useState(loadTraceColumns);
+  const [traceAtTop, setTraceAtTop] = useState(true);
+  const traceTopRef = useRef<(() => void) | null>(null);
   const [explorerOpen, setExplorerOpen] = useState(false);
   const [reference, setReference] = useState<ReferenceRun | null>(null);
   const [referenceOpen, setReferenceOpen] = useState(false);
@@ -3178,6 +3180,16 @@ export function App() {
               }
               onInput={(e) => setQuery((e.target as HTMLInputElement).value)}
             />
+            <button
+              type="button"
+              class="mini icon-btn"
+              disabled={traceAtTop || traceRows.length === 0}
+              title="Jump to the newest frames at the top"
+              aria-label="Back to top"
+              onClick={() => traceTopRef.current?.()}
+            >
+              <UiIcon name="arrow-up" />
+            </button>
             {slotMax(slot)}
           </>
         }
@@ -3189,6 +3201,8 @@ export function App() {
         onWatch={(frame) => void addFrameSignals(frame, "monitor")}
         onShowTime={(tUs) => goToTimeUs(tUs, false)}
         onTrigger={triggerFromTrace}
+        scrollToTopRef={traceTopRef}
+        onAtTopChange={setTraceAtTop}
       />
       {explorerOpen && (
         <DbcExplorer

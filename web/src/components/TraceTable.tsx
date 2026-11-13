@@ -179,6 +179,8 @@ export function TraceTable({
   onWatch,
   onShowTime,
   onTrigger,
+  scrollToTopRef,
+  onAtTopChange,
 }: {
   rows: Frame[];
   /// Changes only when the filter expression changes, so a filtered view can
@@ -202,6 +204,12 @@ export function TraceTable({
   onShowTime?: (tUs: number) => void;
   /// Arms a trigger for this row's bus/ID (CAN) or cluster/slot (FlexRay).
   onTrigger?: (frame: Frame) => void;
+  /// Drives the page header's back-to-top button: the newest frames sit at
+  /// scroll position 0, so the hook jumps there and focuses the table.
+  scrollToTopRef?: { current: (() => void) | null };
+  /// Reports whether the table is at the newest row, so the button can rest
+  /// disabled until the reader scrolls away from the live edge.
+  onAtTopChange?: (atTop: boolean) => void;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const scrollTopRef = useRef(0);
@@ -231,6 +239,27 @@ export function TraceTable({
     () => fittingTraceColumns(columns, available),
     [columns, available],
   );
+
+  // The header's back-to-top button is disabled while the newest row is
+  // already in view; this keeps the page header in sync with the scroll.
+  useEffect(() => {
+    onAtTopChange?.(scrollTop <= 0);
+  }, [scrollTop, onAtTopChange]);
+
+  useEffect(() => {
+    if (!scrollToTopRef) return;
+    scrollToTopRef.current = () => {
+      const element = scrollRef.current;
+      if (!element) return;
+      element.scrollTop = 0;
+      scrollTopRef.current = 0;
+      setScrollTop(0);
+      element.focus();
+    };
+    return () => {
+      scrollToTopRef.current = null;
+    };
+  }, [scrollToTopRef]);
 
   useLayoutEffect(() => {
     const element = scrollRef.current;
