@@ -603,6 +603,21 @@ export interface SomeIpMember {
   id: number;
   name: string;
   fields: string[];
+  /// Editable leaves with the type facts the Panel picker needs. Older
+  /// backends omit it; the picker then falls back to the text field.
+  fieldDefs?: SomeIpFieldDef[];
+  inputFieldDefs?: SomeIpFieldDef[];
+  outputFieldDefs?: SomeIpFieldDef[];
+}
+
+export interface SomeIpFieldDef {
+  name: string;
+  kind: "number" | "text";
+  unit: string;
+  min?: number | null;
+  max?: number | null;
+  /// TEXTTABLE labels for enum fields.
+  labels?: [number, string][];
 }
 
 export interface SomeIpSubscription {

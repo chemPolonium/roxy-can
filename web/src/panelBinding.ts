@@ -1,4 +1,10 @@
-import type { ScriptInfo, SignalSeries, SysVar } from "./types";
+import type {
+  ScriptInfo,
+  SignalSeries,
+  SomeIpMember,
+  SomeIpService,
+  SysVar,
+} from "./types";
 import {
   panelFrameProblem,
   panelSetpointTarget,
@@ -26,6 +32,8 @@ export interface PanelView {
   ethFrames?: { bus: number; name: string; length: number | null }[];
   /// Catalog frames a button's physical send mode can address.
   frameDefs?: PanelFrameDef[];
+  /// ARXML SOME/IP services, for the Panel's field picker.
+  someipServices?: SomeIpService[];
 }
 
 /// One catalog frame and the signals its physical send mode can edit. CAN
@@ -353,4 +361,25 @@ export function panelWidgetCapability(
       : panelNumberCapability(widget, view);
   }
   return panelToggleCapability(widget, view);
+}
+/// The ARXML member a Panel SOME/IP frame addresses. Notifications prefer
+/// the event table, requests prefer methods; a shared id still finds the
+/// other table as a fallback.
+export function someIpMemberFor(
+  services: SomeIpService[] | undefined,
+  bus: number,
+  service: number,
+  method: number,
+  messageType: number,
+): SomeIpMember | undefined {
+  const entry = services?.find(
+    (candidate) => candidate.bus === bus && candidate.id === service,
+  );
+  if (!entry) return undefined;
+  const preferred = messageType === 0x02 ? entry.events : entry.methods;
+  return (
+    preferred.find((member) => member.id === method) ??
+    entry.methods.find((member) => member.id === method) ??
+    entry.events.find((member) => member.id === method)
+  );
 }

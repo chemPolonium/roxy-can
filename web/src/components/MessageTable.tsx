@@ -1,4 +1,5 @@
 import { Fragment } from "preact";
+import { useLayoutEffect, useRef, useState } from "preact/hooks";
 import type { ComponentChildren } from "preact";
 import type { Message } from "../types";
 
@@ -18,6 +19,17 @@ export function MessageTable({
   onExpand?: (key: string, on: boolean) => void;
   empty?: ComponentChildren;
 }) {
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const [showBus, setShowBus] = useState(true);
+  useLayoutEffect(() => {
+    const element = wrapRef.current;
+    if (!element) return;
+    const update = () => setShowBus(element.clientWidth >= 480);
+    update();
+    const observer = new ResizeObserver(update);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [rows.length]);
   if (rows.length === 0) {
     if (empty && !filtered) return <>{empty}</>;
     return (
@@ -38,10 +50,10 @@ export function MessageTable({
   };
 
   return (
-    <div class="table-scroll">
+    <div class="table-scroll" ref={wrapRef}>
       <table class="data-table message-table">
         <colgroup>
-          <col style={{ width: "46px" }} />
+          {showBus && <col style={{ width: "46px" }} />}
           <col style={{ width: "70px" }} />
           <col />
           <col style={{ width: "80px" }} />
@@ -49,7 +61,7 @@ export function MessageTable({
         </colgroup>
         <thead>
           <tr>
-            <th>Bus</th>
+            {showBus && <th>Bus</th>}
             <th>ID</th>
             <th>Name</th>
             <th class="num">Cycle</th>
@@ -66,7 +78,7 @@ export function MessageTable({
                   class={`message-row ${expandable ? "expandable" : ""}`}
                   onClick={() => toggle(message)}
                 >
-                  <td>{message.busName}</td>
+                  {showBus && <td>{message.busName}</td>}
                   <td class="mono">{message.addr || hexId(message)}</td>
                   <td class="name" title={message.name}>
                     {expandable ? (
@@ -130,7 +142,7 @@ export function MessageTable({
                   <>
                     {(message.signals?.length ?? 0) === 0 ? (
                       <tr class="message-signal-row" key={`${message.key}:loading`}>
-                        <td colSpan={5} class="message-signal-empty">
+                        <td colSpan={showBus ? 5 : 4} class="message-signal-empty">
                           Loading signals…
                         </td>
                       </tr>
@@ -140,7 +152,7 @@ export function MessageTable({
                           class="message-signal-row"
                           key={`${message.key}:${signal.name}:${index}`}
                         >
-                          <td />
+                          {showBus && <td />}
                           <td />
                           <td class="name message-signal-name">
                             <span>↳ {signal.name}</span>

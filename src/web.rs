@@ -5337,6 +5337,77 @@ fn someip_signal_names(prefix: &str, ty: &crate::eth::arxml_service::ServiceType
     }
 }
 
+/// The editable leaves of one SOME/IP field, with the type facts the Panel
+/// needs to render the right input. It mirrors `someip_signal_names`, but
+/// keeps enum labels and scalar/text kinds.
+fn someip_field_defs(
+    prefix: &str,
+    field: &crate::eth::arxml_service::ServiceField,
+) -> Vec<WebSomeIpField> {
+    let mut out = Vec::new();
+    someip_collect_field_defs(prefix, &field.ty, &field.props, &mut out);
+    out
+}
+
+fn someip_collect_field_defs(
+    prefix: &str,
+    ty: &crate::eth::arxml_service::ServiceType,
+    props: &crate::eth::arxml_service::SomeIpProps,
+    out: &mut Vec<WebSomeIpField>,
+) {
+    use crate::eth::arxml_service::ServiceType;
+    let numeric = |name: &str, props: &crate::eth::arxml_service::SomeIpProps| WebSomeIpField {
+        name: name.to_string(),
+        kind: "number".to_string(),
+        unit: props.unit.clone(),
+        min: props.min.as_deref().and_then(|value| value.parse().ok()),
+        max: props.max.as_deref().and_then(|value| value.parse().ok()),
+        labels: Vec::new(),
+    };
+    match ty {
+        ServiceType::Record(fields) => {
+            for field in fields {
+                someip_collect_field_defs(
+                    &format!("{prefix}.{}", field.name),
+                    &field.ty,
+                    &field.props,
+                    out,
+                );
+            }
+        }
+        ServiceType::Array { element, count } => {
+            for index in 0..*count {
+                someip_collect_field_defs(&format!("{prefix}[{index}]"), element, props, out);
+            }
+        }
+        ServiceType::Enum { labels, .. } => {
+            let mut field = numeric(prefix, props);
+            field.labels = labels.clone();
+            out.push(field);
+        }
+        ServiceType::String => out.push(WebSomeIpField {
+            name: prefix.to_string(),
+            kind: "text".to_string(),
+            unit: props.unit.clone(),
+            min: None,
+            max: None,
+            labels: Vec::new(),
+        }),
+        ServiceType::Union(variants) => {
+            out.push(numeric(&format!("{prefix}.$selector"), props));
+            for variant in variants {
+                someip_collect_field_defs(
+                    &format!("{prefix}.{}", variant.name),
+                    &variant.ty,
+                    &variant.props,
+                    out,
+                );
+            }
+        }
+        _ => out.push(numeric(prefix, props)),
+    }
+}
+
 fn someip_catalog_messages(app: &App, bus: u8) -> Vec<WebCatalogMessage> {
     let mut out = Vec::new();
     for service in &app.someip_services.services {
@@ -5484,6 +5555,23 @@ struct WebSomeIpMember {
     id: u16,
     name: String,
     fields: Vec<String>,
+    field_defs: Vec<WebSomeIpField>,
+    input_field_defs: Vec<WebSomeIpField>,
+    output_field_defs: Vec<WebSomeIpField>,
+}
+
+#[derive(Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WebSomeIpField {
+    name: String,
+    /// `number` or `text`; unions are flattened into a `$selector` plus their
+    /// variant fields, so the picker can drive them like any other record.
+    kind: String,
+    unit: String,
+    min: Option<f64>,
+    max: Option<f64>,
+    /// Enum labels, when the ARXML carries a TEXTTABLE for the field.
+    labels: Vec<(i64, String)>,
 }
 
 #[derive(Clone, Default, Serialize)]
@@ -7562,6 +7650,22 @@ fn build_state(app: &App, series: &VecDeque<WebSeriesPoint>, fps: f64) -> WebSta
                                 .chain(method.output.iter())
                                 .flat_map(|field| someip_signal_names(&field.name, &field.ty))
                                 .collect(),
+                            field_defs: method
+                                .input
+                                .iter()
+                                .chain(method.output.iter())
+                                .flat_map(|field| someip_field_defs(&field.name, field))
+                                .collect(),
+                            input_field_defs: method
+                                .input
+                                .iter()
+                                .flat_map(|field| someip_field_defs(&field.name, field))
+                                .collect(),
+                            output_field_defs: method
+                                .output
+                                .iter()
+                                .flat_map(|field| someip_field_defs(&field.name, field))
+                                .collect(),
                         })
                         .collect(),
                     events: service
@@ -7574,6 +7678,21 @@ fn build_state(app: &App, series: &VecDeque<WebSeriesPoint>, fps: f64) -> WebSta
                                 .fields
                                 .iter()
                                 .flat_map(|field| someip_signal_names(&field.name, &field.ty))
+                                .collect(),
+                            field_defs: event
+                                .fields
+                                .iter()
+                                .flat_map(|field| someip_field_defs(&field.name, field))
+                                .collect(),
+                            input_field_defs: event
+                                .fields
+                                .iter()
+                                .flat_map(|field| someip_field_defs(&field.name, field))
+                                .collect(),
+                            output_field_defs: event
+                                .fields
+                                .iter()
+                                .flat_map(|field| someip_field_defs(&field.name, field))
                                 .collect(),
                         })
                         .collect(),
@@ -9465,5 +9584,43 @@ mod tests {
         delete_folder(&other.path).unwrap();
         assert!(delete_folder(&renamed.path).is_err(), "already gone");
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn someip_field_defs_keep_text_enum_and_nested_paths() {
+        use crate::eth::arxml_service::{ServiceField, ServiceType, SomeIpProps};
+        let props = SomeIpProps::default();
+        let field = ServiceField {
+            name: "details".to_string(),
+            ty: ServiceType::Record(vec![
+                ServiceField {
+                    name: "speed".to_string(),
+                    ty: ServiceType::U16,
+                    props: props.clone(),
+                },
+                ServiceField {
+                    name: "label".to_string(),
+                    ty: ServiceType::String,
+                    props: props.clone(),
+                },
+                ServiceField {
+                    name: "state".to_string(),
+                    ty: ServiceType::Enum {
+                        base: Box::new(ServiceType::U8),
+                        labels: vec![(0, "Off".to_string()), (1, "On".to_string())],
+                    },
+                    props: props.clone(),
+                },
+            ]),
+            props,
+        };
+        let defs = someip_field_defs("details", &field);
+        assert_eq!(
+            defs.iter().map(|def| def.name.as_str()).collect::<Vec<_>>(),
+            ["details.speed", "details.label", "details.state"]
+        );
+        assert_eq!(defs[0].kind, "number");
+        assert_eq!(defs[1].kind, "text");
+        assert_eq!(defs[2].labels.len(), 2);
     }
 }

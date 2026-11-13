@@ -100,3 +100,25 @@ export function saveTraceColumns(prefs: TraceColumnPrefs): void {
     // Storage can be unavailable in private mode; the session still works.
   }
 }
+
+/// Columns that still fit a dock slot at `available` pixels. The user's
+/// hidden set always wins; when space runs out the low-value columns go
+/// first (Dir, Len, Bus, Name), never Time, ID or Data. The returned order is
+/// the table order.
+export function fittingTraceColumns(
+  prefs: TraceColumnPrefs,
+  available: number,
+): TraceColumnDef[] {
+  let shown = TRACE_COLUMNS.filter(
+    (column) => !prefs.hidden.includes(column.id),
+  );
+  if (available <= 0) return shown;
+  const widthOf = (column: TraceColumnDef) =>
+    column.flex ? 120 : columnWidth(prefs, column.id);
+  const total = () => shown.reduce((sum, column) => sum + widthOf(column), 0);
+  for (const id of ["dir", "len", "bus", "name"] as TraceColumnId[]) {
+    if (total() <= available) break;
+    shown = shown.filter((column) => column.id !== id);
+  }
+  return shown;
+}

@@ -1135,6 +1135,11 @@ export function App() {
     return id;
   };
 
+  const addChartCursorCenter = () => {
+    const end = signalView.endS ?? (state?.simTimeUs ?? 0) / 1e6;
+    addChartCursor(Math.max(0, end - signalView.windowS / 2));
+  };
+
   const moveChartCursor = (id: number, t: number) => {
     setChartCursors((old) =>
       old.map((cursor) => (cursor.id === id ? { ...cursor, t } : cursor)),
@@ -3336,67 +3341,132 @@ export function App() {
     </>
   );
 
-  const renderSignalsPanel = (slot: number) => (
-    <>
-      {slotHeader(slot, "signals", {
-        actions: (
-          <button
-            type="button"
-            class="mini"
-            title="Choose signals to plot or read at cursors"
-            onClick={() => void openPicker()}
-          >
-            + Signals
-          </button>
-        ),
-      })}
-      <div class="signal-stack">
-        <SignalChart
-          series={chartSeries}
-          markers={state?.markers ?? []}
-          theme={theme}
-          onReorder={moveSignal}
-          view={signalView}
-          onView={(update) => setSignalView(update)}
-          cursors={chartCursors}
-          onAddCursor={addChartCursor}
-          onMoveCursor={moveChartCursor}
-          onClearCursors={clearChartCursors}
-          onSignalAction={chartSignalAction}
-          onTriggerSignal={triggerFromSignal}
-          fullscreen={maximizedSlot === slot}
-          measuring={measuring}
-          paused={state?.tracePaused ?? false}
-          reference={reference}
-          onOpenReference={() => setReferenceOpen(true)}
-          overlay={signalOverlay}
-          onToggleOverlay={() => setSignalOverlay((value) => !value)}
-          yModes={chartYModes}
-          onYMode={setSignalYMode}
-          ranges={signalRanges}
-          hasReadout={readSeries.length > 0}
-          readRange={readRange}
-          readCount={readSeries.length}
-        />
-        {maximizedSlot === slot && (
-          <CursorAnalysis
-            series={cursorSeries}
+  const renderSignalsPanel = (slot: number) => {
+    const labels = cursorLabels(chartCursors);
+    const cursorA =
+      labels.indexOf("A") >= 0 ? chartCursors[labels.indexOf("A")] : undefined;
+    const cursorB =
+      labels.indexOf("B") >= 0 ? chartCursors[labels.indexOf("B")] : undefined;
+    return (
+      <>
+        {slotHeader(slot, "signals", {
+          actions: (
+            <>
+              <button
+                type="button"
+                class="mini"
+                disabled={chartSeries.length === 0 && readSeries.length === 0}
+                title="Add a time cursor at the middle of the visible data"
+                onClick={addChartCursorCenter}
+              >
+                + Cursor
+              </button>
+              {chartCursors.length > 0 && (
+                <button
+                  type="button"
+                  class="mini"
+                  title="Remove all time cursors"
+                  onClick={clearChartCursors}
+                >
+                  Clear
+                </button>
+              )}
+              <button
+                type="button"
+                class={`mini ${signalOverlay ? "on" : ""}`}
+                title={
+                  signalOverlay
+                    ? "Back to one lane per signal"
+                    : "Overlay all signals on one normalized plot"
+                }
+                onClick={() => setSignalOverlay((value) => !value)}
+              >
+                Overlay
+              </button>
+              {cursorA && cursorB && (
+                <span
+                  class="meta cursor-delta"
+                  title="Time between cursors A and B"
+                >
+                  Δt {Math.abs(cursorB.t - cursorA.t).toFixed(3)}s
+                </span>
+              )}
+              <button
+                type="button"
+                class="mini"
+                title="Overlay an aligned CSV from a previous run"
+                onClick={() => setReferenceOpen(true)}
+              >
+                Ref…
+              </button>
+              {reference && (
+                <span
+                  class="reference-chip"
+                  title={`Reference ${reference.name}; its time + ${reference.offsetS.toFixed(3)} s is matched to the live time`}
+                >
+                  REF {reference.offsetS >= 0 ? "+" : ""}
+                  {reference.offsetS.toFixed(3)}s
+                </span>
+              )}
+              <button
+                type="button"
+                class="mini"
+                title="Choose signals to plot or read at cursors"
+                onClick={() => void openPicker()}
+              >
+                + Signals
+              </button>
+            </>
+          ),
+        })}
+        <div class="signal-stack">
+          <SignalChart
+            series={chartSeries}
+            markers={state?.markers ?? []}
+            theme={theme}
+            onReorder={moveSignal}
+            view={signalView}
+            onView={(update) => setSignalView(update)}
             cursors={chartCursors}
-            onDownloadRange={downloadChartCsv}
-            onExportRange={
-              exportRange
-                ? () => {
-                    setExportKind("signals");
-                    setExportOpen(true);
-                  }
-                : undefined
-            }
+            onAddCursor={addChartCursor}
+            onMoveCursor={moveChartCursor}
+            onClearCursors={clearChartCursors}
+            onSignalAction={chartSignalAction}
+            onTriggerSignal={triggerFromSignal}
+            fullscreen={maximizedSlot === slot}
+            measuring={measuring}
+            paused={state?.tracePaused ?? false}
+            reference={reference}
+            onOpenReference={() => setReferenceOpen(true)}
+            overlay={signalOverlay}
+            onToggleOverlay={() => setSignalOverlay((value) => !value)}
+            yModes={chartYModes}
+            onYMode={setSignalYMode}
+            ranges={signalRanges}
+            hasReadout={readSeries.length > 0}
+            readRange={readRange}
+            readCount={readSeries.length}
+            showCursorTools={false}
           />
-        )}
-      </div>
-    </>
-  );
-
+          {maximizedSlot === slot && (
+            <CursorAnalysis
+              series={cursorSeries}
+              cursors={chartCursors}
+              onDownloadRange={downloadChartCsv}
+              onExportRange={
+                exportRange
+                  ? () => {
+                      setExportKind("signals");
+                      setExportOpen(true);
+                    }
+                  : undefined
+              }
+            />
+          )}
+        </div>
+      </>
+    );
+  };
   const renderMonitorPanel = (slot: number) => (
     <>
       {slotHeader(slot, "monitor", {
@@ -3539,37 +3609,37 @@ export function App() {
       {slotHeader(slot, "statistics", {
         meta: `${lowerStats.length} rows`,
         actions: (
-          <button
-            type="button"
-            class="mini lower-export"
-            onClick={() => openExport("stats")}
-            title="Export this panel to a host file"
-          >
-            Export…
-          </button>
+          <>
+            <input
+              class="panel-filter"
+              type="search"
+              value={panelQuery}
+              placeholder="Filter bus, name or id…"
+              onInput={(event) =>
+                setPanelQuery((event.target as HTMLInputElement).value)
+              }
+            />
+            {panelQuery && (
+              <button
+                type="button"
+                class="mini"
+                onClick={() => setPanelQuery("")}
+              >
+                Clear
+              </button>
+            )}
+            <button
+              type="button"
+              class="mini lower-export"
+              onClick={() => openExport("stats")}
+              title="Export this panel to a host file"
+            >
+              Export…
+            </button>
+          </>
         ),
       })}
       <div class="panel-list">
-        <div class="panel-filter-row">
-          <input
-            class="panel-filter"
-            type="search"
-            value={panelQuery}
-            placeholder="Filter bus, name or id…"
-            onInput={(event) =>
-              setPanelQuery((event.target as HTMLInputElement).value)
-            }
-          />
-          {panelQuery && (
-            <button
-              type="button"
-              class="mini"
-              onClick={() => setPanelQuery("")}
-            >
-              Clear
-            </button>
-          )}
-        </div>
         <StatsTable rows={lowerStats} filtered={panelQuery.trim() !== ""} />
       </div>
     </>
@@ -3948,6 +4018,7 @@ export function App() {
       signals,
       sysvars: state?.sysvars ?? [],
       writeTargets: pageWriteTargets,
+      someipServices: state?.someipServices ?? [],
       frameBuses: (state?.buses ?? [])
         .filter((bus) => bus.kind === "can")
         .map((bus) => ({ index: bus.index, name: bus.name })),
@@ -4004,7 +4075,7 @@ export function App() {
         }));
       }),
     }),
-    [signals, state?.sysvars, state?.buses, pageWriteTargets, catalog],
+    [signals, state?.sysvars, state?.buses, state?.someipServices, pageWriteTargets, catalog],
   );
 
   // Setpoint readback: subscribe each written signal as a Read signal so its

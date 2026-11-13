@@ -12,13 +12,10 @@
 - **ARXML XSD 校验**：`scripts/validate-arxml.ps1` 已用 `target/refs` 的 R23-11 schema；CP 4.2.2 精确 schema 仍待补。
 - **测试单元进 CI**：`--test --test-json` 已能输出 JSON/退出码；CI 尚未接。
 
-## 体验债
+## 体验与回归
 
-- Panel 校验提示统一到字段附近并保留到修正。
-- SOME/IP 发送的字段输入从 `name=value` 文本改成按 service/method 列字段。
-- service instance / eventgroup 已有 Database 过滤与 endpoint 展示。
 - 新增解析规则前先补真实样本，不靠合成 fixture 自证。
-- 极窄槽位里的 Trace/Messages 宽表仍靠内部横向滚动；下一步按槽位宽度自动减列，或提供“收紧当前页列集”的快捷动作，而不是让用户手动拖宽分隔条。
+- 极窄槽位的 Trace/Messages 已按宽度自动减列；Focus/Split 仍可手动拖宽分隔条查看完整列集。
 
 ## 硬件与台架
 

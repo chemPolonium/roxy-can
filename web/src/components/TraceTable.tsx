@@ -10,6 +10,7 @@ import type { Frame } from "../types";
 import { copyText } from "../clipboard";
 import {
   columnWidth,
+  fittingTraceColumns,
   TRACE_COLUMNS,
   type TraceColumnId,
   type TraceColumnPrefs,
@@ -208,6 +209,7 @@ export function TraceTable({
   const lastFilter = useRef<string | undefined>(undefined);
   const [scrollTop, setScrollTop] = useState(0);
   const [viewport, setViewport] = useState(480);
+  const [available, setAvailable] = useState(0);
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [cursorA, setCursorA] = useState<Mark | null>(null);
   const [cursorB, setCursorB] = useState<Mark | null>(null);
@@ -224,9 +226,20 @@ export function TraceTable({
     return [...rows].sort((a, b) => sign * compareFrames(a, b, sortKey));
   }, [rows, sortKey, sortDir]);
   const total = sortedRows.length;
-  const visible = TRACE_COLUMNS.filter(
-    (column) => !columns.hidden.includes(column.id),
+  const visible = useMemo(
+    () => fittingTraceColumns(columns, available),
+    [columns, available],
   );
+
+  useLayoutEffect(() => {
+    const element = scrollRef.current;
+    if (!element) return;
+    const update = () => setAvailable(element.clientWidth);
+    update();
+    const observer = new ResizeObserver(update);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
 
   // A one-off jump from the go-to-time box or a palette command: park the
   // nearest frame about a third of the way down instead of at the very top.

@@ -146,7 +146,9 @@ select:disabled {
   gap: 9px;
   min-width: 0;
   flex: 1 1 auto;
-  overflow: hidden;
+  /* The logo menu hangs below this row; clipping it here cut off every item
+     below the first. Text clipping lives on .brand-text / .brand-project. */
+  overflow: visible;
 }
 
 .brand-menu {
@@ -7962,16 +7964,15 @@ button.danger:hover:not(:disabled) {
   min-height: 3px;
 }
 
-/* One row for every page: chooser, page actions, maximize. At narrow
-   widths the action cluster wraps instead of clipping the way the old
-   five-tab chart header did. */
+/* One row for every page: chooser, page actions, maximize. The action
+   cluster keeps its single line and scrolls horizontally only when the slot
+   is too narrow; wrapping it to a second row made every header two lines. */
 .dock-head {
   flex: 0 0 auto;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   height: auto;
   min-height: 30px;
   padding: 3px 8px;
-  row-gap: 4px;
 }
 
 .dock-head-spacer {
@@ -7984,15 +7985,15 @@ button.danger:hover:not(:disabled) {
   align-items: center;
   justify-content: flex-end;
   flex: 0 1 auto;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   gap: 5px;
   min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
 }
 
-.dock-head-actions > select,
-.dock-head-actions > input,
-.dock-head-actions > button {
-  flex: 0 1 auto;
+.dock-head-actions::-webkit-scrollbar {
+  height: 0;
 }
 
 .dock-head-actions > input {
@@ -8144,6 +8145,12 @@ button.danger:hover:not(:disabled) {
     display: none;
   }
 
+  /* The cursor delta is a readout, not a page counter: keep it even when the
+     other header metas make way for the tools. */
+  .dock-head .meta.cursor-delta {
+    display: inline-block;
+  }
+
   .dock-head-actions > input {
     flex-basis: 80px;
   }
@@ -8154,16 +8161,16 @@ button.danger:hover:not(:disabled) {
 }
 
 
-/* A Trace page in a narrow dock slot needs the same two-row header the
-   viewport media query gives the full-width case. The slot measures itself,
-   so a quad on a 1280 screen also wraps. */
+/* A Trace page in a narrow dock slot keeps the title and tools on one line.
+   The tool cluster scrolls horizontally when it cannot fit; wrapping it to a
+   second row made the header two lines in every narrow layout. */
 .dock-slot.dock-narrow.trace .panel-head {
   flex: 0 0 auto;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   height: auto;
   min-height: 30px;
   padding: 3px 8px;
-  row-gap: 4px;
+  overflow: hidden;
 }
 
 .dock-slot.dock-narrow.trace .panel-head .meta {
@@ -8171,13 +8178,20 @@ button.danger:hover:not(:disabled) {
 }
 
 .dock-slot.dock-narrow.trace .panel-head .panel-tools {
-  flex: 1 1 100%;
-  flex-wrap: wrap;
+  flex: 1 1 auto;
+  flex-wrap: nowrap;
   margin-left: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.dock-slot.dock-narrow.trace .panel-head .panel-tools::-webkit-scrollbar {
+  height: 0;
 }
 
 .dock-slot.dock-narrow.trace .panel-head .panel-tools > input {
   max-width: none;
+  min-width: 60px;
 }
 
 .dock-slot.dock-narrow .dock-head {
@@ -8191,4 +8205,56 @@ button.danger:hover:not(:disabled) {
 
 .dock-slot.dock-narrow .dock-head-actions .mini {
   padding-inline: 6px;
+}
+
+.page-someip-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 220px;
+  overflow: auto;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+}
+
+.page-someip-fields label {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 110px;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.page-someip-fields label > span,
+.page-someip-fields label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.page-someip-fields input,
+.page-someip-fields select {
+  width: 100%;
+  min-width: 0;
+}
+
+.page-someip-fields.invalid {
+  border-color: #e06c75;
+  background: color-mix(in srgb, #e06c75 8%, transparent);
+}
+
+.page-someip-fields .page-frame-hint {
+  grid-column: 1 / -1;
+}
+
+.page-notice {
+  flex: 0 0 auto;
+  padding: 4px 8px;
+  border-bottom: 1px solid #e06c75;
+  background: color-mix(in srgb, #e06c75 10%, transparent);
+  color: #e06c75;
+  font-size: 10.5px;
+  line-height: 1.35;
 }

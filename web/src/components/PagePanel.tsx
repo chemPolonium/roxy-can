@@ -56,11 +56,13 @@ import {
   panelValueBand,
   panelWidgetCapability,
   resolvePanelSource,
+  someIpMemberFor,
   type PanelActionContext,
   type PanelFrameDef,
   type PanelView,
 } from "../panelBinding";
 import { copyText } from "../clipboard";
+import type { SomeIpFieldDef, SomeIpService } from "../types";
 
 interface DragState {
   kind: "move" | "resize";
@@ -178,6 +180,173 @@ function zeroHex(length: number | null): string {
     : "";
 }
 
+/// Which field the frame-problem text belongs to, so the editor can keep the
+/// highlight next to the control instead of only showing a toast.
+function panelProblemField(
+  problem: string,
+): "id" | "slot" | "data" | "someip" | null {
+  if (problem.startsWith("ID") || problem.includes("IDs stop")) return "id";
+  if (problem.startsWith("Slot")) return "slot";
+  if (
+    problem.startsWith("Data") ||
+    problem.includes("data must") ||
+    problem.includes("bytes")
+  ) {
+    return "data";
+  }
+  if (
+    problem.startsWith("Service") ||
+    problem.startsWith("Method") ||
+    problem.startsWith("Client") ||
+    problem.startsWith("Session") ||
+    problem.startsWith("Message type") ||
+    problem.startsWith("TCP")
+  ) {
+    return "someip";
+  }
+  return null;
+}
+
+function SomeIpFieldEditor({
+  frame,
+  defs,
+  invalid,
+  onFocus,
+  onCommit,
+  onProblem,
+}: {
+  frame: PanelFrameSend;
+  defs: SomeIpFieldDef[];
+  invalid: boolean;
+  onFocus: () => void;
+  onCommit: (next: PanelFrameSend) => boolean;
+  onProblem: (message: string) => void;
+}) {
+  const entryOf = (name: string) =>
+    (frame.values ?? []).find((entry) => entry.name === name);
+  const bus = frame.protocol === "someip" ? frame.bus : 0;
+  const service = frame.protocol === "someip" ? frame.service : 0;
+  const method = frame.protocol === "someip" ? frame.method : 0;
+  const messageType = frame.protocol === "someip" ? frame.messageType : 0;
+  const [drafts, setDrafts] = useState<Record<string, string>>({});
+  useEffect(() => {
+    const next: Record<string, string> = {};
+    for (const def of defs) {
+      const entry = entryOf(def.name);
+      next[def.name] =
+        entry?.text !== undefined
+          ? entry.text
+          : entry
+            ? String(entry.value)
+            : "";
+    }
+    setDrafts(next);
+    // The frame identity is enough: the picker remounts when the service or
+    // method changes, and a successful commit replaces the stored values.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [bus, service, method, messageType, frame.values]);
+
+  const setValue = (def: SomeIpFieldDef, raw: string) => {
+    const next = (frame.values ?? []).filter(
+      (entry) => entry.name !== def.name,
+    );
+    if (raw.trim() !== "") {
+      if (def.kind === "text") {
+        next.push({ name: def.name, value: 0, text: raw });
+      } else {
+        const value = Number(raw);
+        if (!Number.isFinite(value)) {
+          onProblem(`${def.name} must be a number`);
+          return;
+        }
+        next.push({ name: def.name, value });
+      }
+    }
+    if (onCommit({ ...frame, mode: next.length ? "physical" : "raw", values: next })) {
+      setDrafts((current) => ({ ...current, [def.name]: raw }));
+    }
+  };
+
+  return (
+    <div class={`page-someip-fields ${invalid ? "invalid" : ""}`}>
+      <span class="page-frame-hint">
+        Fields are listed from the loaded ARXML service description.
+      </span>
+      {defs.map((def) => {
+        const value = drafts[def.name] ?? "";
+        const label = `${def.name}${def.unit ? ` (${def.unit})` : ""}`;
+        const inputId = `someip-${def.name.replace(/[^a-zA-Z0-9_-]/g, "-")}`;
+        return (
+          <label key={def.name} title={def.name}>
+            {label}
+            {def.kind === "text" ? (
+              <input
+                id={inputId}
+                value={value}
+                onFocus={onFocus}
+                placeholder="text"
+                spellcheck={false}
+                onInput={(event) =>
+                  setDrafts((current) => ({
+                    ...current,
+                    [def.name]: (event.target as HTMLInputElement).value,
+                  }))
+                }
+                onBlur={(event) => setValue(def, event.currentTarget.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    event.preventDefault();
+                    (event.target as HTMLInputElement).blur();
+                  }
+                }}
+              />
+            ) : def.labels && def.labels.length > 0 ? (
+              <select
+                id={inputId}
+                value={value}
+                onFocus={onFocus}
+                onChange={(event) => {
+                  setValue(def, event.currentTarget.value);
+                }}
+              >
+                <option value="">—</option>
+                {def.labels.map(([code, text]) => (
+                  <option value={String(code)} key={code}>
+                    {`${code} · ${text}`}
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <input
+                id={inputId}
+                type="number"
+                value={value}
+                onFocus={onFocus}
+                placeholder={def.min != null ? String(def.min) : "0"}
+                min={def.min ?? undefined}
+                max={def.max ?? undefined}
+                onInput={(event) =>
+                  setDrafts((current) => ({
+                    ...current,
+                    [def.name]: (event.target as HTMLInputElement).value,
+                  }))
+                }
+                onBlur={(event) => setValue(def, event.currentTarget.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    event.preventDefault();
+                    (event.target as HTMLInputElement).blur();
+                  }
+                }}
+              />
+            )}
+          </label>
+        );
+      })}
+    </div>
+  );
+}
+
 function FrameField({
   frame,
   canBuses,
@@ -185,6 +354,7 @@ function FrameField({
   ethBuses,
   ethFrames,
   frameDefs,
+  someipServices,
   onFocus,
   onChange,
 }: {
@@ -194,6 +364,7 @@ function FrameField({
   ethBuses: { index: number; name: string }[];
   ethFrames: { bus: number; name: string; length: number | null }[];
   frameDefs: PanelFrameDef[];
+  someipServices: SomeIpService[];
   onFocus: () => void;
   onChange: (frame: PanelFrameSend) => void;
 }) {
@@ -205,10 +376,26 @@ function FrameField({
   const [valueDrafts, setValueDrafts] = useState<Record<string, string>>({});
   const [editing, setEditing] = useState<"id" | "slot" | "data" | null>(null);
   const [error, setError] = useState("");
-  const [errorField, setErrorField] = useState<"id" | "slot" | "data" | null>(
-    null,
-  );
+  const [errorField, setErrorField] = useState<
+    "id" | "slot" | "data" | "someip" | null
+  >(null);
   const protocol = frame?.protocol ?? "can";
+  const someipMember =
+    frame?.protocol === "someip"
+      ? someIpMemberFor(
+          someipServices,
+          frame.bus,
+          frame.service,
+          frame.method,
+          frame.messageType,
+        )
+      : undefined;
+  const someipFields =
+    (frame?.protocol === "someip" && frame.messageType === 0x80
+      ? someipMember?.outputFieldDefs
+      : someipMember?.inputFieldDefs) ??
+    someipMember?.fieldDefs ??
+    [];
 
   useEffect(() => {
     if (editing !== "id") setIdDraft(frameIdText(frame));
@@ -233,7 +420,7 @@ function FrameField({
     const problem = panelFrameProblem(next);
     if (problem) {
       setError(problem);
-      setErrorField(null);
+      setErrorField(panelProblemField(problem));
       return false;
     }
     setError("");
@@ -770,41 +957,58 @@ function FrameField({
               </label>
             </>
           )}
-          <label>
-            Fields (name=value; …)
-            <input
-              key={`${frame.bus}:${frame.service}:${frame.method}`}
-              defaultValue={(frame.values ?? [])
-                .map((entry) =>
-                  entry.text !== undefined
-                    ? `${entry.name}="${entry.text}"`
-                    : `${entry.name}=${entry.value}`,
-                )
-                .join("; ")}
-              placeholder="speed=12.5; wheel[0]=1"
-              spellcheck={false}
-              onBlur={(event) => {
-                const text = (event.target as HTMLInputElement).value.trim();
-                if (text === "") {
-                  commit({ ...frame, mode: "raw", values: [] });
-                  return;
-                }
-                const values: { name: string; value: number }[] = [];
-                for (const part of text.split(";")) {
-                  const [rawName, rawValue] = part.split("=");
-                  const name = rawName?.trim() ?? "";
-                  const value = Number(rawValue?.trim() ?? "");
-                  if (!name || !Number.isFinite(value)) {
-                    setError(`Field "${part.trim()}" must be name=number`);
-                    return;
-                  }
-                  values.push({ name, value });
-                }
-                setError("");
-                commit({ ...frame, mode: "physical", values });
+          {someipFields.length > 0 ? (
+            <SomeIpFieldEditor
+              frame={frame}
+              defs={someipFields}
+              invalid={errorField === "someip"}
+              onFocus={onFocus}
+              onCommit={commit}
+              onProblem={(message) => {
+                setError(message);
+                setErrorField("someip");
               }}
             />
-          </label>
+          ) : (
+            <label>
+              Fields (no service description; name=value)
+              <input
+                key={`${frame.bus}:${frame.service}:${frame.method}`}
+                class={errorField === "someip" ? "invalid" : undefined}
+                defaultValue={(frame.values ?? [])
+                  .map((entry) =>
+                    entry.text !== undefined
+                      ? `${entry.name}="${entry.text}"`
+                      : `${entry.name}=${entry.value}`,
+                  )
+                  .join("; ")}
+                placeholder="speed=12.5; wheel[0]=1"
+                spellcheck={false}
+                onBlur={(event) => {
+                  const text = (event.target as HTMLInputElement).value.trim();
+                  if (text === "") {
+                    commit({ ...frame, mode: "raw", values: [] });
+                    return;
+                  }
+                  const values: { name: string; value: number }[] = [];
+                  for (const part of text.split(";")) {
+                    const [rawName, rawValue] = part.split("=");
+                    const name = rawName?.trim() ?? "";
+                    const value = Number(rawValue?.trim() ?? "");
+                    if (!name || !Number.isFinite(value)) {
+                      setError(`Field "${part.trim()}" must be name=number`);
+                      setErrorField("someip");
+                      return;
+                    }
+                    values.push({ name, value });
+                  }
+                  setError("");
+                  setErrorField(null);
+                  commit({ ...frame, mode: "physical", values });
+                }}
+              />
+            </label>
+          )}
         </>
       ) : (
         <>
@@ -1467,6 +1671,15 @@ export function PagePanel({
   const [menu, setMenu] = useState<PageMenu | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const importInput = useRef<HTMLInputElement>(null);
+  const [pageNotice, setPageNotice] = useState("");
+  const noticeError = (message: string) => {
+    setPageNotice(message);
+    onNotice(message);
+  };
+  const noticeDone = (message: string) => {
+    setPageNotice("");
+    onNotice(message);
+  };
 
   useEffect(() => {
     setSizeW(String(page.width * PAGE_GRID));
@@ -1478,6 +1691,7 @@ export function PagePanel({
     setClipboard(null);
     setSelected(null);
     setRenaming(null);
+    setPageNotice("");
   }, [revision, page.id]);
 
   useEffect(() => {
@@ -1646,7 +1860,7 @@ export function PagePanel({
   const duplicateWidget = (id: string) => {
     const copy = duplicatePanelWidget(page, id);
     if (!copy) {
-      onNotice("No free space for a copy");
+      noticeError("No free space for a copy");
       return;
     }
     commit(copy.page);
@@ -1663,7 +1877,7 @@ export function PagePanel({
     const key = widget ? panelSignalKey(widget) : "";
     if (!key) return;
     void copyText(key).then((copied) =>
-      onNotice(copied ? `Copied ${key}` : "Could not copy the signal key"),
+      copied ? noticeDone(`Copied ${key}`) : noticeError("Could not copy the signal key"),
     );
   };
 
@@ -1683,7 +1897,7 @@ export function PagePanel({
     if (!clipboard) return;
     const copy = pastePanelWidget(page, clipboard);
     if (!copy) {
-      onNotice("No free space for a paste");
+      noticeError("No free space for a paste");
       return;
     }
     commit(copy.page);
@@ -1776,7 +1990,7 @@ export function PagePanel({
   const copyPageById = (id: string) => {
     const copy = duplicatePanelPage(book, id);
     if (!copy) {
-      onNotice("Cannot duplicate this page");
+      noticeError("Cannot duplicate this page");
       return;
     }
     clearPageUi();
@@ -1785,7 +1999,7 @@ export function PagePanel({
 
   const deletePageById = (id: string) => {
     if (book.pages.length <= 1) {
-      onNotice("Keep at least one page");
+      noticeError("Keep at least one page");
       return;
     }
     clearPageUi();
@@ -1806,7 +2020,7 @@ export function PagePanel({
   const add = (kind: PanelWidgetKind) => {
     const added = addPanelWidget(page, kind);
     if (!added) {
-      onNotice("No free space on this page");
+      noticeError("No free space on this page");
       return;
     }
     commit(added.page);
@@ -1825,7 +2039,7 @@ export function PagePanel({
     link.download = name;
     link.click();
     window.setTimeout(() => URL.revokeObjectURL(url), 0);
-    onNotice(`Exported ${name}`);
+    noticeDone(`Exported ${name}`);
   };
 
   const importPage = (text: string) => {
@@ -1833,18 +2047,18 @@ export function PagePanel({
     try {
       raw = JSON.parse(text);
     } catch {
-      onNotice("That file is not valid JSON");
+      noticeError("That file is not valid JSON");
       return;
     }
     const result = importPanelFile(raw);
     if ("error" in result) {
-      onNotice(result.error);
+      noticeError(result.error);
       return;
     }
     const added = addPanelPageFromFile(book, result.page);
     clearPageUi();
     onBook(added.book);
-    onNotice(`Imported ${added.page.name}`);
+    noticeDone(`Imported ${added.page.name}`);
   };
 
   const resetSize = () => {
@@ -1856,7 +2070,7 @@ export function PagePanel({
     const w = Number(sizeW);
     const h = Number(sizeH);
     if (!Number.isFinite(w) || !Number.isFinite(h)) {
-      onNotice("Canvas width and height must be numbers");
+      noticeError("Canvas width and height must be numbers");
       resetSize();
       return;
     }
@@ -1866,7 +2080,7 @@ export function PagePanel({
       Math.round(h / PAGE_GRID),
     );
     if (!next) {
-      onNotice("Move controls inside the new canvas first");
+      noticeError("Move controls inside the new canvas first");
       resetSize();
       return;
     }
@@ -2106,6 +2320,7 @@ export function PagePanel({
           ethBuses={view.ethBuses ?? []}
           ethFrames={view.ethFrames ?? []}
           frameDefs={view.frameDefs ?? []}
+          someipServices={view.someipServices ?? []}
           onFocus={pushHistory}
           onChange={(frame) => update({ frame })}
         />
@@ -2469,6 +2684,11 @@ export function PagePanel({
           </button>
         </div>
       </div>
+      {pageNotice && (
+        <div class="page-notice" role="alert">
+          {pageNotice}
+        </div>
+      )}
       <div class="page-body">
         <div
           class="page-viewport"

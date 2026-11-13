@@ -16,6 +16,7 @@ import {
   panelValueCapability,
   panelWidgetCapability,
   resolvePanelSource,
+  someIpMemberFor,
   runningPanelActions,
   type PanelActionContext,
   type PanelView,
@@ -396,5 +397,27 @@ describe("panel bindings", () => {
     expect(panelGaugeArc(1)).toBe("M6 50 A44 44 0 0 1 94.00 50.00");
     expect(panelGaugeArc(2)).toBe(panelGaugeArc(1));
     expect(panelGaugeArc(-1)).toBe(panelGaugeArc(0));
+  });
+});
+describe("SOME/IP panel fields", () => {
+  it("finds a method or event by service id and prefers the message type", () => {
+    const services = [
+      {
+        id: 0x1234,
+        name: "Speed",
+        bus: 0,
+        busName: "ETH0",
+        major: 1,
+        source: "",
+        methods: [{ id: 1, name: "Get", fields: ["speed"] }],
+        events: [{ id: 1, name: "OnSpeed", fields: ["speed"] }],
+        instances: [],
+      },
+    ];
+    expect(someIpMemberFor(services, 0, 0x1234, 1, 0x00)?.name).toBe("Get");
+    expect(someIpMemberFor(services, 0, 0x1234, 1, 0x02)?.name).toBe(
+      "OnSpeed",
+    );
+    expect(someIpMemberFor(services, 1, 0x1234, 1, 0x00)).toBeUndefined();
   });
 });

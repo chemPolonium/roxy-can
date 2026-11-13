@@ -113,7 +113,8 @@ export function SomeIpPanel({
         service.instances.some(
           (instance) =>
             String(instance.id).includes(needle) ||
-            instance.endpoint.toLowerCase().includes(needle),
+            instance.endpoint.toLowerCase().includes(needle) ||
+            instance.eventgroups.some((group) => String(group).includes(needle)),
         ),
     );
   }, [dbQuery, services]);
@@ -128,6 +129,10 @@ export function SomeIpPanel({
             hex(row.service),
             hex(row.method),
             MESSAGE_TYPES[row.messageType] ?? "",
+            ...(row.sd ?? []).flatMap((entry) => [
+              String(entry.instance),
+              entry.eventgroup == null ? "" : String(entry.eventgroup),
+            ]),
           ]
             .join(" ")
             .toLowerCase()
@@ -172,7 +177,7 @@ export function SomeIpPanel({
           class="panel-filter"
           type="search"
           value={query}
-          placeholder="Filter service, method, endpoint…"
+          placeholder="Filter service, method, instance, eventgroup…"
           onInput={(event) =>
             setQuery((event.target as HTMLInputElement).value)
           }
@@ -269,7 +274,7 @@ export function SomeIpPanel({
                 class="panel-filter"
                 type="search"
                 value={dbQuery}
-                placeholder="Filter service, instance, endpoint…"
+                placeholder="Filter service, instance, eventgroup, endpoint…"
                 onInput={(event) =>
                   setDbQuery((event.target as HTMLInputElement).value)
                 }

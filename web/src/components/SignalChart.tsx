@@ -476,6 +476,7 @@ export function SignalChart({
   onOpenReference,
   overlay = false,
   onToggleOverlay,
+  showCursorTools = true,
   hasReadout = false,
   readRange = null,
   readCount = 0,
@@ -503,6 +504,7 @@ export function SignalChart({
   onOpenReference?: () => void;
   overlay?: boolean;
   onToggleOverlay?: () => void;
+  showCursorTools?: boolean;
   /// Read-only signals exist: keep a cursor usable on an otherwise empty
   /// chart and follow their newest sample.
   hasReadout?: boolean;
@@ -1619,68 +1621,70 @@ export function SignalChart({
           {nameTip.text}
         </div>
       )}
-      <div class="chart-cursor-tools">
-        <button
-          type="button"
-          disabled={series.length === 0 && !hasReadout}
-          title="Add a time cursor at the middle of the visible data"
-          onClick={addCursor}
-        >
-          + Cursor
-        </button>
-        {cursors.length > 0 && (
+      {showCursorTools && (
+        <div class="chart-cursor-tools">
           <button
             type="button"
-            title="Remove all time cursors"
-            onClick={() => {
-              setActiveCursorId(null);
-              onClearCursors();
-            }}
+            disabled={series.length === 0 && !hasReadout}
+            title="Add a time cursor at the middle of the visible data"
+            onClick={addCursor}
           >
-            Clear
+            + Cursor
           </button>
-        )}
-        {onToggleOverlay && (
-          <button
-            type="button"
-            class={overlay ? "on" : ""}
-            title={
-              overlay
-                ? "Back to one lane per signal"
-                : "Overlay all signals on one normalized plot"
-            }
-            onClick={onToggleOverlay}
-          >
-            Overlay
-          </button>
-        )}
-        {cursorA && cursorB && (
-          <span
-            class="chart-cursor-delta"
-            title="Time between cursors A and B"
-          >
-            Δt {Math.abs(cursorB.t - cursorA.t).toFixed(3)}s
-          </span>
-        )}
-        {onOpenReference && (
-          <button
-            type="button"
-            title="Overlay an aligned CSV from a previous run"
-            onClick={onOpenReference}
-          >
-            Ref…
-          </button>
-        )}
-        {reference && (
-          <span
-            class="reference-chip"
-            title={`Reference ${reference.name}; its time + ${reference.offsetS.toFixed(3)} s is matched to the live time`}
-          >
-            REF {reference.offsetS >= 0 ? "+" : ""}
-            {reference.offsetS.toFixed(3)}s
-          </span>
-        )}
-      </div>
+          {cursors.length > 0 && (
+            <button
+              type="button"
+              title="Remove all time cursors"
+              onClick={() => {
+                setActiveCursorId(null);
+                onClearCursors();
+              }}
+            >
+              Clear
+            </button>
+          )}
+          {onToggleOverlay && (
+            <button
+              type="button"
+              class={overlay ? "on" : ""}
+              title={
+                overlay
+                  ? "Back to one lane per signal"
+                  : "Overlay all signals on one normalized plot"
+              }
+              onClick={onToggleOverlay}
+            >
+              Overlay
+            </button>
+          )}
+          {cursorA && cursorB && (
+            <span
+              class="chart-cursor-delta"
+              title="Time between cursors A and B"
+            >
+              Δt {Math.abs(cursorB.t - cursorA.t).toFixed(3)}s
+            </span>
+          )}
+          {onOpenReference && (
+            <button
+              type="button"
+              title="Overlay an aligned CSV from a previous run"
+              onClick={onOpenReference}
+            >
+              Ref…
+            </button>
+          )}
+          {reference && (
+            <span
+              class="reference-chip"
+              title={`Reference ${reference.name}; its time + ${reference.offsetS.toFixed(3)} s is matched to the live time`}
+            >
+              REF {reference.offsetS >= 0 ? "+" : ""}
+              {reference.offsetS.toFixed(3)}s
+            </span>
+          )}
+        </div>
+      )}
       {laneMenu && menuSignal && (
         <div
           class="trace-menu signal-menu"
