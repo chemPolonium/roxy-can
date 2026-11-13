@@ -563,6 +563,7 @@ export function App() {
   const [traceJump, setTraceJump] = useState<TraceJump | null>(null);
   const [traceColumns, setTraceColumns] = useState(loadTraceColumns);
   const [traceAtTop, setTraceAtTop] = useState(true);
+  const [traceNewCount, setTraceNewCount] = useState(0);
   const traceTopRef = useRef<(() => void) | null>(null);
   const [explorerOpen, setExplorerOpen] = useState(false);
   const [reference, setReference] = useState<ReferenceRun | null>(null);
@@ -1785,7 +1786,12 @@ export function App() {
         revealPanel(event.key === "1" ? "trace" : "messages");
         return;
       }
-      if (event.altKey && !mod && /^[1-4]$/.test(event.key)) {
+      if (
+        shellMode !== "panel" &&
+        event.altKey &&
+        !mod &&
+        /^[1-4]$/.test(event.key)
+      ) {
         event.preventDefault();
         applyDockLayout(
           (["focus", "split", "main-side", "quad"] as LayoutId[])[
@@ -2945,20 +2951,26 @@ export function App() {
       group: "View",
       run: () => setTheme(theme === "dark" ? "light" : "dark"),
     },
-    ...LAYOUTS.map((layout) => ({
-      id: `layout-${layout.id}`,
-      label: `Layout: ${layout.label}`,
-      group: "Layout",
-      hint: layout.hint,
-      run: () => applyDockLayout(layout.id),
-    })),
-    {
-      id: "reset-layout",
-      label: "Reset layout",
-      group: "Layout",
-      hint: "Panels, splitters and Trace columns",
-      run: resetLayout,
-    },
+    ...(shellMode === "panel"
+      ? []
+      : LAYOUTS.map((layout) => ({
+          id: `layout-${layout.id}`,
+          label: `Layout: ${layout.label}`,
+          group: "Layout",
+          hint: layout.hint,
+          run: () => applyDockLayout(layout.id),
+        }))),
+    ...(shellMode === "panel"
+      ? []
+      : [
+          {
+            id: "reset-layout",
+            label: "Reset layout",
+            group: "Layout",
+            hint: "Panels, splitters and Trace columns",
+            run: resetLayout,
+          },
+        ]),
     {
       id: "show-standard",
       label: "Show Standard workspace",
@@ -3184,11 +3196,20 @@ export function App() {
               type="button"
               class="mini icon-btn"
               disabled={traceAtTop || traceRows.length === 0}
-              title="Jump to the newest frames at the top"
+              title={
+                traceNewCount > 0
+                  ? `${traceNewCount} new frames · jump to the newest`
+                  : "Jump to the newest frames at the top"
+              }
               aria-label="Back to top"
               onClick={() => traceTopRef.current?.()}
             >
               <UiIcon name="arrow-up" />
+              {traceNewCount > 0 && (
+                <span class="mini-count">
+                  {traceNewCount > 999 ? "999+" : traceNewCount}
+                </span>
+              )}
             </button>
             {slotMax(slot)}
           </>
@@ -3203,6 +3224,7 @@ export function App() {
         onTrigger={triggerFromTrace}
         scrollToTopRef={traceTopRef}
         onAtTopChange={setTraceAtTop}
+        onNewCountChange={setTraceNewCount}
       />
       {explorerOpen && (
         <DbcExplorer
@@ -4872,31 +4894,37 @@ export function App() {
             </label>
             <button
               type="button"
+              class="icon-btn"
               disabled={!state.measuring}
               title="Advance the replay by the step size (forward only)"
+              aria-label="Advance one step"
               onClick={() =>
                 void run({ type: "replay_step", delta_us: replayStepMs * 1000 })
               }
             >
-              Step
+              <UiIcon name="step-forward" />
             </button>
             {state.markers.length > 0 && (
               <>
                 <button
                   type="button"
+                  class="icon-btn"
                   disabled={prevTriggerUs === null}
                   title="Show the previous trigger in Trace and the chart; playback keeps running"
+                  aria-label="Previous trigger"
                   onClick={() => prevTriggerUs !== null && viewTimeUs(prevTriggerUs)}
                 >
-                  Prev trigger
+                  <UiIcon name="arrow-left" />
                 </button>
                 <button
                   type="button"
+                  class="icon-btn"
                   disabled={nextTriggerUs === null}
                   title="Show the next trigger in Trace and the chart; playback keeps running"
+                  aria-label="Next trigger"
                   onClick={() => nextTriggerUs !== null && viewTimeUs(nextTriggerUs)}
                 >
-                  Next trigger
+                  <UiIcon name="arrow-right" />
                 </button>
               </>
             )}

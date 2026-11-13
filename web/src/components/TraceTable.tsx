@@ -181,6 +181,7 @@ export function TraceTable({
   onTrigger,
   scrollToTopRef,
   onAtTopChange,
+  onNewCountChange,
 }: {
   rows: Frame[];
   /// Changes only when the filter expression changes, so a filtered view can
@@ -210,13 +211,21 @@ export function TraceTable({
   /// Reports whether the table is at the newest row, so the button can rest
   /// disabled until the reader scrolls away from the live edge.
   onAtTopChange?: (atTop: boolean) => void;
+  /// Number of frames that arrived since the reader left the live edge; the
+  /// back-to-top button shows it as a badge.
+  onNewCountChange?: (count: number) => void;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const scrollTopRef = useRef(0);
+  const lastResizeDown = useRef<{ id: TraceColumnId; at: number } | null>(
+    null,
+  );
   const previousFirst = useRef<string | null>(null);
   const previousRows = useRef<Frame[] | null>(null);
   const lastFilter = useRef<string | undefined>(undefined);
   const [scrollTop, setScrollTop] = useState(0);
+  const topNewest = useRef(0);
+  const [newCount, setNewCount] = useState(0);
   const [viewport, setViewport] = useState(480);
   const [available, setAvailable] = useState(0);
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
@@ -245,6 +254,27 @@ export function TraceTable({
   useEffect(() => {
     onAtTopChange?.(scrollTop <= 0);
   }, [scrollTop, onAtTopChange]);
+
+  // Remember the newest frame while the reader is at the live edge. Once they
+  // scroll away, frames above that timestamp are the ones they have not seen.
+  useEffect(() => {
+    if (scrollTop <= 0 && rows.length > 0) {
+      topNewest.current = rows[0].tUs;
+    }
+  }, [scrollTop, rows]);
+
+  useEffect(() => {
+    if (sortKey || scrollTop <= 0 || topNewest.current <= 0) {
+      setNewCount(0);
+      return;
+    }
+    const index = rows.findIndex((frame) => frame.tUs <= topNewest.current);
+    setNewCount(index < 0 ? rows.length : index);
+  }, [rows, scrollTop, sortKey]);
+
+  useEffect(() => {
+    onNewCountChange?.(newCount);
+  }, [newCount, onNewCountChange]);
 
   useEffect(() => {
     if (!scrollToTopRef) return;
@@ -531,6 +561,20 @@ export function TraceTable({
     event.preventDefault();
     event.stopPropagation();
     const def = TRACE_COLUMNS.find((column) => column.id === id);
+    const now = performance.now();
+    // A second press on the same boundary restores that column's default
+    // width instead of starting another drag.
+    if (lastResizeDown.current?.id === id && now - lastResizeDown.current.at < 500) {
+      lastResizeDown.current = null;
+      if (def) {
+        onColumnsChange({
+          ...columns,
+          widths: { ...columns.widths, [id]: def.width },
+        });
+      }
+      return;
+    }
+    lastResizeDown.current = { id, at: now };
     const startX = event.clientX;
     const startWidth = columnWidth(columns, id);
     const move = (moveEvent: PointerEvent) => {
@@ -668,6 +712,7 @@ export function TraceTable({
                   {!column.flex && (
                     <span
                       class="col-resize"
+                      title="Drag to resize · double-click to reset"
                       onPointerDown={(event) => startResize(event, column.id)}
                     />
                   )}

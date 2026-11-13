@@ -2705,7 +2705,11 @@ export function PagePanel({
             {page.widgets.length === 0 && (
               <div class="page-empty">
                 <strong>No controls yet</strong>
-                <span>Use Edit, then + Button, + Value or + Toggle.</span>
+                <span>
+                  {editing
+                    ? "Use + Add to place a control."
+                    : "Press Edit, then + Add to place a control."}
+                </span>
               </div>
             )}
             {page.widgets.map((widget) => (

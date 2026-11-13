@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef, useState } from "preact/hooks";
+import { useLayoutEffect, useMemo, useRef, useState } from "preact/hooks";
 import type { StatsRow } from "../types";
 import {
   ColumnResizeHandle,
@@ -22,6 +22,41 @@ const STATS_COLUMNS: ColumnWidthDef[] = [
 
 const STATS_COLUMNS_KEY = "roxy-can-web.stats-columns";
 
+type StatsSortKey =
+  | "message"
+  | "bus"
+  | "count"
+  | "avg"
+  | "min"
+  | "max"
+  | "jitter"
+  | "share";
+
+function statsNumber(value: string): number {
+  return Number.parseFloat(value) || 0;
+}
+
+function compareStats(a: StatsRow, b: StatsRow, key: StatsSortKey): number {
+  switch (key) {
+    case "message":
+      return a.label.localeCompare(b.label);
+    case "bus":
+      return a.bus.localeCompare(b.bus);
+    case "count":
+      return a.count - b.count;
+    case "avg":
+      return statsNumber(a.avgMs) - statsNumber(b.avgMs);
+    case "min":
+      return statsNumber(a.minMs) - statsNumber(b.minMs);
+    case "max":
+      return statsNumber(a.maxMs) - statsNumber(b.maxMs);
+    case "jitter":
+      return statsNumber(a.jitterMs) - statsNumber(b.jitterMs);
+    case "share":
+      return statsNumber(a.share) - statsNumber(b.share);
+  }
+}
+
 export function StatsTable({
   rows,
   filtered = false,
@@ -34,6 +69,34 @@ export function StatsTable({
   const { widths, startResize } = useColumnWidths(
     STATS_COLUMNS_KEY,
     STATS_COLUMNS,
+  );
+  const [sortKey, setSortKey] = useState<StatsSortKey | null>(null);
+  const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
+  const sortedRows = useMemo(() => {
+    if (!sortKey) return rows;
+    const sign = sortDir === "asc" ? 1 : -1;
+    return [...rows].sort((a, b) => sign * compareStats(a, b, sortKey));
+  }, [rows, sortKey, sortDir]);
+  const cycleSort = (key: StatsSortKey) => {
+    if (sortKey !== key) {
+      setSortKey(key);
+      setSortDir("asc");
+    } else if (sortDir === "asc") {
+      setSortDir("desc");
+    } else {
+      setSortKey(null);
+    }
+  };
+  const sortButton = (label: string, key: StatsSortKey) => (
+    <button
+      type="button"
+      class={`th-sort ${sortKey === key ? "on" : ""}`}
+      onClick={() => cycleSort(key)}
+      title={`Sort by ${label.toLowerCase()}`}
+    >
+      {label}
+      {sortKey === key && (sortDir === "asc" ? " ▲" : " ▼")}
+    </button>
   );
   useLayoutEffect(() => {
     const element = wrapRef.current;
@@ -75,30 +138,30 @@ export function StatsTable({
         </colgroup>
         <thead>
           <tr>
-            <th>Message</th>
+            <th>{sortButton("Message", "message")}</th>
             {showBus && (
               <th>
-                Bus
+                {sortButton("Bus", "bus")}
                 <ColumnResizeHandle
                   onResize={(event) => startResize(event, "bus")}
                 />
               </th>
             )}
             <th class="num">
-              Count
+              {sortButton("Count", "count")}
               <ColumnResizeHandle
                 onResize={(event) => startResize(event, "count")}
               />
             </th>
             <th class="num">
-              Avg
+              {sortButton("Avg", "avg")}
               <ColumnResizeHandle
                 onResize={(event) => startResize(event, "avg")}
               />
             </th>
             {showRange && (
               <th class="num">
-                Min
+                {sortButton("Min", "min")}
                 <ColumnResizeHandle
                   onResize={(event) => startResize(event, "min")}
                 />
@@ -106,20 +169,20 @@ export function StatsTable({
             )}
             {showRange && (
               <th class="num">
-                Max
+                {sortButton("Max", "max")}
                 <ColumnResizeHandle
                   onResize={(event) => startResize(event, "max")}
                 />
               </th>
             )}
             <th class="num">
-              Jitter
+              {sortButton("Jitter", "jitter")}
               <ColumnResizeHandle
                 onResize={(event) => startResize(event, "jitter")}
               />
             </th>
             <th class="num">
-              Share
+              {sortButton("Share", "share")}
               <ColumnResizeHandle
                 onResize={(event) => startResize(event, "share")}
               />
@@ -127,7 +190,7 @@ export function StatsTable({
           </tr>
         </thead>
         <tbody>
-          {rows.map((row, index) => (
+          {sortedRows.map((row, index) => (
             <tr
               key={`${row.bus}-${row.label}-${index}`}
               title={`${row.label} · ${row.bus} · min ${row.minMs} ms · avg ${row.avgMs} ms · max ${row.maxMs} ms · jitter ${row.jitterMs} ms · len ${row.len}`}

@@ -75,12 +75,26 @@ export function useColumnWidths(key: string, defs: ColumnWidthDef[]) {
   const [widths, setWidths] = useState(() => loadColumnWidths(key, defs));
   const latest = useRef(widths);
   latest.current = widths;
+  const lastDown = useRef<{ id: string; at: number } | null>(null);
   const startResize = useCallback(
     (event: PointerEvent, id: string) => {
       event.preventDefault();
       event.stopPropagation();
       const def = defs.find((column) => column.id === id);
       if (!def || def.flex) return;
+      const now = performance.now();
+      // A second press on the same boundary within the double-click window
+      // restores that column's default width instead of another drag.
+      if (lastDown.current?.id === id && now - lastDown.current.at < 500) {
+        lastDown.current = null;
+        setWidths((old) => {
+          const next = { ...old, [id]: def.width };
+          saveColumnWidths(key, next);
+          return next;
+        });
+        return;
+      }
+      lastDown.current = { id, at: now };
       const startX = event.clientX;
       const startWidth = latest.current[id] ?? def.width;
       let width = startWidth;
@@ -119,6 +133,7 @@ export function ColumnResizeHandle({
       class="col-resize"
       role="separator"
       aria-orientation="vertical"
+      title="Drag to resize · double-click to reset"
       onPointerDown={onResize}
     />
   );

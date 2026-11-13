@@ -10,6 +10,9 @@ export type UiIconName =
   | "chevrons-down"
   | "chevrons-up"
   | "arrow-up"
+  | "arrow-left"
+  | "arrow-right"
+  | "step-forward"
   | "plus-signal"
   | "cursor"
   | "layers"
@@ -72,6 +75,25 @@ export function UiIcon({ name }: { name: UiIconName }) {
       return (
         <svg viewBox="0 0 16 16" aria-hidden="true">
           <path d="M8 13V3M4 7l4-4 4 4" />
+        </svg>
+      );
+    case "arrow-left":
+      return (
+        <svg viewBox="0 0 16 16" aria-hidden="true">
+          <path d="M13 8H3M7 4 3 8l4 4" />
+        </svg>
+      );
+    case "arrow-right":
+      return (
+        <svg viewBox="0 0 16 16" aria-hidden="true">
+          <path d="M3 8h10M9 4l4 4-4 4" />
+        </svg>
+      );
+    case "step-forward":
+      return (
+        <svg viewBox="0 0 16 16" aria-hidden="true">
+          <path d="M4.5 4l6 4-6 4z" />
+          <path d="M12 4v8" />
         </svg>
       );
     case "plus-signal":

@@ -1,5 +1,5 @@
 import { Fragment } from "preact";
-import { useLayoutEffect, useRef, useState } from "preact/hooks";
+import { useLayoutEffect, useMemo, useRef, useState } from "preact/hooks";
 import type { ComponentChildren } from "preact";
 import type { Message } from "../types";
 import {
@@ -19,6 +19,21 @@ const MESSAGE_COLUMNS: ColumnWidthDef[] = [
 ];
 
 const MESSAGE_COLUMNS_KEY = "roxy-can-web.message-columns";
+
+type MessageSortKey = "bus" | "id" | "name" | "cycle";
+
+function compareMessages(a: Message, b: Message, key: MessageSortKey): number {
+  switch (key) {
+    case "bus":
+      return a.busName.localeCompare(b.busName);
+    case "id":
+      return a.id - b.id;
+    case "name":
+      return a.name.localeCompare(b.name);
+    case "cycle":
+      return a.cycleMs - b.cycleMs;
+  }
+}
 
 function hexId(message: Message): string {
   const width = message.extended ? 8 : 3;
@@ -41,6 +56,34 @@ export function MessageTable({
   const { widths, startResize } = useColumnWidths(
     MESSAGE_COLUMNS_KEY,
     MESSAGE_COLUMNS,
+  );
+  const [sortKey, setSortKey] = useState<MessageSortKey | null>(null);
+  const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
+  const sortedRows = useMemo(() => {
+    if (!sortKey) return rows;
+    const sign = sortDir === "asc" ? 1 : -1;
+    return [...rows].sort((a, b) => sign * compareMessages(a, b, sortKey));
+  }, [rows, sortKey, sortDir]);
+  const cycleSort = (key: MessageSortKey) => {
+    if (sortKey !== key) {
+      setSortKey(key);
+      setSortDir("asc");
+    } else if (sortDir === "asc") {
+      setSortDir("desc");
+    } else {
+      setSortKey(null);
+    }
+  };
+  const sortButton = (label: string, key: MessageSortKey) => (
+    <button
+      type="button"
+      class={`th-sort ${sortKey === key ? "on" : ""}`}
+      onClick={() => cycleSort(key)}
+      title={`Sort by ${label.toLowerCase()}`}
+    >
+      {label}
+      {sortKey === key && (sortDir === "asc" ? " ▲" : " ▼")}
+    </button>
   );
   useLayoutEffect(() => {
     const element = wrapRef.current;
@@ -84,26 +127,26 @@ export function MessageTable({
           <tr>
             {showBus && (
               <th>
-                Bus
+                {sortButton("Bus", "bus")}
                 <ColumnResizeHandle
                   onResize={(event) => startResize(event, "bus")}
                 />
               </th>
             )}
             <th>
-              ID
+              {sortButton("ID", "id")}
               <ColumnResizeHandle
                 onResize={(event) => startResize(event, "id")}
               />
             </th>
             <th>
-              Name
+              {sortButton("Name", "name")}
               <ColumnResizeHandle
                 onResize={(event) => startResize(event, "name")}
               />
             </th>
             <th class="num">
-              Cycle
+              {sortButton("Cycle", "cycle")}
               <ColumnResizeHandle
                 onResize={(event) => startResize(event, "cycle")}
               />
@@ -112,7 +155,7 @@ export function MessageTable({
           </tr>
         </thead>
         <tbody>
-          {rows.map((message) => {
+          {sortedRows.map((message) => {
             const open = (message.signals?.length ?? 0) > 0;
             const expandable = message.signalCount > 0;
             return (
