@@ -4,9 +4,9 @@
 
 ![roxy-can](screenshot.png)
 
-| Quad layout | Focus · signal cursors |
-|---|---|
-| ![Quad layout](screenshot-layouts.png) | ![Signal cursors](screenshot-signals.png) |
+![Quad layout](screenshot-layouts.png)
+
+![Signal cursors](screenshot-signals.png)
 
 ![Panel](screenshot-panel.png)
 
