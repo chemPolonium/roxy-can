@@ -20,6 +20,7 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use rust_embed::RustEmbed;
 use serde::{Deserialize, Serialize};
+use std::io::IsTerminal;
 
 use crate::app::{App, Mode, NodeRole};
 use crate::bus::{BusCommand, SubView};
@@ -262,19 +263,35 @@ pub fn run(args: &[String], open: bool) -> Result<(), String> {
             })?;
         let url = format!("http://127.0.0.1:{port}");
         println!("roxy-can {} is serving on {url}", env!("CARGO_PKG_VERSION"));
-        if should_open_browser(open, process_is_elevated()) {
+        let interactive = std::io::stdout().is_terminal();
+        let elevated = process_is_elevated();
+        if should_open_browser(open, elevated, interactive) {
             println!("Opening the roxy-can web UI in your default browser…");
-            open_browser(&url);
-            println!("If it did not open, visit {url}. Press Ctrl+C to stop.");
+            match open_browser(&url) {
+                Ok(()) => println!("If it did not open, visit {url}. Press Ctrl+C to stop."),
+                Err(error) => println!(
+                    "Could not launch the browser ({error}). Open {url} yourself. \
+                     Press Ctrl+C to stop."
+                ),
+            }
         } else if open {
-            // `cmd /C start` runs the URL handler with this process's token.
-            // From an elevated console that starts an elevated Edge, and the
-            // next normal Edge launch then blocks on its elevation prompt, so
-            // an elevated run prints the address instead of opening it.
-            println!(
-                "Running elevated: the browser is not opened automatically \
-                 (it would start with administrator rights)."
-            );
+            // Opening a browser is only safe from an ordinary interactive
+            // console. An elevated process starts an elevated browser, and a
+            // captured or sandboxed console (an agent run, `cargo run > log`)
+            // breaks the browser's single-instance hand-off; both end in the
+            // browser's "running elevated" prompt, so those runs print the
+            // address instead.
+            if elevated {
+                println!(
+                    "Running elevated: the browser is not opened automatically \
+                     (it would start with administrator rights)."
+                );
+            } else {
+                println!(
+                    "Running without an interactive console: the browser is not \
+                     opened automatically."
+                );
+            }
             println!("Open {url} in your browser. Press Ctrl+C to stop.");
         } else {
             println!("Open {url} in your browser. Press Ctrl+C to stop.");
@@ -328,7 +345,7 @@ async fn static_file(uri: Uri) -> Response {
 /// A double-click has no terminal to copy the URL from, so opening the browser
 /// is how it reaches the UI. `--web` and `ROXY_WEB_NO_OPEN=1` keep scripted
 /// runs silent.
-fn open_browser(url: &str) {
+fn open_browser(url: &str) -> std::io::Result<()> {
     #[cfg(target_os = "windows")]
     let mut command = {
         let mut command = std::process::Command::new("cmd");
@@ -347,14 +364,14 @@ fn open_browser(url: &str) {
         command.arg(url);
         command
     };
-    let _ = command.spawn();
+    command.spawn().map(|_| ())
 }
 
-/// A bare launch opens the UI in the default browser; `--web` runs and
-/// elevated processes (where the browser would inherit the administrator
-/// token) do not.
-fn should_open_browser(open: bool, elevated: bool) -> bool {
-    open && !elevated
+/// A bare launch opens the UI in the default browser, but only from an
+/// ordinary interactive console: `--web` runs, elevated processes and
+/// captured stdout (agent runs, redirected logs) print the address instead.
+fn should_open_browser(open: bool, elevated: bool, interactive: bool) -> bool {
+    open && !elevated && interactive
 }
 
 /// Whether this process holds an elevated token. Opening a browser from an
@@ -9681,9 +9698,10 @@ mod tests {
     }
 
     #[test]
-    fn elevated_launches_skip_the_auto_open() {
-        assert!(should_open_browser(true, false));
-        assert!(!should_open_browser(true, true));
-        assert!(!should_open_browser(false, false));
+    fn elevated_or_captured_launches_skip_the_auto_open() {
+        assert!(should_open_browser(true, false, true));
+        assert!(!should_open_browser(true, true, true));
+        assert!(!should_open_browser(true, false, false));
+        assert!(!should_open_browser(false, false, true));
     }
 }
