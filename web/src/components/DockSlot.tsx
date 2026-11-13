@@ -42,6 +42,98 @@ function ThemeIcon({ theme }: { theme: Theme }) {
   );
 }
 
+/// One glyph per page. The header keeps only this icon so the panel chooser
+/// costs about 25 px instead of a page name; the name stays in the trigger
+/// tooltip, its accessible label and the chooser menu.
+function PanelIcon({ panel }: { panel: PanelId }) {
+  switch (panel) {
+    case "trace":
+      return (
+        <svg viewBox="0 0 16 16" aria-hidden="true">
+          <path d="M2 4h9M2 8h12M2 12h7" />
+        </svg>
+      );
+    case "messages":
+      return (
+        <svg viewBox="0 0 16 16" aria-hidden="true">
+          <path d="M3 3.5h10v6.5H8l-3 2.5v-2.5H3z" />
+          <path d="M5.5 6h5M5.5 8h3" />
+        </svg>
+      );
+    case "rate":
+      return (
+        <svg viewBox="0 0 16 16" aria-hidden="true">
+          <path d="M2.5 13.5V2.5M2.5 13.5h11" />
+          <path d="M4.5 11 7 7.5l2 2L13 4" />
+        </svg>
+      );
+    case "signals":
+      return (
+        <svg viewBox="0 0 16 16" aria-hidden="true">
+          <path d="M2 8c1.5-5 4.5-5 6 0s4.5 5 6 0" />
+        </svg>
+      );
+    case "monitor":
+      return (
+        <svg viewBox="0 0 16 16" aria-hidden="true">
+          <path d="M2.5 12a5.5 5.5 0 1 1 11 0" />
+          <path d="M8 12l3-4" />
+        </svg>
+      );
+    case "data":
+      return (
+        <svg viewBox="0 0 16 16" aria-hidden="true">
+          <rect x="2.5" y="3.5" width="11" height="9" />
+          <path d="M2.5 6.5h11M6.5 6.5v6" />
+        </svg>
+      );
+    case "state":
+      return (
+        <svg viewBox="0 0 16 16" aria-hidden="true">
+          <rect x="2.5" y="3.5" width="11" height="3.5" />
+          <rect x="2.5" y="9" width="11" height="3.5" />
+        </svg>
+      );
+    case "statistics":
+      return (
+        <svg viewBox="0 0 16 16" aria-hidden="true">
+          <path d="M3 13.5V9M6.5 13.5V5M10 13.5V10.5M13.5 13.5V2.5" />
+        </svg>
+      );
+    case "bus":
+      return (
+        <svg viewBox="0 0 16 16" aria-hidden="true">
+          <path d="M2 5h12M2 11h12M5 5v6M11 5v6" />
+        </svg>
+      );
+    case "spec":
+      return (
+        <svg viewBox="0 0 16 16" aria-hidden="true">
+          <rect x="2.5" y="2.5" width="11" height="11" />
+          <path d="M5 8.5l2 2 4-4.5" />
+        </svg>
+      );
+    case "someip":
+      return (
+        <svg viewBox="0 0 16 16" aria-hidden="true">
+          <circle cx="4" cy="4" r="1.5" />
+          <circle cx="12" cy="4" r="1.5" />
+          <circle cx="8" cy="12" r="1.5" />
+          <path d="M5.2 5.2 7 10.4M10.8 5.2 9 10.4" />
+        </svg>
+      );
+    case "write":
+      return (
+        <svg viewBox="0 0 16 16" aria-hidden="true">
+          <rect x="2.5" y="3" width="11" height="10" />
+          <path d="M5 7l2 2-2 2M8.5 11h3" />
+        </svg>
+      );
+    default:
+      return null;
+  }
+}
+
 interface DockSlotSurfaceProps {
   panel: PanelId;
   slot: number;
@@ -113,12 +205,14 @@ export function SlotMenu({ dock, slot, panel, onPick, onMove }: SlotMenuProps) {
       buttonClass="slot-panel-trigger"
       menuClass="slot-panel-menu"
       fixed
-      ariaLabel={`Panel for ${info.slotLabels[slot] ?? `slot ${slot + 1}`}`}
-      title="Choose this page's panel, or move it to another slot"
+      ariaLabel={`Panel for ${info.slotLabels[slot] ?? `slot ${slot + 1}`}: ${panelLabel(panel)}`}
+      title={`${panelLabel(panel)} — choose this page's panel, or move it to another slot`}
       menuLabel="Panel and slot"
       label={
         <>
-          <span>{panelLabel(panel)}</span>
+          <span class="panel-glyph">
+            <PanelIcon panel={panel} />
+          </span>
           <span class="top-menu-caret" aria-hidden="true">
             ▾
           </span>
@@ -148,7 +242,10 @@ export function SlotMenu({ dock, slot, panel, onPick, onMove }: SlotMenuProps) {
                     <span class="slot-menu-check">
                       {active ? <CheckIcon /> : null}
                     </span>
-                    <span>{entry.label}</span>
+                    <span class="slot-menu-icon" aria-hidden="true">
+                      <PanelIcon panel={entry.id} />
+                    </span>
+                    <span class="slot-menu-label">{entry.label}</span>
                     {usedAt >= 0 && !active && (
                       <em>{info.slotLabels[usedAt]}</em>
                     )}
