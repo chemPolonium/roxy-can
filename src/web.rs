@@ -262,10 +262,20 @@ pub fn run(args: &[String], open: bool) -> Result<(), String> {
             })?;
         let url = format!("http://127.0.0.1:{port}");
         println!("roxy-can {} is serving on {url}", env!("CARGO_PKG_VERSION"));
-        if open {
+        if should_open_browser(open, process_is_elevated()) {
             println!("Opening the roxy-can web UI in your default browser…");
             open_browser(&url);
             println!("If it did not open, visit {url}. Press Ctrl+C to stop.");
+        } else if open {
+            // `cmd /C start` runs the URL handler with this process's token.
+            // From an elevated console that starts an elevated Edge, and the
+            // next normal Edge launch then blocks on its elevation prompt, so
+            // an elevated run prints the address instead of opening it.
+            println!(
+                "Running elevated: the browser is not opened automatically \
+                 (it would start with administrator rights)."
+            );
+            println!("Open {url} in your browser. Press Ctrl+C to stop.");
         } else {
             println!("Open {url} in your browser. Press Ctrl+C to stop.");
         }
@@ -338,6 +348,52 @@ fn open_browser(url: &str) {
         command
     };
     let _ = command.spawn();
+}
+
+/// A bare launch opens the UI in the default browser; `--web` runs and
+/// elevated processes (where the browser would inherit the administrator
+/// token) do not.
+fn should_open_browser(open: bool, elevated: bool) -> bool {
+    open && !elevated
+}
+
+/// Whether this process holds an elevated token. Opening a browser from an
+/// elevated process can start an elevated browser instance, and the user's
+/// next normal launch then blocks on the browser's elevation-mismatch prompt
+/// (Edge on Windows). A bare launch skips the auto-open in that case.
+#[cfg(target_os = "windows")]
+fn process_is_elevated() -> bool {
+    use std::ffi::c_void;
+    use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
+    use windows_sys::Win32::Security::{
+        GetTokenInformation, TOKEN_ELEVATION, TOKEN_QUERY, TokenElevation,
+    };
+    use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
+
+    let mut token: HANDLE = 0;
+    // SAFETY: GetCurrentProcess returns a valid pseudo handle and the token
+    // handle is closed before returning.
+    unsafe {
+        if OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) == 0 {
+            return false;
+        }
+        let mut elevation = TOKEN_ELEVATION { TokenIsElevated: 0 };
+        let mut size = 0u32;
+        let ok = GetTokenInformation(
+            token,
+            TokenElevation,
+            &mut elevation as *mut TOKEN_ELEVATION as *mut c_void,
+            std::mem::size_of::<TOKEN_ELEVATION>() as u32,
+            &mut size,
+        );
+        CloseHandle(token);
+        ok != 0 && elevation.TokenIsElevated != 0
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn process_is_elevated() -> bool {
+    false
 }
 
 fn reset_visual_stores(
@@ -9622,5 +9678,12 @@ mod tests {
         assert_eq!(defs[0].kind, "number");
         assert_eq!(defs[1].kind, "text");
         assert_eq!(defs[2].labels.len(), 2);
+    }
+
+    #[test]
+    fn elevated_launches_skip_the_auto_open() {
+        assert!(should_open_browser(true, false));
+        assert!(!should_open_browser(true, true));
+        assert!(!should_open_browser(false, false));
     }
 }

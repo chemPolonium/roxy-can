@@ -89,6 +89,9 @@ cargo run -- --web --replay <path.asc|blf|pcap|pcapng> # 载入并开始回放
 
 `cargo build --release` 产出的 exe 已内嵌前端资源，可以单独拷走运行。双击会
 保留一个终端窗口，服务地址和启动失败原因都打印在那里；`--port <n>` 可换端口。
+不带参数启动会自动打开默认浏览器；**以管理员身份运行时不会自动打开**（否则会启动
+一个管理员浏览器实例，之后普通的 Edge/Chrome 启动会被它的权限提示卡住），按终端
+打印的地址手动打开即可。`ROXY_WEB_NO_OPEN=1` 可完全关闭自动打开。
 
 当前 Web 端已有：Trace / Messages 主视图（CAN、FlexRay、Ethernet 同行混排，方向、仅解码、Payload、时间范围、ID 包含/排除过滤，50k 行虚拟化）、总线速率/负载曲线、DBC 信号多泳道曲线与游标读数、Start/Stop/Pause；回放条（Speed 0.5x–Fast、Step 10ms–5s、Play for 1–60s、Play to 绝对时间，只向前）；品牌菜单的 **Open project… / Recent projects** 与 Ctrl+O 打开工程，**Save / Save as** 保存（保留工作区与 Signals 曲线配置，未保存有标记）；**Setup** 菜单里的 **Recording…**（ASC/BLF/PCAP、文件名模板与 `100, 3F4x, FR0:13` 白名单，写入工程旁 `Record/`）、**Replay…**（保存的日志文件夹、录制列表、Channel map）与 **Scripts…**（节点脚本的编辑、应用、日志、断点单步、断言）；**Buses…** 增删/改名/改速率/加载 DBC·FIBEX·ARXML，探测并挂载 Kvaser/Vector 通道、切换 Simulated/Real bus，每个 DBC 节点以 chip 切换 Simulated/Offline；**Setup → Generator…** 编辑 CAN/FlexRay 发送条目（On、周期、hex，CAN 另有 FD/BRS，一键模拟节点）与 **Replay blocks**，**Sources** 给 DBC 信号加波形（Ramp/Sine/Step/Random/Triangle/Counter）；**Triggers…** 与 **Variables…** 管理规则和系统变量；页眉菜单把 **Rate / Signals / Monitor / Data / State / Messages stats / Bus load / Spec / SOME/IP / Write** 放进四种布局的槽位；页眉的下载图标（Export）按扩展名导出 ASC/PCAP 与 CSV/TXT。观测覆盖 CAN、FlexRay 与 Ethernet；生成覆盖 CAN 与 FlexRay 会话帧（FlexRay 端口仍只收），Ethernet 可挂 Npcap 实时口收发，未挂口时 Panel/Trigger 只注入本会话。布局、信号选择、曲线与 Monitor/Data/State 行随工程保存。
 
