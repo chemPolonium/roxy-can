@@ -243,7 +243,7 @@ string/union 的 length-field 宽度与 alignment 会读取 SOMEIP-TRANSFORMATIO
 - **别人的日志靠编号对上**：日志里每条帧只带一个通道**编号**，那是录它的那个人工程里的编号，文件里没有总线名可对照。**Setup → Replay…** 里的 **Channel map** 列出当前录制里有哪几路、各带多少条（CAN、FlexRay、以太网各一组），每行下拉指到本工程的某一路，或选 **No replay**。**As-is** 表示"文件里的编号就当本工程的路号"，表里不留条目；编号在工程里落不到任何一路时，行上直接写 **not replayed**。改动立即生效（已经进 Trace 的帧不动），随工程保存。回放条上的 **Channels** 按钮打开同一张表，有帧被丢掉时直接标出来。
 - 编号在本工程对不上任何一路的 CAN 通道**不再冒充第 n 路**：以前它以 `CAN3` 的名义出现在 Trace 里又解不了码，看着像总线对上了。现在它先被挡在门外，状态行说一句（每个通道只说一次，同时进 Write 窗口），Channel map 把它的条数照列，等你指过去。FlexRay 一侧照旧——没有描述的 cluster 号也照常进 Trace，Buses 的行上标"日志里有这路流量"。
 - 回放中发生器照常可注入（落在日志时基上；日志静默段注入随之冻结）。回放期间不录制，注入帧不写入文件。
-- **录制后端随扩展名**：`.asc` 写 ASC，`.blf` 写 Vector 二进制容器（经典 / FD / 远程 / 错误帧、FlexRay 收帧与 Ethernet 类型 71）；有以太网帧时另生成同名 `.eth.pcap`（纯 CAN/FlexRay 不留空 sidecar）。`.pcap` 只写 Ethernet PCAP。
+- **录制后端随扩展名**：`.asc` 写 Vector ASC v8 文本（CAN / CAN FD / FlexRay；Ethernet 不写进 ASC，只进同名 `.eth.pcap`），`.blf` 写 Vector 二进制容器（经典 / FD / 远程 / 错误帧、FlexRay 收帧与 Ethernet 类型 71 都在主文件里）；有以太网帧时才生成 `.eth.pcap` sidecar（纯 CAN/FlexRay 不留空文件）。`.pcap` 只写 Ethernet PCAP。
 - **边录边写**：ASC/BLF 与以太网 PCAP 都在录制过程中增长，不用等停止；进程被中止也不会把整段丢掉。以太网 sidecar 可在 Recording 面板单独下载或作为回放源加入 Replay。
 - **录制位置**：Record to 框只填**文件名**（默认 `record`，自动加日期后缀），存到打开工程的 `Record/` 下；填绝对路径则按它保存；没开工程时落到程序工作目录。开录时状态行显示完整路径。
 - **录制过滤**同时认两套编号：CAN 写 hex id 列表（`100, 3F4x`，`x` 为扩展帧），FlexRay 写 `FR<路>:<槽>`（如 `FR0:13`，路号是行末那个 `#n`，改了名也照旧用编号）。这个框列的是"要留什么"，不是"关掉哪条总线"，只写写了槽号不会让 CAN 一侧停止发送。过滤器只管文件，Trace / 统计 / 负载 / 规格始终看全总线。留空 = 全录。错误帧没有 id，过滤开启时不落文件。

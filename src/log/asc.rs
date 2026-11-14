@@ -15,10 +15,11 @@ impl AscWriter {
     pub fn new(path: &str) -> std::io::Result<Self> {
         let file = File::create(path)?;
         let mut w = BufWriter::new(file);
-        // Vector/CANoe header. `base hex` + absolute timestamps; FD frames are
-        // marked per-line (the `CANFD` token), so a single header serves both
-        // classic and FD traffic.
-        let date = chrono::Local::now().format("%a %b %d %H:%M:%S%.3f %Y");
+        // Vector/CANoe header. The date keeps the ASC shape (`AM`/`PM`
+        // before the year); some readers reject a bare 24-hour clock.
+        // `base hex` + absolute timestamps; FD frames are marked per-line
+        // (the `CANFD` token), so one header serves classic and FD traffic.
+        let date = chrono::Local::now().format("%a %b %d %I:%M:%S%.3f %p %Y");
         writeln!(w, "date {date}")?;
         writeln!(w, "base hex  timestamps absolute")?;
         writeln!(w, "internal events logged")?;
@@ -813,6 +814,27 @@ mod tests {
         assert_eq!(a.channel, 2);
         assert_eq!(a.dir, Direction::Tx);
         assert_eq!(a.t_us, 3_500_000);
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn the_header_keeps_the_canoe_date_shape() {
+        let path =
+            std::env::temp_dir().join(format!("roxy_can_asc_header_{}.asc", std::process::id()));
+        AscWriter::new(&path.to_string_lossy())
+            .unwrap()
+            .finish()
+            .unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        let first = text.lines().next().expect("a date line");
+        let tokens: Vec<&str> = first.split_whitespace().collect();
+        assert_eq!(tokens[0], "date");
+        assert!(
+            matches!(tokens.get(5), Some(&"AM") | Some(&"PM")),
+            "CANoe's date carries AM/PM before the year: {first}"
+        );
+        assert!(text.contains("Begin Triggerblock "));
+        assert!(text.contains("End TriggerBlock"));
         std::fs::remove_file(&path).ok();
     }
 
