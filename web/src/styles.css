@@ -1,11 +1,12 @@
-/* The editor's monospace family: local Latin glyphs scaled to exactly half
-   the width of a full-width CJK glyph. Chinese falls back to the system's
-   black/sans face, so nothing large is embedded in the bundle. */
+/* The editor's monospace family: embedded JetBrains Mono for Latin, with
+   Chinese falling back to the system's black/sans face. */
 @font-face {
   font-family: "Roxy Code";
-  src: local("Consolas"), local("Cascadia Mono"), local("Courier New");
+  src: url("./assets/JetBrainsMono-Regular.woff2") format("woff2");
   unicode-range: U+0000-2E7F, U+A000-ABFF, U+FB00-FDFF;
-  size-adjust: 91%;
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
 }
 
 @font-face {

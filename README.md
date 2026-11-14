@@ -139,5 +139,5 @@ roxy-can --vector-tx-probe 2                    # 打印该通道实际收到的
 
 ## 许可
 
-GPL-3.0，详见 [LICENSE](LICENSE)。
+GPL-3.0，详见 [LICENSE](LICENSE)。脚本编辑器内嵌 JetBrains Mono Regular（SIL OFL 1.1），字体许可证见 [docs/licenses/JetBrainsMono-OFL.txt](docs/licenses/JetBrainsMono-OFL.txt)。
 
