@@ -4149,6 +4149,21 @@ fn an_empty_project_mints_can1() {
 }
 
 #[test]
+fn a_saved_project_keeps_attached_hardware() {
+    let mut app = App::headless();
+    app.hw.attach_mock(0);
+    app.refresh_snapshot();
+    let project = ProjectV2::from_app(&app, None);
+    let hw = project
+        .hardware
+        .iter()
+        .find(|hw| hw.cluster_id == app.snap.cluster_ids.can[0])
+        .expect("hardware mapping");
+    assert_eq!(hw.driver, "Kvaser");
+    assert_eq!(hw.channel, -1);
+}
+
+#[test]
 fn a_contended_mailbox_keeps_last_frames_snapshot() {
     let mut app = App::headless();
     assert_eq!(app.channel_name(0), "CAN1");

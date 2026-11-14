@@ -327,6 +327,17 @@ pub struct TriggerCfgV2 {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct HwCfg {
+    /// Cluster id, not list position: buses may be renamed or reordered.
+    pub cluster_id: u32,
+    /// `HwDriver` word (`Kvaser` / `Vector`).
+    pub driver: String,
+    /// Driver-specific channel index.
+    pub channel: i32,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ProjectV2 {
     #[serde(default = "default_format")]
     pub format: String,
@@ -338,6 +349,9 @@ pub struct ProjectV2 {
     pub clusters: Vec<ClusterCfg>,
     #[serde(default)]
     pub bus_counter: usize,
+    /// Hardware attachments by cluster id. Absent in older projects.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub hardware: Vec<HwCfg>,
     #[serde(default)]
     pub id_aliases: Vec<IdAliasCfg>,
     #[serde(default)]
@@ -362,6 +376,7 @@ impl Default for ProjectV2 {
             next_cluster_id: 1,
             clusters: Vec::new(),
             bus_counter: 0,
+            hardware: Vec::new(),
             id_aliases: Vec::new(),
             frame_overrides: Vec::new(),
             replay: Vec::new(),
@@ -495,6 +510,37 @@ impl ProjectV2 {
                 "nextClusterId {} must be above the highest cluster id {max_id}",
                 self.next_cluster_id
             ));
+        }
+        let mut hw_buses = std::collections::BTreeSet::new();
+        for hw in &self.hardware {
+            if !self
+                .clusters
+                .iter()
+                .any(|cluster| cluster.kind == ClusterKind::Can && cluster.id == hw.cluster_id)
+            {
+                problems.push(format!(
+                    "hardware names CAN cluster {}, which does not exist",
+                    hw.cluster_id
+                ));
+            }
+            if !hw_buses.insert(hw.cluster_id) {
+                problems.push(format!(
+                    "CAN cluster {} has more than one hardware attachment",
+                    hw.cluster_id
+                ));
+            }
+            if crate::hw::HwDriver::parse(&hw.driver).is_none() {
+                problems.push(format!(
+                    "hardware on CAN cluster {} has unknown driver '{}'",
+                    hw.cluster_id, hw.driver
+                ));
+            }
+            if hw.channel < 0 {
+                problems.push(format!(
+                    "hardware on CAN cluster {} has a negative channel",
+                    hw.cluster_id
+                ));
+            }
         }
 
         for alias in &self.id_aliases {

@@ -540,3 +540,18 @@ fn schema_id_aliases_rebuild_the_allocator() {
     );
     assert!(project.validate().is_empty(), "{:?}", project.validate());
 }
+
+#[test]
+fn hardware_attachment_round_trips_with_the_project() {
+    let mut project = ProjectV2::default();
+    project.hardware.push(HwCfg {
+        cluster_id: 7,
+        driver: "Vector".to_string(),
+        channel: 2,
+    });
+    let text = serde_json::to_value(&project).unwrap();
+    assert_eq!(text["hardware"][0]["clusterId"], 7);
+    assert_eq!(text["hardware"][0]["driver"], "Vector");
+    let back: ProjectV2 = serde_json::from_value(text).unwrap();
+    assert_eq!(back.hardware, project.hardware);
+}

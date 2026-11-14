@@ -44,7 +44,7 @@ pub use plan::{PlanCache, build_decode_plan};
 pub use runtime::{DecodedSignal, E2eReading, decode_e2e, decode_payload, encode_payload};
 #[allow(unused_imports)]
 pub use schema::{
-    CanCfg, ClusterCfg, EtherCfg, FlexRayCfg, FrameOverrideCfg, GeneratorCfg, IdAliasCfg,
+    CanCfg, ClusterCfg, EtherCfg, FlexRayCfg, FrameOverrideCfg, GeneratorCfg, HwCfg, IdAliasCfg,
     PROJECT_FORMAT, PROJECT_VERSION, ProjectV2, ReplayCfg, TriggerCfgV2,
 };
 

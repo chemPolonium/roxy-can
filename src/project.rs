@@ -3,8 +3,8 @@ use std::path::{Path, PathBuf};
 use crate::app::App;
 use crate::config::ProjectSettings;
 use crate::model::{
-    CanCfg, ClusterCfg, ClusterKind, ClusterSource, EtherCfg, FlexRayCfg, GeneratorCfg, ProjectV2,
-    TriggerCfgV2,
+    CanCfg, ClusterCfg, ClusterKind, ClusterSource, EtherCfg, FlexRayCfg, GeneratorCfg, HwCfg,
+    ProjectV2, TriggerCfgV2,
 };
 
 /// Newest-first recent list: dedups and caps at 8 entries.
@@ -167,10 +167,24 @@ impl ProjectV2 {
         }
 
         let settings = ProjectSettings::from_app(app, base);
+        let hardware: Vec<HwCfg> = app
+            .snap
+            .hw
+            .iter()
+            .filter_map(|hw| {
+                let cluster_id = ids.can.get(hw.bus as usize).copied()?;
+                Some(HwCfg {
+                    cluster_id,
+                    driver: hw.driver.word().to_string(),
+                    channel: hw.adapter,
+                })
+            })
+            .collect();
 
         let mut project = ProjectV2::new(clusters);
         project.next_cluster_id = ids.next;
         project.bus_counter = app.snap.bus_counter;
+        project.hardware = hardware;
         project.settings = settings;
         project.replay = replay_entries(app);
         project.generators = generators(app);
@@ -324,6 +338,50 @@ impl ProjectV2 {
         restore_replay(&self, app);
 
         self.settings.apply(app);
+        app.settle();
+
+        // Hardware is part of the project now. Resolve cluster ids against
+        // the freshly built CAN buses, report stale entries, and make this
+        // project the whole hardware snapshot (unlisted buses detach).
+        let mut hardware: Vec<(u8, crate::hw::HwDriver, i32)> = Vec::new();
+        for cfg in &self.hardware {
+            let Some(index) = can_clusters
+                .iter()
+                .position(|cluster| cluster.id == cfg.cluster_id)
+            else {
+                problems.push(format!(
+                    "hardware: no CAN cluster with id {} exists",
+                    cfg.cluster_id
+                ));
+                continue;
+            };
+            let Some(driver) = crate::hw::HwDriver::parse(&cfg.driver) else {
+                problems.push(format!("hardware: unknown driver `{}`", cfg.driver));
+                continue;
+            };
+            if cfg.channel < 0 {
+                problems.push(format!(
+                    "hardware: CAN cluster {} has a negative channel",
+                    cfg.cluster_id
+                ));
+                continue;
+            }
+            hardware.push((index as u8, driver, cfg.channel));
+        }
+        let attached: Vec<u8> = app.snap.hw.iter().map(|hw| hw.bus).collect();
+        for bus in attached {
+            app.detach_hardware(bus);
+        }
+        for (bus, driver, channel) in hardware {
+            let can = can_clusters[bus as usize].can.clone().unwrap_or_default();
+            app.set_hardware_channel(
+                bus,
+                driver,
+                channel,
+                can.bitrate_kbps,
+                Some(can.fd_data_kbps),
+            );
+        }
         app.settle();
 
         app.send(crate::bus::BusCommand::SetClusterIds {
