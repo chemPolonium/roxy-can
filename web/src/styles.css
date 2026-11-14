@@ -1,3 +1,20 @@
+/* The editor's monospace family: local Latin glyphs scaled to exactly half
+   the width of a full-width CJK glyph. Chinese falls back to the system's
+   black/sans face, so nothing large is embedded in the bundle. */
+@font-face {
+  font-family: "Roxy Code";
+  src: local("Consolas"), local("Cascadia Mono"), local("Courier New");
+  unicode-range: U+0000-2E7F, U+A000-ABFF, U+FB00-FDFF;
+  size-adjust: 91%;
+}
+
+@font-face {
+  font-family: "Roxy Code";
+  src: local("SimHei"), local("Microsoft YaHei"), local("Noto Sans SC"),
+    local("PingFang SC");
+  unicode-range: U+2E80-9FFF, U+F900-FAFF, U+FF00-FFEF;
+}
+
 :root {
   color-scheme: dark;
   font-family: "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
@@ -6770,6 +6787,7 @@ button.danger:hover:not(:disabled) {
 }
 
 .scripts-editor {
+  position: relative;
   display: flex;
   flex-direction: column;
   gap: 6px;
@@ -6857,7 +6875,8 @@ body:has(.cm-tooltip-autocomplete) .script-signature {
   border-radius: 4px;
   box-shadow: 0 8px 22px rgb(0 0 0 / 35%);
   color: inherit;
-  font-family: "Cascadia Mono", Consolas, monospace;
+  font-family:
+    "Roxy Code", "Cascadia Mono", Consolas, "Microsoft YaHei", monospace;
   font-size: 10.5px;
 }
 
@@ -6881,7 +6900,8 @@ body:has(.cm-tooltip-autocomplete) .script-signature {
 .cm-tooltip-autocomplete .cm-completionDetail {
   margin-left: 10px;
   color: var(--muted);
-  font-family: "Cascadia Mono", Consolas, monospace;
+  font-family:
+    "Roxy Code", "Cascadia Mono", Consolas, "Microsoft YaHei", monospace;
 }
 
 .script-code {
@@ -7195,7 +7215,8 @@ body:has(.cm-tooltip-autocomplete) .script-signature {
   background: var(--panel);
   box-shadow: 0 8px 22px rgb(0 0 0 / 35%);
   color: var(--muted);
-  font-family: "Cascadia Mono", Consolas, monospace;
+  font-family:
+    "Roxy Code", "Cascadia Mono", Consolas, "Microsoft YaHei", monospace;
   font-size: 10px;
   white-space: nowrap;
   text-overflow: ellipsis;
@@ -7407,17 +7428,61 @@ body:has(.cm-tooltip-autocomplete) .script-signature {
   white-space: nowrap;
 }
 
+.script-help-btn {
+  flex: 0 0 auto;
+  width: 22px;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.script-help-pop {
+  position: absolute;
+  z-index: 9;
+  top: 72px;
+  right: 10px;
+  width: min(360px, calc(100% - 20px));
+  padding: 8px 10px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  box-shadow: 0 10px 28px rgb(0 0 0 / 30%);
+  color: inherit;
+}
+
+.script-help-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: inherit;
+  font-size: 10.5px;
+}
+
+.script-help-head button {
+  padding: 1px 7px;
+  font-size: 10px;
+}
+
+.script-help-pop p {
+  margin: 7px 0 0;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.5;
+}
+
 .script-log {
-  height: 100px;
+  flex: 0 0 100px;
+  min-height: 72px;
   overflow: auto;
   padding: 5px 7px;
   background: #0b1016;
   border: 1px solid #202a36;
   border-radius: 4px;
   color: #9fb0c2;
-  font-family: "Cascadia Mono", Consolas, monospace;
+  font-family:
+    "Roxy Code", "Cascadia Mono", Consolas, "Microsoft YaHei", monospace;
   font-size: 10px;
-  line-height: 1.45;
+  line-height: 1.5;
 }
 
 .script-log.bad {

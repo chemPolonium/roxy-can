@@ -53,7 +53,7 @@ Spec / SOME/IP / Write 都是单实例页面，可放进任意槽位。入口与
 | 按键 | 功能 |
 | --- | --- |
 | F9 | 启动 / 停止测量 |
-| Ctrl+S / Ctrl+Shift+S | 保存工程 / 另存为 |
+| Ctrl+S / Ctrl+Shift+S | 保存工程 / 另存为（脚本编辑区内 Ctrl+S 为 Apply） |
 | Ctrl+O | 打开工程（主机文件浏览器） |
 | Ctrl+E | 导出 |
 | Ctrl+K | 命令面板 |

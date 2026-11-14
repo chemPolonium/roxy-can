@@ -20,6 +20,7 @@ export interface ScriptCodeEditorProps {
   ) => ScriptCompletionResult | null;
   onChange: (doc: string) => void;
   onToggleBreakpoint: (line: number) => void;
+  onApply?: () => void;
   onCursor?: (
     doc: string,
     position: number,
@@ -38,12 +39,25 @@ export function ScriptCodeEditor({
   completion,
   onChange,
   onToggleBreakpoint,
+  onApply,
   onCursor,
   apiRef,
 }: ScriptCodeEditorProps) {
   const hostRef = useRef<HTMLDivElement>(null);
-  const callbacks = useRef({ completion, onChange, onToggleBreakpoint, onCursor });
-  callbacks.current = { completion, onChange, onToggleBreakpoint, onCursor };
+  const callbacks = useRef({
+    completion,
+    onChange,
+    onToggleBreakpoint,
+    onApply,
+    onCursor,
+  });
+  callbacks.current = {
+    completion,
+    onChange,
+    onToggleBreakpoint,
+    onApply,
+    onCursor,
+  };
   const latest = useRef({ breakpoints, debugLine, issueLine });
   latest.current = { breakpoints, debugLine, issueLine };
   const previousScript = useRef<number | null>(scriptId);
@@ -56,6 +70,7 @@ export function ScriptCodeEditor({
         callbacks.current.completion(text, position, explicit),
       onChange: (text) => callbacks.current.onChange(text),
       onToggleBreakpoint: (line) => callbacks.current.onToggleBreakpoint(line),
+      onApply: () => callbacks.current.onApply?.(),
       onCursor: (text, position, coords) =>
         callbacks.current.onCursor?.(text, position, coords),
     });

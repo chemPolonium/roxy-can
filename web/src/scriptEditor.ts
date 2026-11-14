@@ -61,6 +61,7 @@ export interface ScriptEditorCallbacks {
   ) => ScriptCompletionResult | null;
   onChange: (doc: string) => void;
   onToggleBreakpoint: (line: number) => void;
+  onApply?: () => void;
   onCursor?: (
     doc: string,
     position: number,
@@ -222,9 +223,10 @@ function editorTheme(theme: EditorTheme) {
         color: c.text,
       },
       ".cm-scroller": {
-        fontFamily: '"Cascadia Mono", Consolas, monospace',
-        fontSize: "11.5px",
-        lineHeight: "1.45",
+        fontFamily:
+          '"Roxy Code", "Cascadia Mono", Consolas, "Microsoft YaHei", monospace',
+        fontSize: "12px",
+        lineHeight: "1.5",
       },
       ".cm-content": {
         padding: "8px 0",
@@ -264,7 +266,7 @@ function editorTheme(theme: EditorTheme) {
         color: c.selectedText,
       },
       ".cm-tooltip-autocomplete > ul > li": {
-        fontFamily: '"Cascadia Mono", Consolas, monospace',
+        fontFamily: '"Roxy Code", "Cascadia Mono", Consolas, monospace',
         lineHeight: "1.5",
       },
       ".cm-panels": {
@@ -277,7 +279,7 @@ function editorTheme(theme: EditorTheme) {
       },
       ".cm-panel.cm-search": {
         padding: "6px",
-        fontFamily: '"Cascadia Mono", Consolas, monospace',
+        fontFamily: '"Roxy Code", "Cascadia Mono", Consolas, monospace',
         fontSize: "10.5px",
       },
       ".cm-panel.cm-search input, .cm-panel.cm-search button": {
@@ -285,7 +287,7 @@ function editorTheme(theme: EditorTheme) {
         color: c.panelText,
         border: `1px solid ${c.panelBorder}`,
         borderRadius: "3px",
-        fontFamily: '"Cascadia Mono", Consolas, monospace',
+        fontFamily: '"Roxy Code", "Cascadia Mono", Consolas, monospace',
         fontSize: "10.5px",
       },
       ".cm-panel.cm-search label": {
@@ -391,6 +393,13 @@ export function createScriptEditor(
   };
 
   const bindings: readonly KeyBinding[] = [
+    {
+      key: "Mod-s",
+      run: () => {
+        callbacks.onApply?.();
+        return true;
+      },
+    },
     {
       key: "F9",
       run: (target) => {

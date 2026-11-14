@@ -1391,6 +1391,7 @@ export function ScriptsModal({
   const [error, setError] = useState("");
   const [functions, setFunctions] = useState<ScriptFunctionHelp[]>([]);
   const [signature, setSignature] = useState<SignatureHint | null>(null);
+  const [helpOpen, setHelpOpen] = useState(false);
   const [reload, setReload] = useState(0);
   const editing = useRef<Set<number>>(new Set());
   const selectNewest = useRef(false);
@@ -1476,11 +1477,15 @@ export function ScriptsModal({
       ) {
         return;
       }
+      if (event.key === "Escape" && helpOpen) {
+        setHelpOpen(false);
+        return;
+      }
       if (event.key === "Escape") onClose();
     };
     window.addEventListener("keydown", close);
     return () => window.removeEventListener("keydown", close);
-  }, [onClose]);
+  }, [helpOpen, onClose]);
 
   useEffect(() => {
     let alive = true;
@@ -1948,6 +1953,16 @@ export function ScriptsModal({
                   <span class={`script-debug-status ${debugError ? "bad" : ""}`}>
                     {debugStatus}
                   </span>
+                  <button
+                    type="button"
+                    class="mini icon-btn script-help-btn"
+                    title="Editor help"
+                    aria-label="Editor help"
+                    aria-expanded={helpOpen}
+                    onClick={() => setHelpOpen((open) => !open)}
+                  >
+                    ?
+                  </button>
                 </div>
                 <div class="script-cm-wrap">
                   <Suspense
@@ -1965,6 +1980,15 @@ export function ScriptsModal({
                       completion={complete}
                       onChange={edit}
                       onToggleBreakpoint={toggleBreakpoint}
+                      onApply={() => {
+                        if (
+                          selected != null &&
+                          dirty.has(selected) &&
+                          !debugPaused
+                        ) {
+                          apply();
+                        }
+                      }}
                       onCursor={updateSignature}
                       apiRef={editorApi}
                     />
@@ -2001,6 +2025,35 @@ export function ScriptsModal({
                     </div>
                   )}
                 </div>
+                {helpOpen && (
+                  <div
+                    class="script-help-pop"
+                    role="dialog"
+                    aria-label="Editor help"
+                  >
+                    <div class="script-help-head">
+                      <strong>Editor help</strong>
+                      <button
+                        type="button"
+                        onClick={() => setHelpOpen(false)}
+                      >
+                        Close
+                      </button>
+                    </div>
+                    <p>
+                      Scripts are C-like and recompile on every start; Apply
+                      while measuring restarts the node. Tab indents, Shift+Tab
+                      outdents. Suggestions follow the caret and Tab accepts
+                      them; Alt+/ opens the list, Enter accepts after arrowing.
+                      Known calls show their parameters. Brackets and double
+                      quotes pair automatically, and Backspace removes a whole
+                      indent. Ctrl+/ comments lines, Alt+↑/↓ moves them,
+                      Shift+Alt+↓ duplicates, Ctrl+F finds, Ctrl+S applies.
+                      F9 toggles a breakpoint; Debug parks the node so you can
+                      inspect locals and the call stack.
+                    </p>
+                  </div>
+                )}
                 {debugPaused && debugView && (
                   <div class="script-debug-panel">
                     <section>
@@ -2198,17 +2251,6 @@ export function ScriptsModal({
                     ))
                   )}
                 </div>
-                <p class="hint">
-                  Scripts are C-like and recompile on every start; Apply while
-                  measuring restarts the node. Tab indents, Shift+Tab outdents.
-                  Suggestions follow the caret and Tab accepts them; Alt+/ opens
-                  the list, Enter accepts after arrowing. Known calls show their
-                  parameters. Brackets and double quotes pair automatically, and
-                  Backspace removes a whole indent. Ctrl+/ comments lines,
-                  Alt+↑/↓ moves them, Shift+Alt+↓ duplicates, Ctrl+F finds.
-                  F9 toggles a breakpoint; Debug parks the node so you can
-                  inspect locals and the call stack.
-                </p>
               </>
             ) : (
               <div class="script-empty">

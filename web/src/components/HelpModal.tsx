@@ -14,7 +14,7 @@ const SHORTCUTS: [string, string][] = [
   ["F10", "Pause / resume the measurement"],
   ["F2", "Focus the current filter box; Esc clears it"],
   ["← / →", "Previous / next page tab on the Panel page"],
-  ["Ctrl+S", "Save the open project; asks for a file when untitled"],
+  ["Ctrl+S", "Save the project; inside the script editor it applies the script"],
   ["Ctrl+Shift+S", "Save the project under a new name"],
   ["Ctrl+O", "Open a project"],
   ["Ctrl+E", "Export the visible Trace or Messages page"],
