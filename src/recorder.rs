@@ -59,6 +59,9 @@ pub struct Recorder {
     writer: Option<Backend>,
     /// Ethernet sidecar (or the main `.pcap` when that extension is chosen).
     eth: Option<PcapWriter>,
+    /// Path the sidecar gets when the first Ethernet frame arrives. Empty until
+    /// then, so a pure CAN/FR run does not leave an empty `.eth.pcap` behind.
+    eth_path: Option<String>,
     pub recording: bool,
     /// Base path as typed; the actual file gets a date-time suffix.
     pub record_path: String,
@@ -78,6 +81,7 @@ impl Recorder {
         Recorder {
             writer: None,
             eth: None,
+            eth_path: None,
             recording: false,
             record_path: String::new(),
             last_record: String::new(),
@@ -142,6 +146,17 @@ impl Recorder {
         if let Some(Backend::Blf(writer)) = &mut self.writer {
             writer.write_eth(f);
         }
+        if self.eth.is_none()
+            && let Some(path) = self.eth_path.clone()
+        {
+            match PcapWriter::create(&path) {
+                Ok(writer) => {
+                    self.eth = Some(writer);
+                    self.last_eth_record = path;
+                }
+                Err(_) => return,
+            }
+        }
         if let Some(writer) = &mut self.eth {
             writer.write(f).ok();
         }
@@ -166,6 +181,7 @@ impl Recorder {
 
     /// Closes the file, if any. Recorded data stays; only the handle goes.
     pub fn close(&mut self) {
+        self.eth_path = None;
         if let Some(writer) = self.eth.take() {
             writer.finish();
         }
@@ -178,10 +194,13 @@ impl Recorder {
     }
 
     /// Opens the dated file derived from `record_path`. `.blf`/`.asc` write
-    /// the CAN/FR container and an Ethernet PCAP sidecar; `.pcap` writes
-    /// Ethernet only. Returns the opened main path, or the error text.
+    /// the CAN/FR container and create an Ethernet PCAP sidecar on the first
+    /// Ethernet frame; `.pcap` writes Ethernet only. Returns the opened main
+    /// path, or the error text.
     pub fn open(&mut self) -> Result<String, String> {
         self.close();
+        self.eth_path = None;
+        self.last_eth_record.clear();
         let b = self.record_path.trim();
         let lower = b.to_ascii_lowercase();
         if lower.ends_with(".pcapng") {
@@ -246,8 +265,9 @@ impl Recorder {
             eth_path = format!("{stem}.eth_{eth_seq}.pcap");
             eth_seq += 1;
         }
-        self.eth = Some(PcapWriter::create(&eth_path).map_err(|e| e.to_string())?);
-        self.last_eth_record = eth_path;
+        // The file itself is created by write_eth; a CAN-only run leaves no
+        // empty sidecar behind.
+        self.eth_path = Some(eth_path);
         self.writer = Some(if blf {
             Backend::Blf(BlfWriter::create(&path).map_err(|e| e.to_string())?)
         } else {
@@ -324,16 +344,33 @@ mod tests {
     }
 
     #[test]
-    fn asc_recording_also_opens_an_ethernet_sidecar() {
+    fn asc_recording_writes_the_ethernet_sidecar_only_when_needed() {
         let dir = temp_dir("eth-sidecar");
         let mut rec = Recorder::new();
         rec.recording = true;
         rec.record_path = dir.join("mixed.asc").to_string_lossy().into_owned();
         let path = rec.open().unwrap();
         assert!(path.ends_with(".asc"));
+        assert!(
+            rec.last_eth_record.is_empty(),
+            "a CAN/FR-only run must not leave an empty sidecar"
+        );
+        assert!(
+            !std::fs::read_dir(&dir).unwrap().any(|entry| entry
+                .unwrap()
+                .path()
+                .extension()
+                .is_some_and(|ext| ext == "pcap")),
+            "no pcap before the first Ethernet frame"
+        );
+
+        let frame = crate::eth::EthFrame::session(1_000, 0, Some(7), 0x0800, [1, 2, 3, 4]);
+        rec.write_eth(&frame);
         assert!(rec.last_eth_record.ends_with(".eth.pcap"));
         assert!(std::path::Path::new(&rec.last_eth_record).exists());
         rec.close();
+        let data = std::fs::read(&rec.last_eth_record).unwrap();
+        assert!(data.len() > 24, "PCAP header + one record");
         std::fs::remove_dir_all(&dir).ok();
     }
 }
