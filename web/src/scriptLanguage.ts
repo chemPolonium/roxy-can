@@ -165,15 +165,31 @@ export const scriptFold = foldService.of((state, lineStart) => {
   return { from: line.to, to: close };
 });
 
-export const scriptHighlightStyle = HighlightStyle.define([
-  { tag: tags.comment, color: "#6a7a8c" },
-  { tag: tags.string, color: "#8fd3a8" },
-  { tag: tags.number, color: "#e6b455" },
-  { tag: tags.keyword, color: "#6cb6ff" },
-  { tag: tags.function(tags.variableName), color: "#c77dff" },
-  { tag: tags.variableName, color: "#d6e2f0" },
-  { tag: tags.operator, color: "#93a4b8" },
-  { tag: tags.bracket, color: "#93a4b8" },
-]);
+export type EditorTheme = "dark" | "light";
+
+export function scriptHighlightStyle(theme: EditorTheme) {
+  if (theme === "light") {
+    return HighlightStyle.define([
+      { tag: tags.comment, color: "#7a8796" },
+      { tag: tags.string, color: "#1f7a52" },
+      { tag: tags.number, color: "#9a5b00" },
+      { tag: tags.keyword, color: "#1f5fae" },
+      { tag: tags.function(tags.variableName), color: "#7b3fb0" },
+      { tag: tags.variableName, color: "#26313f" },
+      { tag: tags.operator, color: "#5b6b7c" },
+      { tag: tags.bracket, color: "#5b6b7c" },
+    ]);
+  }
+  return HighlightStyle.define([
+    { tag: tags.comment, color: "#6a7a8c" },
+    { tag: tags.string, color: "#8fd3a8" },
+    { tag: tags.number, color: "#e6b455" },
+    { tag: tags.keyword, color: "#6cb6ff" },
+    { tag: tags.function(tags.variableName), color: "#c77dff" },
+    { tag: tags.variableName, color: "#d6e2f0" },
+    { tag: tags.operator, color: "#93a4b8" },
+    { tag: tags.bracket, color: "#93a4b8" },
+  ]);
+}
 
 export const scriptIndentUnit = indentUnit.of("    ");

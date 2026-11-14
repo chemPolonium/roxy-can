@@ -5314,6 +5314,7 @@ export function App() {
           catalog={catalog}
           derived={derivedDefs}
           sysvars={state?.sysvars ?? []}
+          theme={theme}
           onCommand={(command) => void run(command)}
           onClose={() => setScriptsOpen(false)}
         />

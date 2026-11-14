@@ -6821,8 +6821,8 @@ button.danger:hover:not(:disabled) {
   min-width: 0;
   min-height: 160px;
   overflow: hidden;
-  background: #0b1016;
-  border: 1px solid #263140;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
   border-radius: 4px;
 }
 
@@ -6833,8 +6833,8 @@ button.danger:hover:not(:disabled) {
   justify-content: center;
   min-height: 160px;
   color: var(--muted);
-  background: #0b1016;
-  border: 1px solid #263140;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
   border-radius: 4px;
   font-size: 10.5px;
 }
@@ -6852,11 +6852,11 @@ body:has(.cm-tooltip-autocomplete) .script-signature {
 }
 
 .cm-tooltip.cm-tooltip-autocomplete {
-  background: #0d141d;
-  border: 1px solid #2d4055;
+  background: var(--panel);
+  border: 1px solid var(--line);
   border-radius: 4px;
-  box-shadow: 0 8px 22px rgb(0 0 0 / 45%);
-  color: #cdd8e4;
+  box-shadow: 0 8px 22px rgb(0 0 0 / 35%);
+  color: inherit;
   font-family: "Cascadia Mono", Consolas, monospace;
   font-size: 10.5px;
 }
@@ -6864,18 +6864,18 @@ body:has(.cm-tooltip-autocomplete) .script-signature {
 .cm-tooltip-autocomplete > ul {
   max-height: 220px;
   padding: 4px;
-  background: #0d141d;
+  background: var(--panel);
 }
 
 .cm-tooltip-autocomplete > ul > li {
   padding: 3px 6px;
   border-radius: 3px;
-  color: #cdd8e4;
+  color: inherit;
 }
 
 .cm-tooltip-autocomplete > ul > li[aria-selected] {
-  background: #142334;
-  color: #e8f0f8;
+  background: var(--accent-soft);
+  color: inherit;
 }
 
 .cm-tooltip-autocomplete .cm-completionDetail {
@@ -7190,11 +7190,11 @@ body:has(.cm-tooltip-autocomplete) .script-signature {
   max-width: 340px;
   padding: 3px 7px;
   overflow: hidden;
-  border: 1px solid #2d4055;
+  border: 1px solid var(--line);
   border-radius: 4px;
-  background: #0d141d;
-  box-shadow: 0 8px 22px rgb(0 0 0 / 45%);
-  color: #8fa0b3;
+  background: var(--panel);
+  box-shadow: 0 8px 22px rgb(0 0 0 / 35%);
+  color: var(--muted);
   font-family: "Cascadia Mono", Consolas, monospace;
   font-size: 10px;
   white-space: nowrap;
@@ -7203,7 +7203,7 @@ body:has(.cm-tooltip-autocomplete) .script-signature {
 }
 
 .script-signature .on {
-  color: #f2f6fb;
+  color: inherit;
   font-weight: 600;
 }
 

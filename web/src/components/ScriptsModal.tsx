@@ -19,6 +19,7 @@ import type {
 } from "../types";
 import { FilePick } from "./FilePick";
 import type { ScriptEditorApi } from "../scriptEditor";
+import type { Theme } from "../theme";
 import { SCRIPT_KEYWORDS as KEYWORDS } from "../scriptKeywords";
 import { frameOrigins } from "../scriptFrames";
 
@@ -35,6 +36,7 @@ interface Props {
   catalog: Catalog | null;
   derived: DerivedDef[];
   sysvars: SysVar[];
+  theme: Theme;
   onCommand: (command: Command) => void;
   onClose: () => void;
 }
@@ -1377,6 +1379,7 @@ export function ScriptsModal({
   catalog,
   derived,
   sysvars,
+  theme,
   onCommand,
   onClose,
 }: Props) {
@@ -1955,6 +1958,7 @@ export function ScriptsModal({
                     <ScriptCodeEditor
                       doc={draft}
                       scriptId={selected}
+                      theme={theme}
                       breakpoints={breakpoints}
                       debugLine={debugLine}
                       issueLine={issueLine}

@@ -4,10 +4,12 @@ import {
   type ScriptCompletionResult,
   type ScriptEditorApi,
 } from "../scriptEditor";
+import type { EditorTheme } from "../scriptLanguage";
 
 export interface ScriptCodeEditorProps {
   doc: string;
   scriptId: number | null;
+  theme: EditorTheme;
   breakpoints: number[];
   debugLine: number | null;
   issueLine: number | null;
@@ -29,6 +31,7 @@ export interface ScriptCodeEditorProps {
 export function ScriptCodeEditor({
   doc,
   scriptId,
+  theme,
   breakpoints,
   debugLine,
   issueLine,
@@ -48,7 +51,7 @@ export function ScriptCodeEditor({
   useLayoutEffect(() => {
     const host = hostRef.current;
     if (!host) return;
-    const api = createScriptEditor(host, doc, {
+    const api = createScriptEditor(host, doc, theme, {
       completion: (text, position, explicit) =>
         callbacks.current.completion(text, position, explicit),
       onChange: (text) => callbacks.current.onChange(text),
@@ -81,6 +84,10 @@ export function ScriptCodeEditor({
       api.setIssueLine(latest.current.issueLine);
     }
   }, [apiRef, doc, scriptId]);
+
+  useEffect(() => {
+    apiRef.current?.setTheme(theme);
+  }, [apiRef, theme]);
 
   useEffect(() => {
     apiRef.current?.setBreakpoints(breakpoints);
