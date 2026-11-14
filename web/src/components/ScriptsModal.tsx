@@ -1956,8 +1956,8 @@ export function ScriptsModal({
                   <button
                     type="button"
                     class="mini icon-btn script-help-btn"
-                    title="Editor help"
-                    aria-label="Editor help"
+                    title="编辑器帮助"
+                    aria-label="编辑器帮助"
                     aria-expanded={helpOpen}
                     onClick={() => setHelpOpen((open) => !open)}
                   >
@@ -2029,28 +2029,25 @@ export function ScriptsModal({
                   <div
                     class="script-help-pop"
                     role="dialog"
-                    aria-label="Editor help"
+                    aria-label="编辑器帮助"
                   >
                     <div class="script-help-head">
-                      <strong>Editor help</strong>
+                      <strong>编辑器帮助</strong>
                       <button
                         type="button"
                         onClick={() => setHelpOpen(false)}
                       >
-                        Close
+                        关闭
                       </button>
                     </div>
                     <p>
-                      Scripts are C-like and recompile on every start; Apply
-                      while measuring restarts the node. Tab indents, Shift+Tab
-                      outdents. Suggestions follow the caret and Tab accepts
-                      them; Alt+/ opens the list, Enter accepts after arrowing.
-                      Known calls show their parameters. Brackets and double
-                      quotes pair automatically, and Backspace removes a whole
-                      indent. Ctrl+/ comments lines, Alt+↑/↓ moves them,
-                      Shift+Alt+↓ duplicates, Ctrl+F finds, Ctrl+S applies.
-                      F9 toggles a breakpoint; Debug parks the node so you can
-                      inspect locals and the call stack.
+                      脚本是类 C 语言，每次启动都会重新编译；测量中点击 Apply
+                      会重启该节点。Tab 缩进，Shift+Tab 反缩进。补全跟随光标，Tab
+                      接受选中项；Alt+/ 打开列表，方向键选择后 Enter
+                      接受。已知函数会显示参数。括号和双引号自动配对，Backspace
+                      删除整级缩进。Ctrl+/ 注释行，Alt+↑/↓ 移动行，Shift+Alt+↓
+                      复制行，Ctrl+F 查找，Ctrl+S 应用。F9 切换断点；Debug
+                      会暂停节点，方便检查局部变量和调用栈。
                     </p>
                   </div>
                 )}

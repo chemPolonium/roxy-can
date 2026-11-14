@@ -232,7 +232,7 @@ function editorTheme(theme: EditorTheme) {
       ".cm-scroller": {
         fontFamily:
           'ui-monospace, monospace',
-        fontSize: "12px",
+        fontSize: "13px",
         lineHeight: "1.5",
       },
       ".cm-content": {
@@ -266,7 +266,7 @@ function editorTheme(theme: EditorTheme) {
         color: c.tooltipText,
       },
       ".cm-tooltip-autocomplete": {
-        fontSize: "10.5px",
+        fontSize: "11px",
       },
       ".cm-tooltip-autocomplete > ul > li[aria-selected]": {
         backgroundColor: c.selected,
@@ -287,7 +287,7 @@ function editorTheme(theme: EditorTheme) {
       ".cm-panel.cm-search": {
         padding: "6px",
         fontFamily: 'ui-monospace, monospace',
-        fontSize: "10.5px",
+        fontSize: "11px",
       },
       ".cm-panel.cm-search input, .cm-panel.cm-search button": {
         backgroundColor: c.inputBg,
@@ -295,11 +295,11 @@ function editorTheme(theme: EditorTheme) {
         border: `1px solid ${c.panelBorder}`,
         borderRadius: "3px",
         fontFamily: 'ui-monospace, monospace',
-        fontSize: "10.5px",
+        fontSize: "11px",
       },
       ".cm-panel.cm-search label": {
         color: c.gutterText,
-        fontSize: "10px",
+        fontSize: "10.5px",
       },
       ".cm-searchMatch": {
         backgroundColor: c.search,

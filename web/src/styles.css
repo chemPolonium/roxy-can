@@ -6860,7 +6860,7 @@ body:has(.cm-tooltip-autocomplete) .script-signature {
   color: inherit;
   font-family:
     ui-monospace, monospace;
-  font-size: 10.5px;
+  font-size: 11px;
 }
 
 .cm-tooltip-autocomplete > ul {
@@ -7200,7 +7200,7 @@ body:has(.cm-tooltip-autocomplete) .script-signature {
   color: var(--muted);
   font-family:
     ui-monospace, monospace;
-  font-size: 10px;
+  font-size: 11px;
   white-space: nowrap;
   text-overflow: ellipsis;
   pointer-events: none;
@@ -7423,7 +7423,7 @@ body:has(.cm-tooltip-autocomplete) .script-signature {
   z-index: 9;
   top: 72px;
   right: 10px;
-  width: min(360px, calc(100% - 20px));
+  width: min(380px, calc(100% - 20px));
   padding: 8px 10px;
   background: var(--panel);
   border: 1px solid var(--line);
@@ -7438,19 +7438,19 @@ body:has(.cm-tooltip-autocomplete) .script-signature {
   justify-content: space-between;
   gap: 12px;
   color: inherit;
-  font-size: 10.5px;
+  font-size: 12px;
 }
 
 .script-help-head button {
   padding: 1px 7px;
-  font-size: 10px;
+  font-size: 11.5px;
 }
 
 .script-help-pop p {
   margin: 7px 0 0;
   color: var(--muted);
-  font-size: 10px;
-  line-height: 1.5;
+  font-size: 12px;
+  line-height: 1.55;
 }
 
 .script-log {
@@ -7464,7 +7464,7 @@ body:has(.cm-tooltip-autocomplete) .script-signature {
   color: #9fb0c2;
   font-family:
     ui-monospace, monospace;
-  font-size: 10px;
+  font-size: 10.5px;
   line-height: 1.5;
 }
 
