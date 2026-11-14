@@ -77,6 +77,10 @@ export function useColumnWidths(
   external?: {
     widths?: unknown;
     onChange?: (widths: Record<string, number>) => void;
+    /// Visible, resizable columns in left-to-right order. When present, a
+    /// drag trades width with the next column so the divider follows the
+    /// pointer even if a flexible column sits before it.
+    order?: string[];
   },
 ) {
   const [widths, setWidths] = useState(
@@ -105,6 +109,7 @@ export function useColumnWidths(
     [key, external?.onChange],
   );
   const lastDown = useRef<{ id: string; at: number } | null>(null);
+  const order = external?.order;
   const startResize = useCallback(
     (event: PointerEvent, id: string) => {
       event.preventDefault();
@@ -122,17 +127,57 @@ export function useColumnWidths(
       lastDown.current = { id, at: now };
       const startX = event.clientX;
       const startWidth = latest.current[id] ?? def.width;
+      const index = order ? order.indexOf(id) : -1;
+      const neighborId =
+        order && index >= 0 && index < order.length - 1
+          ? order[index + 1]
+          : null;
+      const neighborDef = neighborId
+        ? defs.find((column) => column.id === neighborId)
+        : undefined;
+      const neighborStart = neighborDef
+        ? (latest.current[neighborDef.id] ?? neighborDef.width)
+        : 0;
       let width = startWidth;
+      let neighborWidth = neighborStart;
       const move = (moveEvent: PointerEvent) => {
-        width = clampColumnWidth(
-          startWidth + moveEvent.clientX - startX,
-          def.min,
-          def.max,
-        );
-        setWidths((old) => ({ ...old, [id]: width }));
+        const delta = moveEvent.clientX - startX;
+        let primary = clampColumnWidth(startWidth + delta, def.min, def.max);
+        if (neighborId && neighborDef) {
+          // Trade width with the next visible column instead of letting a
+          // flexible column before this one absorb it; that keeps the dragged
+          // boundary under the pointer.
+          let other = clampColumnWidth(
+            neighborStart - (primary - startWidth),
+            neighborDef.min,
+            neighborDef.max,
+          );
+          primary = clampColumnWidth(
+            startWidth + (neighborStart - other),
+            def.min,
+            def.max,
+          );
+          other = clampColumnWidth(
+            neighborStart - (primary - startWidth),
+            neighborDef.min,
+            neighborDef.max,
+          );
+          width = primary;
+          neighborWidth = other;
+          setWidths((old) => ({
+            ...old,
+            [id]: width,
+            [neighborId]: neighborWidth,
+          }));
+        } else {
+          width = primary;
+          setWidths((old) => ({ ...old, [id]: width }));
+        }
       };
       const up = () => {
-        commit({ ...latest.current, [id]: width });
+        const next = { ...latest.current, [id]: width };
+        if (neighborId) next[neighborId] = neighborWidth;
+        commit(next);
         document.body.classList.remove("col-resizing");
         window.removeEventListener("pointermove", move);
         window.removeEventListener("pointerup", up);
@@ -141,7 +186,7 @@ export function useColumnWidths(
       window.addEventListener("pointermove", move);
       window.addEventListener("pointerup", up);
     },
-    [commit, defs],
+    [commit, defs, order],
   );
   return { widths, startResize };
 }

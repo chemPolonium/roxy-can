@@ -75,10 +75,24 @@ export function StatsTable({
 }) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const [available, setAvailable] = useState(0);
+  const showBus = available >= 480;
+  const showRange = available >= 700;
+  const resizeOrder = [
+    ...(showBus ? ["bus"] : []),
+    "count",
+    "avg",
+    ...(showRange ? ["min", "max"] : []),
+    "jitter",
+    "share",
+  ];
   const { widths, startResize } = useColumnWidths(
     STATS_COLUMNS_KEY,
     STATS_COLUMNS,
-    { widths: columnWidths, onChange: onColumnWidthsChange },
+    {
+      widths: columnWidths,
+      onChange: onColumnWidthsChange,
+      order: resizeOrder,
+    },
   );
   const [sort, setSort] = useState<{
     key: StatsSortKey;
@@ -135,8 +149,6 @@ export function StatsTable({
     observer.observe(element);
     return () => observer.disconnect();
   }, [rows.length]);
-  const showBus = available >= 480;
-  const showRange = available >= 700;
   if (rows.length === 0) {
     return (
       <div class="empty">
@@ -209,12 +221,7 @@ export function StatsTable({
                 onResize={(event) => startResize(event, "jitter")}
               />
             </th>
-            <th class="num">
-              {sortButton("Share", "share")}
-              <ColumnResizeHandle
-                onResize={(event) => startResize(event, "share")}
-              />
-            </th>
+            <th class="num">{sortButton("Share", "share")}</th>
           </tr>
         </thead>
         <tbody>
