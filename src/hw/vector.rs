@@ -83,6 +83,8 @@ const RX_EVENT_CAN_ID: usize = 32;
 const RX_EVENT_MSG_FLAGS: usize = 36;
 const RX_EVENT_DLC: usize = 58;
 const RX_EVENT_DATA: usize = 64;
+/// `XLcanRxEvent.timeStampSync`: nanoseconds, synchronized across channels.
+const RX_EVENT_TIME_SYNC: usize = 24;
 /// TX event layout (verified offsets inside the 88-byte event).
 const TX_EVENT_CAN_ID: usize = 8;
 const TX_EVENT_MSG_FLAGS: usize = 12;
@@ -859,6 +861,13 @@ impl VectorChannel {
             }
             let raw_id =
                 u32::from_le_bytes(ev[RX_EVENT_CAN_ID..RX_EVENT_CAN_ID + 4].try_into().ok()?);
+            // Driver nanoseconds, synchronized across channels. Hardware::
+            // poll_rx keeps the spacing and anchors the batch to the sim clock.
+            let raw_t_us = u64::from_le_bytes(
+                ev[RX_EVENT_TIME_SYNC..RX_EVENT_TIME_SYNC + 8]
+                    .try_into()
+                    .ok()?,
+            ) / 1_000;
             let msg_flags = u32::from_le_bytes(
                 ev[RX_EVENT_MSG_FLAGS..RX_EVENT_MSG_FLAGS + 4]
                     .try_into()
@@ -888,7 +897,7 @@ impl VectorChannel {
                 flags = flags.union(FrameFlags::RTR);
             }
             return Some(CanFrame {
-                t_us: 0, // stamped by the core against the sim clock
+                t_us: raw_t_us, // driver time; mapped to the sim clock by poll_rx
                 channel: 0,
                 id,
                 extended,

@@ -14,6 +14,12 @@ use crate::bus::{BusCommand, BusCore, SnapshotMailbox};
 /// a stopped bus still answers commands promptly; deadlines (generator
 /// slots, replay frames) usually wake it well before this.
 const IDLE_SLEEP_US: u64 = 10_000;
+/// With a real adapter attached, drain its receive queue every millisecond.
+/// A busy CAN FD bus can fill the driver queue inside one 10 ms lap; the
+/// snapshot is still published on the slower cadence below.
+const FAST_RX_SLEEP_US: u64 = 1_000;
+/// At most one snapshot per this interval on the fast RX path.
+const SNAPSHOT_EVERY: Duration = Duration::from_millis(10);
 
 /// Windows resolves condvar waits (and sleeps) on the system timer
 /// interrupt, 15.625 ms apart by default -- every `recv_timeout` here
@@ -181,14 +187,22 @@ pub(crate) fn spawn_lane(mut lane: CoreLoop, knobs: Arc<BusKnobs>) {
             // Rate limit for the DBC auto-reload sweep: cheap stats, but
             // there is no reason to stat attached files every lap.
             let mut last_dbc_sweep = Instant::now();
+            let mut last_publish = Instant::now();
             loop {
                 let now = elapsed_us(clock_zero);
+                let fast_rx =
+                    lane.core.measuring && !lane.core.trace_paused && lane.core.wants_fast_rx();
+                let idle_us = if fast_rx {
+                    FAST_RX_SLEEP_US
+                } else {
+                    IDLE_SLEEP_US
+                };
                 let wait_us = lane
                     .core
                     .next_deadline(now)
                     .map(|deadline| deadline.saturating_sub(now))
-                    .unwrap_or(IDLE_SLEEP_US)
-                    .min(IDLE_SLEEP_US);
+                    .unwrap_or(idle_us)
+                    .min(idle_us);
                 let (mut any, mut clock_reset) = (false, false);
                 match lane.inbox.recv_timeout(Duration::from_micros(wait_us)) {
                     Ok(cmd) => {
@@ -245,8 +259,18 @@ pub(crate) fn spawn_lane(mut lane: CoreLoop, knobs: Arc<BusKnobs>) {
                     if panicked {
                         lane.halt_after_internal_error("measurement step");
                     }
+                    let had_status = !status.is_empty();
                     lane.note(crate::bus::WriteKind::Info, status);
-                    lane.publish();
+                    // Fast RX laps are cheap; full snapshots are not. Keep the
+                    // mailbox fresh at 100 Hz instead of 1000 Hz.
+                    if panicked
+                        || had_status
+                        || !fast_rx
+                        || last_publish.elapsed() >= SNAPSHOT_EVERY
+                    {
+                        lane.publish();
+                        last_publish = Instant::now();
+                    }
                 } else if lane.core.measuring {
                     if paused_at.is_none() {
                         paused_at = Some(elapsed_us(clock_zero));

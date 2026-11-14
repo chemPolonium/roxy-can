@@ -381,7 +381,9 @@ impl KvaserChannel {
             flags = flags.union(FrameFlags::RTR);
         }
         Some(CanFrame {
-            t_us: 0, // stamped by the core against the sim clock
+            // canRead reports milliseconds; poll_rx keeps the spacing and
+            // anchors the batch to the sim clock.
+            t_us: u64::from(time) * 1_000,
             channel: 0,
             id,
             extended,

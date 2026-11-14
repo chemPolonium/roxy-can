@@ -152,6 +152,18 @@ pub enum HwPort {
 }
 
 impl HwPort {
+    /// Whether this is a real adapter rather than the headless test double.
+    fn is_real(&self) -> bool {
+        #[cfg(test)]
+        {
+            !matches!(self, HwPort::Mock(_))
+        }
+        #[cfg(not(test))]
+        {
+            true
+        }
+    }
+
     pub fn write_frame(&self, f: &CanFrame) -> Result<(), String> {
         match self {
             HwPort::Kvaser(ch) => ch.write_frame(f),
@@ -248,6 +260,18 @@ pub enum FrPort {
 }
 
 impl FrPort {
+    /// Whether this is a real adapter rather than the headless test double.
+    fn is_real(&self) -> bool {
+        #[cfg(test)]
+        {
+            !matches!(self, FrPort::Mock(_))
+        }
+        #[cfg(not(test))]
+        {
+            true
+        }
+    }
+
     fn try_read(&mut self) -> Option<vector::flexray::FrFrame> {
         match self {
             FrPort::Vector(ch) => ch.try_read(),
@@ -321,6 +345,30 @@ pub struct FrWatch {
     pub port: FrPort,
 }
 
+/// Keeps the spacing an adapter reported inside one poll (Vector `timeStampSync`
+/// nanoseconds, Kvaser `canRead` milliseconds) and anchors the newest frame to
+/// the poll time. Frames without a driver timestamp all take the poll time.
+fn spread_hw_batch(frames: &mut [CanFrame], sim_t_us: u64) {
+    let Some(newest) = frames
+        .iter()
+        .filter(|frame| frame.t_us > 0)
+        .map(|frame| frame.t_us)
+        .max()
+    else {
+        for frame in frames {
+            frame.t_us = sim_t_us;
+        }
+        return;
+    };
+    for frame in frames {
+        frame.t_us = if frame.t_us > 0 {
+            sim_t_us.saturating_sub(newest.saturating_sub(frame.t_us))
+        } else {
+            sim_t_us
+        };
+    }
+}
+
 impl Hardware {
     /// A fresh hardware map starts wire-connected: attaching is an
     /// explicit user act and they expect the adapter they just attached
@@ -342,6 +390,15 @@ impl Hardware {
     #[cfg(test)]
     pub fn is_attached(&self, bus: u8) -> bool {
         self.buses.contains_key(&bus)
+    }
+
+    /// Whether a real adapter (not the headless test double) is attached for
+    /// receive. The core polls these faster so a busy FD bus does not overflow
+    /// the driver queue between 10 ms steps.
+    pub fn has_real_rx(&self) -> bool {
+        self.buses.values().any(|bus| bus.port.is_real())
+            || self.fr_watches.values().any(|watch| watch.port.is_real())
+            || !self.eth_ports.is_empty()
     }
 
     /// Whether the bus's attachment has FD data-phase params applied.
@@ -556,13 +613,27 @@ impl Hardware {
     pub fn poll_rx(&mut self, sim_t_us: u64, out: &mut Vec<CanFrame>) {
         let mut news: Vec<(u8, std::collections::BTreeMap<u16, u64>)> = Vec::new();
         for (&bus, bh) in self.buses.iter_mut() {
-            while let Some(mut f) = bh.port.try_read() {
+            let has_driver_time = matches!(&bh.port, HwPort::Vector(_) | HwPort::Kvaser(_));
+            let mut batch = Vec::new();
+            while let Some(frame) = bh.port.try_read() {
+                batch.push(frame);
+            }
+            if has_driver_time && self.live {
+                // Adapter clocks give the spacing inside one poll, so a burst
+                // no longer collapses onto one timestamp. The newest frame
+                // anchors to the sim clock; older ones land before it.
+                spread_hw_batch(&mut batch, sim_t_us);
+            } else if self.live {
+                for frame in &mut batch {
+                    frame.t_us = sim_t_us;
+                }
+            }
+            for mut frame in batch {
                 if !self.live {
                     continue;
                 }
-                f.t_us = sim_t_us;
-                f.channel = bus;
-                out.push(f);
+                frame.channel = bus;
+                out.push(frame);
             }
             let tags = bh.port.take_tag_news();
             if !tags.is_empty() {
@@ -720,6 +791,38 @@ impl Hardware {
 mod tests {
     use super::*;
     use crate::can::frame::{CanFrame, Direction, FrameFlags, MAX_CAN_FD_LEN};
+
+    /// A hardware batch keeps the adapter's spacing instead of collapsing
+    /// every frame onto the poll instant; frames without a driver time still
+    /// fall back to that instant.
+    #[test]
+    fn a_hardware_batch_keeps_its_adapter_spacing() {
+        fn rx(t_us: u64) -> CanFrame {
+            CanFrame {
+                t_us,
+                channel: 0,
+                id: 0x100,
+                extended: false,
+                len: 0,
+                data: [0; MAX_CAN_FD_LEN],
+                dir: Direction::Rx,
+                flags: FrameFlags::NONE,
+            }
+        }
+        let mut frames = [rx(1_000), rx(1_500), rx(2_000)];
+        spread_hw_batch(&mut frames, 5_000);
+        assert_eq!(
+            frames.iter().map(|frame| frame.t_us).collect::<Vec<_>>(),
+            [4_000, 4_500, 5_000]
+        );
+
+        let mut untimed = [rx(0), rx(0)];
+        spread_hw_batch(&mut untimed, 700);
+        assert_eq!(
+            untimed.iter().map(|frame| frame.t_us).collect::<Vec<_>>(),
+            [700, 700]
+        );
+    }
 
     /// Hardware follows the bus index the channel list uses; removing a lower
     /// channel shifts the attachment with its own channel, so the adapter that

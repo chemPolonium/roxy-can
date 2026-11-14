@@ -7755,6 +7755,12 @@ impl BusCore {
 
     /// Blanks every run-scored counter: rings, aggregates, loads, spec
     /// memory, generator schedules, subscription measurement state.
+    /// A real adapter is attached and wired; the event loop can poll RX faster
+    /// than it publishes snapshots.
+    pub(crate) fn wants_fast_rx(&self) -> bool {
+        self.hw.live && self.hw.has_real_rx()
+    }
+
     pub(crate) fn reset_run(&mut self) {
         self.sim_t_us = 0;
         self.sim_prev_us = 0;
