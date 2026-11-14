@@ -62,13 +62,12 @@ pub struct Vm {
     steps: u64,
     /// Lines produced by `print`, in order.
     pub output: Vec<String>,
-    /// Messages queued by `send(id, ...)`: identifier plus up-to-8 payload
-    /// bytes. The host drains this after each handler run and decides
-    /// what "send" means (for a CAN node: a frame onto the bus). The
-    /// bool asks for an extended frame even when the numeric id sits in
-    /// the standard range (`send_ext`); `send` leaves the choice to the
-    /// id alone.
-    pub outbox: Vec<(u32, bool, Vec<u8>)>,
+    /// Messages queued by `send` / `send_fd`: identifier, forced-extended
+    /// bool, payload, and [`super::CAN_SEND_FD`] / [`super::CAN_SEND_BRS`]
+    /// flags. `send` leaves FD to the payload length; `send_fd` forces it.
+    /// The host drains this after each handler run and decides what "send"
+    /// means (for a CAN node: a frame onto the bus).
+    pub outbox: Vec<super::ScriptSend>,
     /// FlexRay slots queued by `fr_send(路, 槽, ...)`: the cluster index, the
     /// slot and the payload as typed. The FR twin of [`Vm::outbox`] -- the host
     /// drains this after each handler run and decides what "send" means (here:
@@ -1043,7 +1042,55 @@ impl Vm {
                     }
                     data
                 };
-                self.outbox.push((id, force_ext, data));
+                self.outbox.push((id, force_ext, data, 0));
+            }
+            // `send_fd` / `send_fd_ext`: force CAN FD even when the payload
+            // fits in 8 bytes. The optional third argument selects BRS; BRS
+            // always implies FD.
+            "send_fd" | "send_fd_ext" => {
+                let force_ext = name == "send_fd_ext";
+                if args.len() < 2 || args.len() > 3 {
+                    return Err(VmError(format!("{name}: expected id, buffer[, brs]")));
+                }
+                let id = match &args[0] {
+                    Value::Int(n) if (0..=0x1FF_FFFF).contains(n) => *n as u32,
+                    other => {
+                        return Err(VmError(format!(
+                            "{name}: id {} out of range (0..0x1FFFFFFF)",
+                            kind(other)
+                        )));
+                    }
+                };
+                let data = match &args[1] {
+                    Value::Bytes(buffer) => buffer.lock().expect("buffer poisoned").clone(),
+                    other => {
+                        return Err(VmError(format!(
+                            "{name}: payload must be a bytes() buffer, got {}",
+                            kind(other)
+                        )));
+                    }
+                };
+                if data.len() > 64 {
+                    return Err(VmError(format!(
+                        "{name}: payload up to 64 bytes, got {}",
+                        data.len()
+                    )));
+                }
+                let brs = match args.get(2) {
+                    None => false,
+                    Some(Value::Bool(value)) => *value,
+                    Some(other) => {
+                        return Err(VmError(format!(
+                            "{name}: brs must be true or false, got {}",
+                            kind(other)
+                        )));
+                    }
+                };
+                let mut flags = super::CAN_SEND_FD;
+                if brs {
+                    flags |= super::CAN_SEND_BRS;
+                }
+                self.outbox.push((id, force_ext, data, flags));
             }
             // `send_frame(instance)`: hand the frame to the host, which
             // resolves its catalog path, encodes every written physical signal
@@ -2434,7 +2481,7 @@ mod tests {
         assert_eq!(vm.output, ["171 255 8"]);
         assert_eq!(
             vm.outbox,
-            [(0x300, false, vec![0xAB, 0, 0, 0, 0, 0, 0, 255])],
+            [(0x300, false, vec![0xAB, 0, 0, 0, 0, 0, 0, 255], 0)],
             "the whole buffer goes out as the payload"
         );
     }

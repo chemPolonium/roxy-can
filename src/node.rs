@@ -152,7 +152,7 @@ struct RunSink<'a> {
     log: &'a mut VecDeque<String>,
     log_dirty: &'a mut bool,
     pending_lines: &'a mut Vec<String>,
-    out: &'a mut Vec<(u32, bool, Vec<u8>)>,
+    out: &'a mut Vec<crate::script::ScriptSend>,
 }
 
 impl ScriptNode {
@@ -947,7 +947,7 @@ impl ScriptNode {
         is_error: bool,
         data: &[u8],
         input: &HostInput,
-    ) -> Vec<(u32, bool, Vec<u8>)> {
+    ) -> Vec<crate::script::ScriptSend> {
         let mut out = Vec::new();
         let Some(rt) = self.runtime.as_mut() else {
             return out;
@@ -1088,7 +1088,7 @@ impl ScriptNode {
         name: &str,
         value: Option<f64>,
         input: &HostInput,
-    ) -> (usize, Vec<(u32, bool, Vec<u8>)>) {
+    ) -> (usize, Vec<crate::script::ScriptSend>) {
         let mut out = Vec::new();
         let Some(rt) = self.runtime.as_mut() else {
             return (0, out);
@@ -1165,7 +1165,7 @@ impl ScriptNode {
         cycle: u8,
         payload: &[u8],
         input: &HostInput,
-    ) -> Vec<(u32, bool, Vec<u8>)> {
+    ) -> Vec<crate::script::ScriptSend> {
         let mut out = Vec::new();
         let Some(rt) = self.runtime.as_mut() else {
             return out;
@@ -1270,7 +1270,7 @@ impl ScriptNode {
     /// first due one full period out; missed periods (a stalled host)
     /// collapse into one fire plus a resync. A named one-shot is spent
     /// the moment it fires; `set_timer` inside its own handler re-arms it.
-    pub fn run_timers(&mut self, now_us: u64, input: &HostInput) -> Vec<(u32, bool, Vec<u8>)> {
+    pub fn run_timers(&mut self, now_us: u64, input: &HostInput) -> Vec<crate::script::ScriptSend> {
         let mut out = Vec::new();
         let Some(rt) = self.runtime.as_mut() else {
             return out;
@@ -2207,7 +2207,7 @@ BO_ 512 GearInfo: 8 GearBox
         assert_eq!(n.panel_actions(), ["Go"]);
         let (ran, out) = n.dispatch_panel_action("Go", None, &HostInput::default());
         assert_eq!(ran, 1);
-        assert_eq!(out, vec![(0x123, false, vec![7])]);
+        assert_eq!(out, vec![(0x123, false, vec![7], 0)]);
         assert!(
             n.take_new_lines().iter().any(|line| line == "panel go"),
             "handler log reaches the node output"
@@ -2436,7 +2436,7 @@ BO_ 512 GearInfo: 8 GearBox
 
         // A watched frame queues the reaction payload.
         let out = n.dispatch_frame(0, 0x100, false, false, &[], &HostInput::default());
-        assert_eq!(out, vec![(0x200, false, vec![1, 2])]);
+        assert_eq!(out, vec![(0x200, false, vec![1, 2], 0)]);
 
         // Timers arm lazily one period out (armed at 50 ms -> first due
         // at 150 ms), then fire and resync.
@@ -2694,7 +2694,7 @@ BO_ 256 Real: 2 ECU
 
         // send_ext always travels extended, even below 0x700.
         let out = n.dispatch_frame(0, 0x60, false, false, &[], &HostInput::default());
-        assert_eq!(out, vec![(0x60, true, vec![7])]);
+        assert_eq!(out, vec![(0x60, true, vec![7], 0)]);
     }
 
     /// A buffer payload past 8 bytes travels as CAN FD with a valid FD
@@ -2726,6 +2726,50 @@ BO_ 256 Real: 2 ECU
         assert!(
             too_long.errored(),
             "past 64 bytes the send must fail the handler"
+        );
+    }
+
+    /// `send_fd` forces FD even for an 8-byte payload, where length alone
+    /// would mean a classic frame. The third argument selects BRS.
+    #[test]
+    fn send_fd_forces_fd_and_can_switch_brs() {
+        let mut n = node(
+            r#"
+                on message 0x100 {
+                    let reply = bytes(8);
+                    reply[0] = 0xAA;
+                    send_fd(0x300, reply);
+                    send_fd(0x301, reply, true);
+                    send_fd_ext(0x100, reply);
+                }
+            "#,
+        );
+        n.start(None);
+        let out = n.dispatch_frame(0, 0x100, false, false, &[], &HostInput::default());
+        assert_eq!(out.len(), 3);
+        assert_eq!(out[0].0, 0x300);
+        assert_eq!(out[0].2.len(), 8);
+        assert_eq!(out[0].2[0], 0xAA);
+        assert_eq!(out[0].3, crate::script::CAN_SEND_FD);
+        assert!(!out[0].1);
+        assert_eq!(
+            out[1].3,
+            crate::script::CAN_SEND_FD | crate::script::CAN_SEND_BRS
+        );
+        assert_eq!(out[2].3, crate::script::CAN_SEND_FD);
+        assert!(out[2].1, "send_fd_ext forces an extended id");
+
+        let mut too_long = node("let big = bytes(65); send_fd(0x300, big);");
+        too_long.start(None);
+        too_long.dispatch_frame(0, 0x100, false, false, &[], &HostInput::default());
+        assert!(too_long.errored(), "past 64 bytes the send must fail");
+
+        let mut not_a_buffer = node("on message 0x100 { send_fd(0x300, 1); }");
+        not_a_buffer.start(None);
+        not_a_buffer.dispatch_frame(0, 0x100, false, false, &[], &HostInput::default());
+        assert!(
+            not_a_buffer.errored(),
+            "send_fd takes a bytes() buffer, not positional bytes"
         );
     }
 
@@ -3376,7 +3420,7 @@ BO_ 256 Real: 2 ECU
         n.start(Some(engine_dbc()));
         let out = n.dispatch_frame(0, 0x100, false, false, &[7], &HostInput::default());
         assert_eq!(n.log_snapshot(), ["7"]);
-        assert_eq!(out, vec![(0x100, false, vec![9])]);
+        assert_eq!(out, vec![(0x100, false, vec![9], 0)]);
         assert!(
             n.dispatch_frame(0, 0x101, false, false, &[8], &HostInput::default())
                 .is_empty(),
@@ -3573,7 +3617,7 @@ BO_ 256 Real: 2 ECU
         let mut n = node("on message 0x100 { send(0x18FF10, 1); }");
         n.start(None);
         let out = n.dispatch_frame(0, 0x100, false, false, &[], &HostInput::default());
-        assert_eq!(out, vec![(0x18FF10, false, vec![1])]);
+        assert_eq!(out, vec![(0x18FF10, false, vec![1], 0)]);
     }
 
     const SIG_DBC: &str = r#"VERSION "roxy-can node sig test"
@@ -3644,7 +3688,7 @@ BO_ 512 Status: 8 ECU
         let out = n.dispatch_frame(0, 0x1, false, false, &[], &HostInput::default());
         assert_eq!(
             out,
-            vec![(0x200, false, vec![0xA0, 0x0F, 0, 0, 0, 0, 0, 0])]
+            vec![(0x200, false, vec![0xA0, 0x0F, 0, 0, 0, 0, 0, 0], 0)]
         );
     }
 

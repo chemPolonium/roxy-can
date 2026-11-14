@@ -155,7 +155,7 @@ on start {
 }
 ```
 
-`on start` 里不要发帧：`send` / `fr_send` / `send_frame` 都不会上线，脚本编辑器的
+`on start` 里不要发帧：`send` / `send_fd` / `fr_send` / `send_frame` 都不会上线，脚本编辑器的
 日志会提示 `sends are ignored in on start; use a timer or frame handler`。启动阶段
 总线还没进入运行状态，想让第一帧跟着测量走，用 `on timer 10 { … }` 或在帧事件里发。
 
@@ -169,7 +169,7 @@ on stop {
 }
 ```
 
-停止事件没有触发帧，`this.*` 与 `frame_*()` 不可用；停在这里的 `send` / `fr_send`
+停止事件没有触发帧，`this.*` 与 `frame_*()` 不可用；停在这里的 `send` / `send_fd` / `fr_send`
 不会再发到总线。
 
 ### on panel_action
@@ -395,7 +395,7 @@ on timer 100 {
 ### send(id, byte0, byte1, ...) / send(id, buffer)
 
 发送帧。id ≤ 0x7FF 为标准帧，> 0x7FF 为扩展帧；需要数值小的扩展帧用 `send_ext`（参数相同，永远按扩展帧发送）。
-载荷为 0..255 的整数字节或一个 bytes 缓冲；浮点值自动向零截断，所以波形内建可以直接写入载荷。缓冲超过 8 字节自动按 CAN FD 发送（长度取整到合法 FD 长度，上限 64）。
+载荷为 0..255 的整数字节或一个 bytes 缓冲；浮点值自动向零截断，所以波形内建可以直接写入载荷。缓冲超过 8 字节自动按 CAN FD 发送（长度取整到合法 FD 长度，上限 64）；需要 8 字节或更短的 FD 帧用 `send_fd`。
 
 ```c
 send(0x123, 0x01, 0x02);
@@ -405,6 +405,19 @@ send(0x200, buf);
 节点发出的帧会在同一个 step 内继续分发；如果一个处理器发送的就是它收到的帧，会形成自激循环。每一步的反应帧上限为 1024，超出后丢弃并在 Write 记一条警告，不会卡住 core。
 
 **id 必须可静态推导**（编译期规则）：字面量（`0x123`）、字面量的常量算术（`0x100 + 0x20`）、或 `frame_id()`。写变量 id 会**编译报错**——工具需要静态知道"这个节点可能发哪些报文"，才能与 DBC 声明对账、进 CI 门禁。动态转发场景写成 `on message *` + `send(frame_id(), ...)`。
+
+### send_fd(id, buffer[, brs]) / send_fd_ext(id, buffer[, brs])
+
+发送 CAN FD 帧：即使载荷不超过 8 字节也保留 FD 格式（`send` 只按长度判断，8 字节会走经典帧）。`buffer` 必须是 `bytes(n)`，长度 0..64；第三个参数 `true` 打开 BRS（数据段波特率切换），默认 false，BRS 隐含 FD。id 规则同 `send`；需要数值小的扩展帧时用 `send_fd_ext`。
+
+```c
+let reply = bytes(8);
+reply[0] = 0x22;
+send_fd(0x101, reply);        // 8-byte FD, BRS off
+send_fd(0x102, reply, true);  // 8-byte FD + BRS
+```
+
+`send_fd` 的 id 同样必须可静态推导。`send_frame` 仍按编码后的长度决定是否 FD，不接受强制 FD/BRS 参数。
 
 ### frame(Bus.Frame) / send_frame(instance)
 

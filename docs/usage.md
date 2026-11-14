@@ -81,6 +81,7 @@ roxy-can -h                               完整帮助
 - **FlexRay 事件里的帧上下文**：`frame_id()` 是槽号、`frame_dlc()` 是字节数、`frame_byte(i)` 读载荷、`fr_cycle()` 是这次到达的通信周期号。一个静态槽按周期相位轮流排好几帧，处理器读到的是**实际到达那一帧**。`send(frame_id())` 在这种处理器里是编译错误——把槽号当 CAN id 发出去是两套编号混用最典型的错。
 - 节点会收到**自己发出的帧**：通配或同 ID 处理器里无条件发帧会自激成环，用 `frame_id()` 过滤。
 - 帧处理器里用 `this` 读触发帧：`this.bus` / `this.id`（CAN）/ `this.slot`、`this.cycle`（FlexRay）/ `this.len` / `this[i]` / `this.signal("名")`；`node.bus` 是脚本自己的 CAN 通道，定时器里也能用。网关脚本因此不用硬编码触发帧的 id 或总线号。
+- **发送 FD**：`send` 只在载荷超过 8 字节时自动走 FD；需要 8 字节或更短的 FD 帧用 `send_fd(id, buffer[, brs])`（`buffer` 必须是 `bytes(n)`，`brs=true` 同时切换数据段波特率；`send_fd_ext` 强制扩展帧）。`send` 的逐字节形式仍然最多 8 字节。
 - 编译或运行出错即**自动停止运行**，日志留原因；重新 Apply 或重启测量恢复。周期定时器错过的点收敛为一次触发。
 - `print(...)` 进节点日志（200 行封顶）并同步进 Write 窗口。
 - `examples/` 有一组可运行示例（心跳、延迟应答、按值分发、信号监视、嗅探转发、错误监视、派生信号、系统变量联动、FlexRay 网关）。

@@ -3422,8 +3422,8 @@ impl BusCore {
                     anode,
                 ) == NodeRole::Simulated
             });
-            for (id, ext, data) in node.run_timers(now_us, &input) {
-                let frame = Self::node_frame(node.channel, id, ext, &data, self.sim_t_us);
+            for (id, ext, data, flags) in node.run_timers(now_us, &input) {
+                let frame = Self::node_frame(node.channel, id, ext, &data, flags, self.sim_t_us);
                 // Real bus 模式下脚本帧与生成器帧一样经已连接的通道发出。
                 if script_allowed {
                     self.hw.write_if_live(node.channel, &frame);
@@ -3507,8 +3507,9 @@ impl BusCore {
                     ) == NodeRole::Simulated
                 });
                 if script_allowed {
-                    for (id, ext, data) in &node_out {
-                        let frame = Self::node_frame(node.channel, *id, *ext, data, self.sim_t_us);
+                    for (id, ext, data, flags) in &node_out {
+                        let frame =
+                            Self::node_frame(node.channel, *id, *ext, data, *flags, self.sim_t_us);
                         self.hw.write_if_live(node.channel, &frame);
                         self.buf.push(frame);
                     }
@@ -3569,7 +3570,7 @@ impl BusCore {
         &mut self,
         f: &CanFrame,
         input: &HostInput,
-    ) -> Vec<(u32, bool, Vec<u8>)> {
+    ) -> Vec<crate::script::ScriptSend> {
         let mut out = Vec::new();
         let mut derived: Vec<(u8, u64, String, String, f64)> = Vec::new();
         let mut sys_writes: Vec<(u64, String, f64)> = Vec::new();
@@ -3598,8 +3599,8 @@ impl BusCore {
             // The node's own wire egress: Real bus 模式下反应帧与生成器帧
             // 一样经已连接的通道发出。
             if script_allowed {
-                for (id, ext, data) in &node_out {
-                    let frame = Self::node_frame(node.channel, *id, *ext, data, f.t_us);
+                for (id, ext, data, flags) in &node_out {
+                    let frame = Self::node_frame(node.channel, *id, *ext, data, *flags, f.t_us);
                     self.hw.write_if_live(node.channel, &frame);
                 }
             }
@@ -3690,8 +3691,8 @@ impl BusCore {
             });
             let input = inputs.get(&node.channel).cloned().unwrap_or_default();
             let node_out = node.dispatch_fr_row(row.bus, row.slot, row.cycle, &row.payload, &input);
-            for (id, ext, data) in &node_out {
-                let frame = Self::node_frame(node.channel, *id, *ext, data, row.t_us);
+            for (id, ext, data, flags) in &node_out {
+                let frame = Self::node_frame(node.channel, *id, *ext, data, *flags, row.t_us);
                 if script_allowed {
                     self.hw.write_if_live(node.channel, &frame);
                 }
@@ -4012,14 +4013,26 @@ impl BusCore {
     /// forced the class the other way (`send_ext`). A payload past 8
     /// bytes becomes a CAN FD frame, snapped to a valid FD length exactly
     /// like the generator's own emit path.
-    fn node_frame(channel: u8, id: u32, force_extended: bool, data: &[u8], t_us: u64) -> CanFrame {
+    fn node_frame(
+        channel: u8,
+        id: u32,
+        force_extended: bool,
+        data: &[u8],
+        send_flags: u8,
+        t_us: u64,
+    ) -> CanFrame {
         use crate::can::frame::{FrameFlags, dlc2len, len2dlc};
         let data_len = data.len().min(crate::can::frame::MAX_CAN_FD_LEN);
-        let (len, flags) = if data_len > 8 {
+        let force_fd = send_flags & crate::script::CAN_SEND_FD != 0;
+        let brs = send_flags & crate::script::CAN_SEND_BRS != 0;
+        let (len, mut flags) = if force_fd || brs || data_len > 8 {
             (dlc2len(len2dlc(data_len as u8)), FrameFlags::FD)
         } else {
             (data_len as u8, FrameFlags::NONE)
         };
+        if flags.contains(FrameFlags::FD) && brs {
+            flags = flags.union(FrameFlags::BRS);
+        }
         let mut buf = [0u8; crate::can::frame::MAX_CAN_FD_LEN];
         buf[..data_len].copy_from_slice(&data[..data_len]);
         CanFrame {
@@ -8580,7 +8593,7 @@ impl BusCore {
             let node_inputs = self.build_node_inputs(now_us);
             let input = node_inputs.get(&f.channel).cloned().unwrap_or_default();
             let queued = self.dispatch_node_frame(&f, &input);
-            for (id, ext, data) in queued {
+            for (id, ext, data, flags) in queued {
                 if node_reactions >= MAX_NODE_REACTIONS_PER_STEP {
                     if !reaction_limit_noted {
                         reaction_limit_noted = true;
@@ -8596,7 +8609,7 @@ impl BusCore {
                 }
                 node_reactions += 1;
                 self.buf
-                    .push(Self::node_frame(f.channel, id, ext, &data, f.t_us));
+                    .push(Self::node_frame(f.channel, id, ext, &data, flags, f.t_us));
             }
         }
         if i > 0 || fr_landed || eth_landed {
@@ -10378,6 +10391,34 @@ mod tests {
         assert_eq!(wire_note(0, false), "simulation", "nothing to park");
         assert_eq!(wire_note(2, true), "real bus · 2");
         assert_eq!(wire_note(2, false), "simulation · hardware parked");
+    }
+
+    /// `send_fd` sets FD even at eight bytes, where length alone would mean a
+    /// classic frame; the BRS bit rides on the same send flags.
+    #[test]
+    fn script_send_flags_reach_the_frame() {
+        let payload = [0xAA; 8];
+        let classic = BusCore::node_frame(0, 0x100, false, &payload, 0, 0);
+        assert!(!classic.is_fd(), "eight bytes alone stays classic");
+        assert_eq!(classic.len, 8);
+
+        let fd = BusCore::node_frame(0, 0x100, false, &payload, crate::script::CAN_SEND_FD, 0);
+        assert!(fd.is_fd(), "send_fd forces the FD flag");
+        assert!(!fd.brs());
+        assert_eq!(fd.len, 8);
+
+        let brs = BusCore::node_frame(
+            0,
+            0x101,
+            true,
+            &payload,
+            crate::script::CAN_SEND_FD | crate::script::CAN_SEND_BRS,
+            0,
+        );
+        assert!(brs.is_fd());
+        assert!(brs.brs());
+        assert!(brs.extended);
+        assert_eq!(brs.len, 8);
     }
 
     fn fr_row(t_us: u64, slot: u16) -> crate::trace::FrRow {

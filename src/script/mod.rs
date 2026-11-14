@@ -502,6 +502,15 @@ pub struct ResponseRow {
     pub sends: Vec<(u32, bool)>,
 }
 
+/// `send_fd` marks a CAN send as FD even when the payload fits in 8 bytes.
+pub const CAN_SEND_FD: u8 = 1 << 0;
+/// `send_fd(..., true)` also switches the data-phase bitrate. BRS implies FD.
+pub const CAN_SEND_BRS: u8 = 1 << 1;
+
+/// One CAN frame queued by `send` / `send_fd`: identifier, forced-extended,
+/// payload, and [`CAN_SEND_FD`] / [`CAN_SEND_BRS`] flags.
+pub type ScriptSend = (u32, bool, Vec<u8>, u8);
+
 /// The host functions every script can call. The compiler resolves names
 /// to ids here; the VM implements the behaviour with the same indices.
 /// External simulation components register additional entries here
@@ -584,6 +593,8 @@ pub const HOST_FNS: &[(&str, usize, usize)] = &[
     // earlier entry moving would invalidate every stored script's bytecode.
     ("fr_send", 3, 11),
     ("set_fr_sig", 4, 4),
+    ("send_fd", 2, 3),
+    ("send_fd_ext", 2, 3),
 ];
 
 /// Human-facing call shapes for the editor's completion popup. Kept beside
@@ -594,6 +605,8 @@ pub const SCRIPT_HELP: &[(&str, &str)] = &[
     ("format", "format(\"text\", …)"),
     ("test", "test(\"name\", condition)"),
     ("send", "send(id, byte, …)"),
+    ("send_fd", "send_fd(id, buffer, brs = false)"),
+    ("send_fd_ext", "send_fd_ext(id, buffer, brs = false)"),
     ("send_frame", "send_frame(frame_instance)"),
     (
         "someip_send",

@@ -944,11 +944,14 @@ impl Comp {
                     // non-derivable is a compile error, not a runtime
                     // surprise. A wildcard forward is the one declared
                     // exception: reported, not rejected.
-                    if (*name == "send" || *name == "send_ext")
+                    if (*name == "send"
+                        || *name == "send_ext"
+                        || *name == "send_fd"
+                        || *name == "send_fd_ext")
                         && !args.is_empty()
                         && let Some((kind, from)) = self.cur_handler.clone()
                     {
-                        let ext_call = *name == "send_ext";
+                        let ext_call = *name == "send_ext" || *name == "send_fd_ext";
                         // `frame_id()` echoes the frame that triggered the
                         // handler: bounded by the event binding itself.
                         let is_frame_id =
@@ -1383,6 +1386,20 @@ mod tests {
         assert_eq!(
             script.send_refs[1],
             ("<on timer 100>".to_string(), 0x120, true)
+        );
+    }
+
+    #[test]
+    fn send_fd_joins_the_static_send_set() {
+        let script = compile_ok(
+            "on timer 100 { let b = bytes(8); send_fd(0x321, b); send_fd_ext(0x322, b, true); }",
+        );
+        assert_eq!(
+            script.send_refs,
+            vec![
+                ("<on timer 100>".to_string(), 0x321, false),
+                ("<on timer 100>".to_string(), 0x322, true),
+            ]
         );
     }
 
