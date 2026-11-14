@@ -143,8 +143,12 @@ impl Recorder {
     }
 
     pub fn write_eth(&mut self, f: &crate::eth::EthFrame) {
-        if let Some(Backend::Blf(writer)) = &mut self.writer {
-            writer.write_eth(f);
+        match &mut self.writer {
+            Some(Backend::Blf(writer)) => writer.write_eth(f),
+            Some(Backend::Asc(writer)) => {
+                writer.write_eth(f).ok();
+            }
+            None => {}
         }
         if self.eth.is_none()
             && let Some(path) = self.eth_path.clone()
@@ -369,6 +373,11 @@ mod tests {
         assert!(rec.last_eth_record.ends_with(".eth.pcap"));
         assert!(std::path::Path::new(&rec.last_eth_record).exists());
         rec.close();
+        let main = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            main.contains(" ETH "),
+            "the ASC main file carries the Ethernet line too"
+        );
         let data = std::fs::read(&rec.last_eth_record).unwrap();
         assert!(data.len() > 24, "PCAP header + one record");
         std::fs::remove_dir_all(&dir).ok();

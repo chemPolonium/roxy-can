@@ -15,15 +15,19 @@ impl AscWriter {
     pub fn new(path: &str) -> std::io::Result<Self> {
         let file = File::create(path)?;
         let mut w = BufWriter::new(file);
-        // Vector/CANoe header. The date keeps the ASC shape (`AM`/`PM`
+        // Vector/CANoe header. The date keeps the ASC shape (`am`/`pm`
         // before the year); some readers reject a bare 24-hour clock.
         // `base hex` + absolute timestamps; FD frames are marked per-line
         // (the `CANFD` token), so one header serves classic and FD traffic.
-        let date = chrono::Local::now().format("%a %b %d %I:%M:%S%.3f %p %Y");
+        let date = chrono::Local::now()
+            .format("%a %b %d %I:%M:%S%.3f %p %Y")
+            .to_string()
+            .replace(" AM", " am")
+            .replace(" PM", " pm");
         writeln!(w, "date {date}")?;
         writeln!(w, "base hex  timestamps absolute")?;
         writeln!(w, "internal events logged")?;
-        writeln!(w, "Begin Triggerblock {date}")?;
+        writeln!(w, "Begin TriggerBlock {date}")?;
         writeln!(w, "0.000000 Start of measurement")?;
         Ok(AscWriter { w })
     }
@@ -101,6 +105,26 @@ impl AscWriter {
                 f.dlc_code(),
             )
         }
+    }
+
+    /// CANoe's Ethernet line: `<t>  ETH <ch> <dir> <len:x>:<L2 hex>`. The
+    /// length is the hex L2 byte count (MAC/VLAN/EtherType/payload, no FCS),
+    /// matching the lines CANoe writes for automotive Ethernet.
+    pub fn write_eth(&mut self, f: &crate::eth::EthFrame) -> std::io::Result<()> {
+        let t = f.t_us as f64 / 1e6;
+        let dir = match f.dir {
+            Direction::Rx => "Rx",
+            Direction::Tx => "Tx",
+        };
+        let l2 = super::pcap::eth_l2_bytes(f);
+        let hex: String = l2.iter().map(|b| format!("{b:02X}")).collect();
+        writeln!(
+            self.w,
+            "{t:.6}  ETH {:>3} {:<4} {:x}:{hex}",
+            f.bus + 1,
+            dir,
+            l2.len()
+        )
     }
 
     /// CANoe's FlexRay receive line: `<t> Fr RMSG <chIdx><?> <chA> <chB>
@@ -830,11 +854,39 @@ mod tests {
         let tokens: Vec<&str> = first.split_whitespace().collect();
         assert_eq!(tokens[0], "date");
         assert!(
-            matches!(tokens.get(5), Some(&"AM") | Some(&"PM")),
-            "CANoe's date carries AM/PM before the year: {first}"
+            matches!(tokens.get(5), Some(&"am") | Some(&"pm")),
+            "CANoe's date carries am/pm before the year: {first}"
         );
-        assert!(text.contains("Begin Triggerblock "));
+        assert!(text.contains("Begin TriggerBlock "));
         assert!(text.contains("End TriggerBlock"));
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn ethernet_lines_follow_canoes_eth_shape() {
+        let path =
+            std::env::temp_dir().join(format!("roxy_can_asc_eth_{}.asc", std::process::id()));
+        let frame = crate::eth::EthFrame::session(1_000, 0, Some(7), 0x0800, vec![0u8; 46]);
+        let mut writer = AscWriter::new(&path.to_string_lossy()).unwrap();
+        writer.write_eth(&frame).unwrap();
+        writer.finish().unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        let line = text
+            .lines()
+            .find(|line| line.contains(" ETH "))
+            .expect("an ETH line");
+        assert!(
+            line.contains(" ETH   1 Tx"),
+            "channel and direction: {line}"
+        );
+        assert!(
+            line.contains("40:"),
+            "64-byte L2 frame uses the hex length and a colon: {line}"
+        );
+        assert!(
+            line.contains("8100"),
+            "the VLAN tag rides inside the L2 bytes: {line}"
+        );
         std::fs::remove_file(&path).ok();
     }
 

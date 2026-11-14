@@ -351,7 +351,7 @@ impl PcapWriter {
     }
 }
 
-fn eth_l2_bytes(frame: &EthFrame) -> Vec<u8> {
+pub(crate) fn eth_l2_bytes(frame: &EthFrame) -> Vec<u8> {
     let mut out = Vec::with_capacity(18 + frame.payload.len());
     out.extend_from_slice(&frame.dst);
     out.extend_from_slice(&frame.src);

@@ -8577,7 +8577,7 @@ mod tests {
             (
                 "trace",
                 dir.join("roxy_web_export.asc"),
-                "Begin Triggerblock",
+                "Begin TriggerBlock",
             ),
             (
                 "messages",
