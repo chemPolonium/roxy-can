@@ -231,7 +231,7 @@ function editorTheme(theme: EditorTheme) {
       },
       ".cm-scroller": {
         fontFamily:
-          '"Roxy Code", "Cascadia Mono", Consolas, "Microsoft YaHei", monospace',
+          'ui-monospace, monospace',
         fontSize: "12px",
         lineHeight: "1.5",
       },
@@ -273,7 +273,7 @@ function editorTheme(theme: EditorTheme) {
         color: c.selectedText,
       },
       ".cm-tooltip-autocomplete > ul > li": {
-        fontFamily: '"Roxy Code", "Cascadia Mono", Consolas, monospace',
+        fontFamily: 'ui-monospace, monospace',
         lineHeight: "1.5",
       },
       ".cm-panels": {
@@ -286,7 +286,7 @@ function editorTheme(theme: EditorTheme) {
       },
       ".cm-panel.cm-search": {
         padding: "6px",
-        fontFamily: '"Roxy Code", "Cascadia Mono", Consolas, monospace',
+        fontFamily: 'ui-monospace, monospace',
         fontSize: "10.5px",
       },
       ".cm-panel.cm-search input, .cm-panel.cm-search button": {
@@ -294,7 +294,7 @@ function editorTheme(theme: EditorTheme) {
         color: c.panelText,
         border: `1px solid ${c.panelBorder}`,
         borderRadius: "3px",
-        fontFamily: '"Roxy Code", "Cascadia Mono", Consolas, monospace',
+        fontFamily: 'ui-monospace, monospace',
         fontSize: "10.5px",
       },
       ".cm-panel.cm-search label": {
