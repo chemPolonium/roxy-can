@@ -6664,8 +6664,7 @@ button.danger:hover:not(:disabled) {
   border-radius: 3px;
 }
 
-/* Node scripts: a compact list plus a plain textarea editor (no syntax
-   highlighting yet) and the node's runtime log. */
+/* Node scripts: a compact list, the CodeMirror editor and the runtime log. */
 .scripts-modal {
   display: flex;
   flex-direction: column;
@@ -6807,6 +6806,82 @@ button.danger:hover:not(:disabled) {
   position: relative;
   flex: 1 1 auto;
   min-height: 160px;
+}
+
+.script-cm-wrap {
+  position: relative;
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 160px;
+  min-width: 0;
+}
+
+.script-cm {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 160px;
+  overflow: hidden;
+  background: #0b1016;
+  border: 1px solid #263140;
+  border-radius: 4px;
+}
+
+.script-cm-loading {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  justify-content: center;
+  min-height: 160px;
+  color: var(--muted);
+  background: #0b1016;
+  border: 1px solid #263140;
+  border-radius: 4px;
+  font-size: 10.5px;
+}
+
+.script-cm .cm-editor {
+  height: 100%;
+}
+
+.script-cm .cm-scroller {
+  overflow: auto;
+}
+
+body:has(.cm-tooltip-autocomplete) .script-signature {
+  display: none;
+}
+
+.cm-tooltip.cm-tooltip-autocomplete {
+  background: #0d141d;
+  border: 1px solid #2d4055;
+  border-radius: 4px;
+  box-shadow: 0 8px 22px rgb(0 0 0 / 45%);
+  color: #cdd8e4;
+  font-family: "Cascadia Mono", Consolas, monospace;
+  font-size: 10.5px;
+}
+
+.cm-tooltip-autocomplete > ul {
+  max-height: 220px;
+  padding: 4px;
+  background: #0d141d;
+}
+
+.cm-tooltip-autocomplete > ul > li {
+  padding: 3px 6px;
+  border-radius: 3px;
+  color: #cdd8e4;
+}
+
+.cm-tooltip-autocomplete > ul > li[aria-selected] {
+  background: #142334;
+  color: #e8f0f8;
+}
+
+.cm-tooltip-autocomplete .cm-completionDetail {
+  margin-left: 10px;
+  color: var(--muted);
+  font-family: "Cascadia Mono", Consolas, monospace;
 }
 
 .script-code {

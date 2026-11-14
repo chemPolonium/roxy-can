@@ -1,4 +1,5 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "preact/hooks";
+import { useEffect, useRef, useState } from "preact/hooks";
+import { lazy, Suspense } from "preact/compat";
 import {
   fetchDebug,
   fetchScriptHelp,
@@ -17,7 +18,17 @@ import type {
   SysVar,
 } from "../types";
 import { FilePick } from "./FilePick";
+import type { ScriptEditorApi } from "../scriptEditor";
+import { SCRIPT_KEYWORDS as KEYWORDS } from "../scriptKeywords";
 import { frameOrigins } from "../scriptFrames";
+
+// CodeMirror is only needed once a script is edited; keep it out of the
+// initial shell bundle.
+const ScriptCodeEditor = lazy(() =>
+  import("./ScriptCodeEditor").then((module) => ({
+    default: module.ScriptCodeEditor,
+  })),
+);
 
 interface Props {
   buses: Bus[];
@@ -28,9 +39,6 @@ interface Props {
   onClose: () => void;
 }
 
-const INDENT = "    ";
-const BRACKET_PAIRS: Record<string, string> = { "(": ")", "[": "]", "{": "}" };
-const BRACKET_CLOSERS = new Set(Object.values(BRACKET_PAIRS));
 
 export interface CompletionItem {
   label: string;
@@ -39,17 +47,6 @@ export interface CompletionItem {
   /// Caret offset from the start of the inserted text.
   caret: number;
   rank: number;
-}
-
-interface Completion {
-  start: number;
-  end: number;
-  items: CompletionItem[];
-  active: number;
-  left: number;
-  top: number;
-  /// Alt+/ or arrow-key navigation: Enter/Tab may accept the selection.
-  manual: boolean;
 }
 
 interface SignatureHint {
@@ -69,49 +66,9 @@ function lineEndOf(text: string, position: number): number {
   return end < 0 ? text.length : end;
 }
 
-function lineOffset(text: string, line: number): number {
-  let offset = 0;
-  for (let current = 1; current < line; current += 1) {
-    const next = text.indexOf("\n", offset);
-    if (next < 0) return text.length;
-    offset = next + 1;
-  }
-  return offset;
-}
 
-function revealPosition(textarea: HTMLTextAreaElement, position: number) {
-  const style = getComputedStyle(textarea);
-  const lineHeight =
-    Number.parseFloat(style.lineHeight) ||
-    (Number.parseFloat(style.fontSize) || 11.5) * 1.45;
-  const padTop = Number.parseFloat(style.paddingTop) || 0;
-  const line = textarea.value.slice(0, position).split("\n").length - 1;
-  const top = padTop + line * lineHeight;
-  if (top < textarea.scrollTop) {
-    textarea.scrollTop = Math.max(0, top - lineHeight);
-  } else if (top + lineHeight > textarea.scrollTop + textarea.clientHeight) {
-    textarea.scrollTop = top + lineHeight - textarea.clientHeight + lineHeight;
-  }
-}
 
-export function findMatches(text: string, query: string): number[] {
-  if (!query) return [];
-  const haystack = text.toLowerCase();
-  const needle = query.toLowerCase();
-  const hits: number[] = [];
-  let at = 0;
-  while (at <= haystack.length) {
-    const found = haystack.indexOf(needle, at);
-    if (found < 0) break;
-    hits.push(found);
-    at = found + needle.length;
-  }
-  return hits;
-}
 
-function escapeRegExp(text: string): string {
-  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
 
 export interface LocalSymbol {
   name: string;
@@ -384,97 +341,10 @@ export function signatureArgs(usage: string): string[] {
   return args;
 }
 
-function leadingSpace(text: string): string {
-  return /^[ \t]*/.exec(text)?.[0] ?? "";
-}
 
 /// Replaces a range through the browser's own insertion command so typing
 /// remains one undo step. Falls back to `setRangeText` if the command is
 /// unavailable (e.g. an embedded webview).
-function replaceRange(
-  textarea: HTMLTextAreaElement,
-  start: number,
-  end: number,
-  text: string,
-  caret: number,
-  selectionEnd = caret,
-) {
-  textarea.focus();
-  textarea.setSelectionRange(start, end);
-  let inserted = false;
-  try {
-    inserted = document.execCommand("insertText", false, text);
-  } catch {
-    inserted = false;
-  }
-  if (!inserted) {
-    textarea.setRangeText(text, start, end, "end");
-    textarea.dispatchEvent(new Event("input", { bubbles: true }));
-  }
-  textarea.setSelectionRange(caret, selectionEnd);
-}
-
-function quoted(text: string): string {
-  return text.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
-}
-
-let measureCanvas: HTMLCanvasElement | null = null;
-
-function characterWidth(style: CSSStyleDeclaration): number {
-  measureCanvas ??= document.createElement("canvas");
-  const context = measureCanvas.getContext("2d");
-  if (!context) return 7;
-  context.font = `${style.fontWeight} ${style.fontSize} ${style.fontFamily}`;
-  return context.measureText("M").width || 7;
-}
-
-/// The editor uses a monospace font and `white-space: pre`, so the caret's
-/// pixel position is line/column arithmetic plus a character-width measure.
-/// The popup is clamped inside the editor and flips above near the bottom.
-function caretPlacement(
-  textarea: HTMLTextAreaElement,
-  position: number,
-  boxWidth: number,
-  boxHeight: number,
-): { left: number; top: number } {
-  const style = getComputedStyle(textarea);
-  const padLeft = Number.parseFloat(style.paddingLeft) || 0;
-  const padTop = Number.parseFloat(style.paddingTop) || 0;
-  const lineHeight =
-    Number.parseFloat(style.lineHeight) ||
-    (Number.parseFloat(style.fontSize) || 11.5) * 1.45;
-  const before = textarea.value.slice(0, position);
-  const line = before.split("\n").length - 1;
-  const lineText = before.slice(before.lastIndexOf("\n") + 1);
-  let column = 0;
-  for (const char of lineText) {
-    column += char === "\t" ? 4 - (column % 4) : 1;
-  }
-  const charWidth = characterWidth(style);
-  const editor = textarea.parentElement;
-  const width = editor?.clientWidth ?? 0;
-  const height = editor?.clientHeight ?? 0;
-  const x = padLeft + column * charWidth - textarea.scrollLeft;
-  const y = padTop + (line + 1) * lineHeight - textarea.scrollTop;
-  const left = Math.max(4, Math.min(x, Math.max(4, width - boxWidth - 6)));
-  const top =
-    y + 2 + boxHeight <= height - 4 ? y + 2 : Math.max(4, y - boxHeight - 2);
-  return { left, top };
-}
-
-function completionPlacement(
-  textarea: HTMLTextAreaElement,
-  position: number,
-  itemCount: number,
-): { left: number; top: number } {
-  return caretPlacement(
-    textarea,
-    position,
-    340,
-    Math.min(190, 8 + Math.min(itemCount, 8) * 22),
-  );
-}
-
 function catalogMessages(
   catalog: Catalog | null,
   channel: number,
@@ -595,6 +465,10 @@ function messageDetail(message: { id: number; extended: boolean }) {
 /// builtins and derived/sysvar call templates; `Message.` and `Message["…"]`
 /// list that message's DBC signals; inside `derived("…")` (or
 /// `sys_get`/`sys_set`) only the matching names are offered.
+function quoted(text: string): string {
+  return text.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+}
+
 export function buildCandidates(
   value: string,
   caret: number,
@@ -1494,116 +1368,6 @@ const EVENTS: [string, string][] = [
   ["fr", "FlexRay slot arrival"],
 ];
 
-const KEYWORDS = new Set([
-  "on",
-  "start",
-  "stop",
-  "timer",
-  "if",
-  "else",
-  "for",
-  "while",
-  "return",
-  "let",
-  "var",
-  "const",
-  "true",
-  "false",
-  "break",
-  "continue",
-  "this",
-  "node",
-]);
-
-function escapeHtml(text: string): string {
-  return text
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;");
-}
-
-export interface HighlightLine {
-  html: string;
-  /// The line ends inside a block comment.
-  block: boolean;
-}
-
-const HL_TOKEN =
-  /\/\/[^\n]*|\/\*[\s\S]*?\*\/|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|\b\d+(?:\.\d+)?\b|[A-Za-z_]\w*/g;
-
-/// A deliberately small highlighter: comments, strings, numbers, keywords
-/// and call names. It paints the <pre> behind the textarea; the textarea
-/// itself keeps the caret and input handling. Lines are highlighted one at
-/// a time so an edit only re-tokenizes the lines whose text or comment
-/// state actually changed.
-export function highlightLine(
-  line: string,
-  startBlock: boolean,
-  nextParen: boolean,
-): HighlightLine {
-  let out = "";
-  let at = 0;
-  if (startBlock) {
-    const end = line.indexOf("*/");
-    if (end < 0) {
-      return {
-        html: `<span class="tok-comment">${escapeHtml(line)}</span>`,
-        block: true,
-      };
-    }
-    const stop = end + 2;
-    out += `<span class="tok-comment">${escapeHtml(line.slice(0, stop))}</span>`;
-    at = stop;
-  }
-  const rest = line.slice(at);
-  HL_TOKEN.lastIndex = 0;
-  let last = 0;
-  for (const match of rest.matchAll(HL_TOKEN)) {
-    const index = match.index ?? 0;
-    const gap = rest.slice(last, index);
-    const open = gap.indexOf("/*");
-    if (open >= 0) {
-      out += escapeHtml(gap.slice(0, open));
-      out += `<span class="tok-comment">${escapeHtml(rest.slice(last + open))}</span>`;
-      return { html: out, block: true };
-    }
-    out += escapeHtml(gap);
-    const text = match[0];
-    last = index + text.length;
-    if (text.startsWith("//") || text.startsWith("/*")) {
-      out += `<span class="tok-comment">${escapeHtml(text)}</span>`;
-    } else if (text.startsWith('"') || text.startsWith("'")) {
-      out += `<span class="tok-string">${escapeHtml(text)}</span>`;
-    } else if (/^\d/.test(text)) {
-      out += `<span class="tok-number">${text}</span>`;
-    } else if (KEYWORDS.has(text)) {
-      out += `<span class="tok-keyword">${text}</span>`;
-    } else {
-      const after = rest.slice(last);
-      const call = /^\s*\(/.test(after) || (after.trim() === "" && nextParen);
-      out += call
-        ? `<span class="tok-fn">${text}</span>`
-        : escapeHtml(text);
-    }
-  }
-  const tail = rest.slice(last);
-  const open = tail.indexOf("/*");
-  if (open >= 0) {
-    out += escapeHtml(tail.slice(0, open));
-    out += `<span class="tok-comment">${escapeHtml(tail.slice(open))}</span>`;
-    return { html: out, block: true };
-  }
-  out += escapeHtml(tail);
-  return { html: out, block: false };
-}
-
-interface HighlightState {
-  script: number | null;
-  entries: HighlightLine[];
-  nodes: HTMLDivElement[];
-  cache: Map<string, HighlightLine>;
-}
-
 function busName(buses: Bus[], channel: number): string {
   return buses[channel]?.name ?? `CAN${channel + 1}`;
 }
@@ -1622,19 +1386,8 @@ export function ScriptsModal({
   const [selected, setSelected] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const [composing, setComposing] = useState(false);
-  const highlightRef = useRef<HTMLPreElement>(null);
-  const hlStateRef = useRef<HighlightState | null>(null);
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
   const [functions, setFunctions] = useState<ScriptFunctionHelp[]>([]);
-  const [completion, setCompletion] = useState<Completion | null>(null);
   const [signature, setSignature] = useState<SignatureHint | null>(null);
-  const [findOpen, setFindOpen] = useState(false);
-  const [findText, setFindText] = useState("");
-  const [replaceText, setReplaceText] = useState("");
-  const findInputRef = useRef<HTMLInputElement>(null);
-  const replaceInputRef = useRef<HTMLInputElement>(null);
-  const issueLineRef = useRef<HTMLDivElement>(null);
   const [reload, setReload] = useState(0);
   const editing = useRef<Set<number>>(new Set());
   const selectNewest = useRef(false);
@@ -1650,9 +1403,7 @@ export function ScriptsModal({
     {},
   );
   const [debugError, setDebugError] = useState("");
-  const gutterRef = useRef<HTMLDivElement>(null);
-  const gutterNumsRef = useRef<HTMLPreElement>(null);
-  const debugLineRef = useRef<HTMLDivElement>(null);
+  const editorApi = useRef<ScriptEditorApi | null>(null);
   const debugArmedRef = useRef(false);
 
   useEffect(() => {
@@ -1667,11 +1418,7 @@ export function ScriptsModal({
 
   useEffect(() => {
     // A different script has a different caret context.
-    setCompletion(null);
     setSignature(null);
-    setFindOpen(false);
-    setFindText("");
-    setReplaceText("");
     if (debugArmedRef.current) {
       void sendDebug({ action: "stop" }).catch(() => {});
     }
@@ -1716,14 +1463,16 @@ export function ScriptsModal({
   }, [debugArmed]);
 
   useEffect(() => {
-    if (findOpen) {
-      findInputRef.current?.focus();
-      findInputRef.current?.select();
-    }
-  }, [findOpen]);
-
-  useEffect(() => {
     const close = (event: KeyboardEvent) => {
+      if (event.defaultPrevented) return;
+      // CodeMirror owns Escape while its search panel or completion list is
+      // open; the first Escape dismisses that, not the whole editor.
+      if (
+        document.querySelector(".cm-search") ||
+        document.querySelector(".cm-tooltip-autocomplete")
+      ) {
+        return;
+      }
       if (event.key === "Escape") onClose();
     };
     window.addEventListener("keydown", close);
@@ -1779,163 +1528,17 @@ export function ScriptsModal({
     debugArmed && debugView?.paused === true && debugView.node === current?.id;
   const debugLine = debugPaused ? (debugView?.line ?? null) : null;
 
-  useLayoutEffect(() => {
-    const pre = highlightRef.current;
-    if (!pre) return;
-    const lines = draft.split("\n");
-    const gutter = gutterNumsRef.current;
-    if (gutter && gutter.dataset.lines !== String(lines.length)) {
-      const numbers: string[] = [];
-      for (let i = 1; i <= lines.length; i += 1) numbers.push(String(i));
-      gutter.textContent = numbers.join("\n");
-      gutter.dataset.lines = String(lines.length);
-    }
-    const previous =
-      hlStateRef.current?.script === selected ? hlStateRef.current : null;
-    const cache = new Map<string, HighlightLine>();
-    const entries: HighlightLine[] = [];
-    let block = false;
-    for (let i = 0; i < lines.length; i += 1) {
-      const nextParen = /^\s*\(/.test(lines[i + 1] ?? "");
-      const key: string = `${block ? 1 : 0}${nextParen ? 1 : 0}${lines[i]}`;
-      let entry: HighlightLine | undefined =
-        previous?.cache.get(key) ?? cache.get(key);
-      if (!entry) entry = highlightLine(lines[i], block, nextParen);
-      cache.set(key, entry);
-      entries.push(entry);
-      block = entry.block;
-    }
-
-    const rebuild = () => {
-      pre.innerHTML = entries
-        .map((entry) => `<div class="hl-line">${entry.html}</div>`)
-        .join("");
-      const nodes = Array.from(pre.children) as HTMLDivElement[];
-      hlStateRef.current = { script: selected, entries, nodes, cache };
-    };
-
-    if (!previous) {
-      rebuild();
-      return;
-    }
-
-    const prefixLimit = Math.min(previous.entries.length, entries.length);
-    let prefix = 0;
-    while (
-      prefix < prefixLimit &&
-      previous.entries[prefix].html === entries[prefix].html
-    ) {
-      prefix += 1;
-    }
-    let suffix = 0;
-    while (
-      suffix < previous.entries.length - prefix &&
-      suffix < entries.length - prefix &&
-      previous.entries[previous.entries.length - 1 - suffix].html ===
-        entries[entries.length - 1 - suffix].html
-    ) {
-      suffix += 1;
-    }
-    const oldMiddle = previous.entries.length - prefix - suffix;
-    const newMiddle = entries.length - prefix - suffix;
-    if (oldMiddle + newMiddle > 600) {
-      rebuild();
-      return;
-    }
-    if (oldMiddle === newMiddle) {
-      const nodes = previous.nodes;
-      for (let i = prefix; i < prefix + newMiddle; i += 1) {
-        if (previous.entries[i].html !== entries[i].html) {
-          nodes[i].innerHTML = entries[i].html;
-        }
-      }
-      hlStateRef.current = { script: selected, entries, nodes, cache };
-      return;
-    }
-
-    const fragment = document.createDocumentFragment();
-    const added: HTMLDivElement[] = [];
-    for (let i = prefix; i < entries.length - suffix; i += 1) {
-      const node = document.createElement("div");
-      node.className = "hl-line";
-      node.innerHTML = entries[i].html;
-      fragment.appendChild(node);
-      added.push(node);
-    }
-    const before = previous.nodes[prefix] ?? null;
-    pre.insertBefore(fragment, before);
-    for (let i = prefix; i < previous.nodes.length - suffix; i += 1) {
-      previous.nodes[i].remove();
-    }
-    const nodes = [
-      ...previous.nodes.slice(0, prefix),
-      ...added,
-      ...previous.nodes.slice(previous.nodes.length - suffix),
-    ];
-    hlStateRef.current = { script: selected, entries, nodes, cache };
-  }, [draft, selected]);
-
-  /// Both the compile-error stripe and the paused line share the textarea's
-  /// geometry, so they are placed together on every edit, scroll and pause.
-  const syncEditorOverlays = (textarea: HTMLTextAreaElement | null) => {
-    if (!textarea) return;
-    const style = getComputedStyle(textarea);
-    const lineHeight =
-      Number.parseFloat(style.lineHeight) ||
-      (Number.parseFloat(style.fontSize) || 11.5) * 1.45;
-    const padTop = Number.parseFloat(style.paddingTop) || 0;
-    const place = (marker: HTMLDivElement | null, line: number | null) => {
-      if (!marker) return;
-      if (line == null) {
-        marker.style.display = "none";
-        return;
-      }
-      const top = padTop + (line - 1) * lineHeight - textarea.scrollTop;
-      marker.style.top = `${top}px`;
-      marker.style.height = `${lineHeight}px`;
-      marker.style.display =
-        top + lineHeight < 0 || top > textarea.clientHeight ? "none" : "block";
-    };
-    const issueLine =
-      current?.issue && selected != null && !dirty.has(selected)
-        ? current.issue.line
-        : null;
-    place(issueLineRef.current, issueLine);
-    place(debugLineRef.current, debugLine);
-  };
+  const issueLine =
+    current?.issue && selected != null && !dirty.has(selected)
+      ? current.issue.line
+      : null;
 
   useEffect(() => {
-    syncEditorOverlays(textareaRef.current);
-  }, [current?.issue, selected, dirty, debugLine]);
-
-  /// A new paused line scrolls into view without stealing the caret from
-  /// an edit the user may be making while the node is parked.
-  useEffect(() => {
-    const textarea = textareaRef.current;
-    if (!textarea || debugLine == null) return;
-    revealPosition(textarea, lineOffset(textarea.value, debugLine));
-    const pre = highlightRef.current;
-    if (pre) {
-      pre.scrollTop = textarea.scrollTop;
-      pre.scrollLeft = textarea.scrollLeft;
-    }
-    if (gutterRef.current) gutterRef.current.scrollTop = textarea.scrollTop;
-    syncEditorOverlays(textarea);
+    if (debugLine != null) editorApi.current?.revealLine(debugLine);
   }, [debugLine]);
 
-  const lineAtCaret = (textarea: HTMLTextAreaElement | null) =>
-    textarea
-      ? textarea.value.slice(0, textarea.selectionStart).split("\n").length
-      : 1;
-
   const revealLine = (line: number) => {
-    const textarea = textareaRef.current;
-    if (!textarea) return;
-    const at = lineOffset(textarea.value, line);
-    textarea.focus();
-    textarea.setSelectionRange(at, at);
-    revealPosition(textarea, at);
-    syncEditorOverlays(textarea);
+    editorApi.current?.revealLine(line);
   };
 
   const toggleBreakpoint = (line: number) => {
@@ -1951,9 +1554,6 @@ export function ScriptsModal({
       );
     }
   };
-
-  const toggleBreakpointAtCaret = () =>
-    toggleBreakpoint(lineAtCaret(textareaRef.current));
 
   const armDebugger = async () => {
     if (!current) return;
@@ -2000,46 +1600,32 @@ export function ScriptsModal({
   const edit = (value: string) => {
     if (selected == null) return;
     editing.current.add(selected);
-    setCompletion(null);
     setDrafts((currentDrafts) => ({ ...currentDrafts, [selected]: value }));
     setDirty((currentDirty) => new Set(currentDirty).add(selected));
   };
 
-  const refreshCompletion = (
-    textarea: HTMLTextAreaElement,
-    allowEmpty: boolean,
-    manual = false,
-  ) => {
-    if (composing) {
-      setCompletion(null);
-      return;
-    }
-    const caret = textarea.selectionStart ?? 0;
-    const candidates = buildCandidates(
-      textarea.value,
+  const complete = (text: string, caret: number, explicit: boolean) =>
+    buildCandidates(
+      text,
       caret,
-      allowEmpty,
+      explicit,
       functions,
       derived,
       sysvars,
       catalog,
       current?.channel ?? 0,
     );
-    if (!candidates) {
-      setCompletion(null);
+
+  const updateSignature = (
+    text: string,
+    caret: number,
+    coords: { left: number; top: number } | null,
+  ) => {
+    if (!coords) {
+      setSignature(null);
       return;
     }
-    const placement = completionPlacement(
-      textarea,
-      caret,
-      candidates.items.length,
-    );
-    setCompletion({ ...candidates, active: 0, manual, ...placement });
-  };
-
-  const refreshSignature = (textarea: HTMLTextAreaElement) => {
-    const caret = textarea.selectionStart ?? 0;
-    const call = callAtCaret(textarea.value, caret);
+    const call = callAtCaret(text, caret);
     if (!call) {
       setSignature(null);
       return;
@@ -2047,7 +1633,7 @@ export function ScriptsModal({
     const builtin = functions.find((item) => item.name === call.name);
     const local = builtin
       ? null
-      : localSymbols(textarea.value, caret).find(
+      : localSymbols(text, caret).find(
           (symbol) => symbol.kind === "fn" && symbol.name === call.name,
         );
     if (!builtin && !local) {
@@ -2058,593 +1644,15 @@ export function ScriptsModal({
       name: call.name,
       args: builtin ? signatureArgs(builtin.usage) : (local?.params ?? []),
       active: call.active,
-      ...caretPlacement(textarea, caret, 340, 28),
+      left: coords.left,
+      top: coords.top + 2,
     });
-  };
-
-  const applyCompletion = (item: CompletionItem) => {
-    const textarea = textareaRef.current;
-    if (!textarea || !completion) return;
-    replaceRange(
-      textarea,
-      completion.start,
-      completion.end,
-      item.insert,
-      completion.start + item.caret,
-    );
-    setCompletion(null);
-  };
-
-  const handleEnter = (event: KeyboardEvent) => {
-    const textarea = textareaRef.current;
-    if (!textarea) return;
-    event.preventDefault();
-    const value = textarea.value;
-    const start = textarea.selectionStart;
-    const end = textarea.selectionEnd;
-    const from = lineStartOf(value, start);
-    const before = value.slice(from, start);
-    const after = value.slice(start, lineEndOf(value, start));
-    let indent = leadingSpace(value.slice(from));
-    if (before.trimEnd().endsWith("{")) {
-      indent += INDENT;
-    } else if (/^[ \t]*\}/.test(after)) {
-      indent = indent.slice(0, Math.max(0, indent.length - INDENT.length));
-    }
-    const insert = `\n${indent}`;
-    replaceRange(textarea, start, end, insert, start + insert.length);
-  };
-
-  const handleTab = (event: KeyboardEvent) => {
-    const textarea = textareaRef.current;
-    if (!textarea) return;
-    event.preventDefault();
-    const value = textarea.value;
-    const start = textarea.selectionStart;
-    const end = textarea.selectionEnd;
-
-    if (start !== end) {
-      const from = lineStartOf(value, start);
-      const to = lineEndOf(value, end);
-      const lines = value.slice(from, to).split("\n");
-      const shifted = lines.map((line) =>
-        event.shiftKey ? line.replace(/^\t|^ {1,4}/, "") : `${INDENT}${line}`,
-      );
-      const next = shifted.join("\n");
-      if (next !== value.slice(from, to)) {
-        replaceRange(textarea, from, to, next, from, from + next.length);
-      }
-      return;
-    }
-
-    if (event.shiftKey) {
-      const from = lineStartOf(value, start);
-      const to = lineEndOf(value, start);
-      const line = value.slice(from, to);
-      const next = line.replace(/^\t|^ {1,4}/, "");
-      if (next !== line) {
-        replaceRange(
-          textarea,
-          from,
-          to,
-          next,
-          Math.max(from, start - (line.length - next.length)),
-        );
-      }
-      return;
-    }
-
-    replaceRange(textarea, start, end, INDENT, start + INDENT.length);
-  };
-
-  /// Typing `}` on an auto-indented line moves it out one level instead of
-  /// leaving the closing brace at the block's inner indentation.
-  const handleClosingBrace = (event: KeyboardEvent) => {
-    const textarea = textareaRef.current;
-    if (!textarea) return;
-    const start = textarea.selectionStart;
-    if (start !== textarea.selectionEnd) return;
-    const from = lineStartOf(textarea.value, start);
-    const prefix = textarea.value.slice(from, start);
-    if (prefix.length < INDENT.length || !/^ +$/.test(prefix)) return;
-    event.preventDefault();
-    const shortened = prefix.slice(0, -INDENT.length);
-    replaceRange(
-      textarea,
-      from,
-      start,
-      `${shortened}}`,
-      from + shortened.length + 1,
-    );
-    refreshSignature(textarea);
-  };
-
-  /// Auto-closes `(`, `[` and `{`; wraps a selection; and skips over a closer
-  /// that is already under the caret. The `}` skip still runs the block
-  /// outdent, since an auto-closed brace sits on an indented line.
-  const handleBracket = (event: KeyboardEvent) => {
-    const textarea = textareaRef.current;
-    if (!textarea) return;
-    if (event.ctrlKey || event.metaKey || event.altKey) return;
-    const start = textarea.selectionStart;
-    const end = textarea.selectionEnd;
-
-    const close = BRACKET_PAIRS[event.key];
-    if (close) {
-      event.preventDefault();
-      if (start !== end) {
-        const selected = textarea.value.slice(start, end);
-        replaceRange(
-          textarea,
-          start,
-          end,
-          `${event.key}${selected}${close}`,
-          start + 1,
-          end + 1,
-        );
-        setCompletion(null);
-        setSignature(null);
-      } else {
-        if (
-          textarea.value[start] !== close &&
-          !/\w/.test(textarea.value[start] ?? "")
-        ) {
-          replaceRange(
-            textarea,
-            start,
-            end,
-            `${event.key}${close}`,
-            start + 1,
-          );
-        } else {
-          replaceRange(textarea, start, end, event.key, start + 1);
-        }
-        setCompletion(null);
-        // replaceRange fires input before moving the caret inside, so the
-        // call context must be read once more from the opening bracket.
-        refreshSignature(textarea);
-      }
-      return;
-    }
-
-    if (!BRACKET_CLOSERS.has(event.key) || start !== end) return;
-    if (textarea.value[start] !== event.key) {
-      if (event.key === "}") handleClosingBrace(event);
-      return;
-    }
-    if (event.key === "}") {
-      const from = lineStartOf(textarea.value, start);
-      const prefix = textarea.value.slice(from, start);
-      if (prefix.length >= INDENT.length && /^ +$/.test(prefix)) {
-        event.preventDefault();
-        const shortened = prefix.slice(0, -INDENT.length);
-        replaceRange(
-          textarea,
-          from,
-          start + 1,
-          `${shortened}}`,
-          from + shortened.length + 1,
-        );
-        setCompletion(null);
-        refreshSignature(textarea);
-        return;
-      }
-    }
-    event.preventDefault();
-    textarea.setSelectionRange(start + 1, start + 1);
-    setCompletion(null);
-    refreshSignature(textarea);
-  };
-
-  /// Outside a string a quote opens an empty pair; inside one the next quote
-  /// closes it, and a quote already under the caret is stepped over.
-  const handleQuote = (event: KeyboardEvent) => {
-    const textarea = textareaRef.current;
-    if (!textarea) return;
-    if (event.ctrlKey || event.metaKey || event.altKey) return;
-    const start = textarea.selectionStart;
-    const end = textarea.selectionEnd;
-    if (start !== end) {
-      event.preventDefault();
-      const selected = textarea.value.slice(start, end);
-      replaceRange(textarea, start, end, `"${selected}"`, start + 1, end + 1);
-      setCompletion(null);
-      setSignature(null);
-      return;
-    }
-    if (textarea.value[start] === '"') {
-      event.preventDefault();
-      textarea.setSelectionRange(start + 1, start + 1);
-      setCompletion(null);
-      refreshSignature(textarea);
-      return;
-    }
-    if (inStringAt(textarea.value, start)) return;
-    event.preventDefault();
-    replaceRange(textarea, start, end, '""', start + 1);
-    refreshCompletion(textarea, true);
-    refreshSignature(textarea);
-  };
-
-  /// In leading whitespace, Backspace removes up to the previous indent stop
-  /// instead of one space, matching the four-space INDENT above.
-  const handleBackspace = (event: KeyboardEvent) => {
-    const textarea = textareaRef.current;
-    if (!textarea) return;
-    const start = textarea.selectionStart;
-    if (start !== textarea.selectionEnd) return;
-    const from = lineStartOf(textarea.value, start);
-    const prefix = textarea.value.slice(from, start);
-    if (prefix.length === 0 || !/^ +$/.test(prefix)) return;
-    event.preventDefault();
-    const remove =
-      prefix.length -
-      Math.floor((prefix.length - 1) / INDENT.length) * INDENT.length;
-    replaceRange(textarea, start - remove, start, "", start - remove);
-    setCompletion(null);
-  };
-
-  const handleComment = (event: KeyboardEvent) => {
-    const textarea = textareaRef.current;
-    if (!textarea) return;
-    const value = textarea.value;
-    const start = textarea.selectionStart;
-    const end = textarea.selectionEnd;
-    const from = lineStartOf(value, start);
-    const to = lineEndOf(value, end);
-    const lines = value.slice(from, to).split("\n");
-    const nonEmpty = lines.filter((line) => line.trim() !== "");
-    const commented =
-      nonEmpty.length > 0 && nonEmpty.every((line) => /^\s*\/\//.test(line));
-    const nextLines = lines.map((line) => {
-      if (!commented) {
-        const indent = /^\s*/.exec(line)?.[0] ?? "";
-        return `${indent}// ${line.slice(indent.length)}`;
-      }
-      const match = /^(\s*)\/\/ ?/.exec(line);
-      return match ? `${match[1]}${line.slice(match[0].length)}` : line;
-    });
-    event.preventDefault();
-    const next = nextLines.join("\n");
-    if (next === value.slice(from, to)) return;
-
-    let caret = start;
-    if (start === end && lines.length === 1) {
-      const indent = /^\s*/.exec(lines[0])?.[0].length ?? 0;
-      const at = from + indent;
-      if (commented) {
-        const removed = lines[0].length - nextLines[0].length;
-        caret = start <= at ? start : Math.max(at, start - removed);
-      } else {
-        caret =
-          start >= at ? start + nextLines[0].length - lines[0].length : start;
-      }
-    }
-    replaceRange(
-      textarea,
-      from,
-      to,
-      next,
-      start === end ? caret : from,
-      start === end ? caret : from + next.length,
-    );
-    setCompletion(null);
-    setSignature(null);
-  };
-
-  const handleMoveLine = (event: KeyboardEvent, direction: -1 | 1) => {
-    const textarea = textareaRef.current;
-    if (!textarea) return;
-    const value = textarea.value;
-    const start = textarea.selectionStart;
-    const end = textarea.selectionEnd;
-    const from = lineStartOf(value, start);
-    const effectiveEnd =
-      end > start && end === lineStartOf(value, end) ? end - 1 : end;
-    const to = lineEndOf(value, effectiveEnd);
-    const block = value.slice(from, to);
-    if (direction < 0) {
-      if (from === 0) return;
-      const prevStart = lineStartOf(value, from - 1);
-      const prev = value.slice(prevStart, from - 1);
-      const shift = from - prevStart;
-      event.preventDefault();
-      replaceRange(
-        textarea,
-        prevStart,
-        to,
-        `${block}\n${prev}`,
-        start - shift,
-        end - shift,
-      );
-    } else {
-      if (to >= value.length) return;
-      const nextStart = to + 1;
-      const nextEnd = lineEndOf(value, nextStart);
-      const nextLine = value.slice(nextStart, nextEnd);
-      const shift = nextLine.length + 1;
-      event.preventDefault();
-      replaceRange(
-        textarea,
-        from,
-        nextEnd,
-        `${nextLine}\n${block}`,
-        start + shift,
-        end + shift,
-      );
-    }
-    setCompletion(null);
-    setSignature(null);
-  };
-
-  const handleDuplicateLine = (event: KeyboardEvent) => {
-    const textarea = textareaRef.current;
-    if (!textarea) return;
-    const value = textarea.value;
-    const start = textarea.selectionStart;
-    const end = textarea.selectionEnd;
-    const from = lineStartOf(value, start);
-    const effectiveEnd =
-      end > start && end === lineStartOf(value, end) ? end - 1 : end;
-    const block = value.slice(from, lineEndOf(value, effectiveEnd));
-    event.preventDefault();
-    const added = block.length + 1;
-    replaceRange(
-      textarea,
-      lineEndOf(value, effectiveEnd),
-      lineEndOf(value, effectiveEnd),
-      `\n${block}`,
-      start + added,
-      end + added,
-    );
-    setCompletion(null);
-    setSignature(null);
-  };
-
-  const handleSmartHome = (event: KeyboardEvent) => {
-    const textarea = textareaRef.current;
-    if (!textarea) return;
-    if (textarea.selectionStart !== textarea.selectionEnd) return;
-    const start = textarea.selectionStart;
-    const from = lineStartOf(textarea.value, start);
-    const indent = leadingSpace(textarea.value.slice(from)).length;
-    const first = from + indent;
-    const target = start === first ? from : first;
-    event.preventDefault();
-    textarea.setSelectionRange(target, target);
-    setCompletion(null);
-    setSignature(null);
   };
 
   const jumpToIssue = () => {
-    const textarea = textareaRef.current;
     const issue = current?.issue;
-    if (!textarea || !issue) return;
-    const base = lineOffset(textarea.value, issue.line);
-    const end = lineEndOf(textarea.value, base);
-    const position = Math.min(
-      base + Math.max(0, (issue.col ?? 1) - 1),
-      end,
-    );
-    textarea.focus();
-    textarea.setSelectionRange(position, position);
-    revealPosition(textarea, position);
-  };
-
-  const findNext = (direction: -1 | 1) => {
-    const textarea = textareaRef.current;
-    if (!textarea || !findText) return;
-    const hits = findMatches(textarea.value, findText);
-    if (hits.length === 0) return;
-    const start = textarea.selectionStart;
-    const end = textarea.selectionEnd;
-    let index = -1;
-    if (direction > 0) {
-      const from = start === end ? start : end;
-      index = hits.findIndex((hit) => hit >= from);
-      if (index < 0) index = 0;
-    } else {
-      for (let i = hits.length - 1; i >= 0; i -= 1) {
-        if (hits[i] < start) {
-          index = i;
-          break;
-        }
-      }
-      if (index < 0) index = hits.length - 1;
-    }
-    textarea.setSelectionRange(hits[index], hits[index] + findText.length);
-    revealPosition(textarea, hits[index]);
-  };
-
-  const replaceCurrent = () => {
-    const textarea = textareaRef.current;
-    if (!textarea || !findText) return;
-    const start = textarea.selectionStart;
-    const end = textarea.selectionEnd;
-    if (
-      textarea.value.slice(start, end).toLowerCase() !== findText.toLowerCase()
-    ) {
-      findNext(1);
-      return;
-    }
-    replaceRange(
-      textarea,
-      start,
-      end,
-      replaceText,
-      start + replaceText.length,
-    );
-    findNext(1);
-    replaceInputRef.current?.focus();
-  };
-
-  const replaceAll = () => {
-    const textarea = textareaRef.current;
-    if (!textarea || !findText) return;
-    const pattern = new RegExp(escapeRegExp(findText), "gi");
-    const next = textarea.value.replace(pattern, () => replaceText);
-    if (next === textarea.value) return;
-    const caret = Math.min(textarea.selectionStart, next.length);
-    replaceRange(textarea, 0, textarea.value.length, next, caret);
-    replaceInputRef.current?.focus();
-  };
-
-  const closeFind = () => {
-    setFindOpen(false);
-    textareaRef.current?.focus();
-  };
-
-  const handleEditorKeyDown = (event: KeyboardEvent) => {
-    const textarea = event.currentTarget as HTMLTextAreaElement | null;
-    if (!textarea) return;
-    if (composing || event.isComposing || event.keyCode === 229) return;
-
-    if (event.key === "F9") {
-      event.preventDefault();
-      toggleBreakpointAtCaret();
-      return;
-    }
-
-    if (
-      event.key === "Backspace" &&
-      !event.ctrlKey &&
-      !event.metaKey &&
-      !event.altKey &&
-      !event.shiftKey
-    ) {
-      handleBackspace(event);
-    }
-
-    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "f") {
-      event.preventDefault();
-      setFindOpen(true);
-      findInputRef.current?.focus();
-      findInputRef.current?.select();
-      setCompletion(null);
-      setSignature(null);
-      return;
-    }
-    if ((event.ctrlKey || event.metaKey) && event.key === "/") {
-      handleComment(event);
-      return;
-    }
-    if (event.altKey && !event.ctrlKey && !event.metaKey) {
-      if (event.key === "ArrowUp" && !event.shiftKey) {
-        handleMoveLine(event, -1);
-        return;
-      }
-      if (event.key === "ArrowDown" && event.shiftKey) {
-        handleDuplicateLine(event);
-        return;
-      }
-      if (event.key === "ArrowDown") {
-        handleMoveLine(event, 1);
-        return;
-      }
-    }
-    if (
-      event.key === "Home" &&
-      !event.shiftKey &&
-      !event.ctrlKey &&
-      !event.metaKey &&
-      !event.altKey
-    ) {
-      handleSmartHome(event);
-      return;
-    }
-
-    // Alt+/ rather than Ctrl+Space: the latter is the Chinese IME's
-    // on/off toggle on Windows and never reaches the page.
-    if (event.altKey && (event.key === "/" || event.code === "Slash")) {
-      event.preventDefault();
-      refreshCompletion(textarea, true, true);
-      return;
-    }
-
-    if (completion) {
-      if (event.key === "ArrowDown" || event.key === "ArrowUp") {
-        event.preventDefault();
-        const delta = event.key === "ArrowDown" ? 1 : -1;
-        setCompletion((current) =>
-          current
-            ? {
-                ...current,
-                active:
-                  (current.active + delta + current.items.length) %
-                  current.items.length,
-                manual: true,
-              }
-            : current,
-        );
-        return;
-      }
-      if (event.key === "Enter" || event.key === "Tab") {
-        // Tab always accepts, but Enter must not turn a newline into a
-        // completion just because typing opened the list.
-        if (event.key === "Tab" || completion.manual) {
-          event.preventDefault();
-          applyCompletion(completion.items[completion.active]);
-          return;
-        }
-        setCompletion(null);
-      }
-      if (event.key === "Escape") {
-        event.preventDefault();
-        event.stopPropagation();
-        setCompletion(null);
-        return;
-      }
-      if (
-        event.key === "ArrowLeft" ||
-        event.key === "ArrowRight" ||
-        event.key === "Home" ||
-        event.key === "End"
-      ) {
-        setCompletion(null);
-      }
-    }
-    if (event.key === "Escape" && findOpen) {
-      event.preventDefault();
-      event.stopPropagation();
-      closeFind();
-      return;
-    }
-
-    if (
-      event.key === "Enter" &&
-      !event.shiftKey &&
-      !event.ctrlKey &&
-      !event.metaKey &&
-      !event.altKey
-    ) {
-      handleEnter(event);
-      return;
-    }
-    if (event.key === "Tab") {
-      handleTab(event);
-      return;
-    }
-    if (
-      (event.key === "(" ||
-        event.key === ")" ||
-        event.key === "[" ||
-        event.key === "]" ||
-        event.key === "{" ||
-        event.key === "}") &&
-      !event.ctrlKey &&
-      !event.metaKey &&
-      !event.altKey
-    ) {
-      handleBracket(event);
-    }
-    if (
-      event.key === '"' &&
-      !event.ctrlKey &&
-      !event.metaKey &&
-      !event.altKey
-    ) {
-      handleQuote(event);
-    }
+    if (!issue) return;
+    editorApi.current?.revealLine(issue.line, issue.col ?? 1);
   };
 
   const apply = () => {
@@ -2696,7 +1704,6 @@ export function ScriptsModal({
 
   const issue = current?.issue ?? null;
   const showIssue = !!issue && selected != null && !dirty.has(selected);
-  const findCount = findOpen && findText ? findMatches(draft, findText).length : 0;
   const debugStatus = debugError
     ? debugError
     : debugPaused
@@ -2877,66 +1884,6 @@ export function ScriptsModal({
                     Enabled
                   </label>
                 </div>
-                {findOpen && (
-                  <div class="script-find">
-                    <input
-                      ref={findInputRef}
-                      value={findText}
-                      placeholder="Find…"
-                      spellcheck={false}
-                      onInput={(event) =>
-                        setFindText((event.target as HTMLInputElement).value)
-                      }
-                      onKeyDown={(event) => {
-                        if (event.key === "Enter") {
-                          event.preventDefault();
-                          findNext(event.shiftKey ? -1 : 1);
-                        } else if (event.key === "Escape") {
-                          event.preventDefault();
-                          event.stopPropagation();
-                          closeFind();
-                        }
-                      }}
-                    />
-                    <input
-                      ref={replaceInputRef}
-                      value={replaceText}
-                      placeholder="Replace…"
-                      spellcheck={false}
-                      onInput={(event) =>
-                        setReplaceText((event.target as HTMLInputElement).value)
-                      }
-                      onKeyDown={(event) => {
-                        if (event.key === "Enter") {
-                          event.preventDefault();
-                          replaceCurrent();
-                        } else if (event.key === "Escape") {
-                          event.preventDefault();
-                          event.stopPropagation();
-                          closeFind();
-                        }
-                      }}
-                    />
-                    <span class="script-find-count">
-                      {findCount} {findCount === 1 ? "match" : "matches"}
-                    </span>
-                    <button type="button" onClick={() => findNext(-1)}>
-                      Prev
-                    </button>
-                    <button type="button" onClick={() => findNext(1)}>
-                      Next
-                    </button>
-                    <button type="button" onClick={replaceCurrent}>
-                      Replace
-                    </button>
-                    <button type="button" onClick={replaceAll}>
-                      Replace all
-                    </button>
-                    <button type="button" onClick={closeFind}>
-                      Close
-                    </button>
-                  </div>
-                )}
                 <div class={`script-debug-bar ${debugArmed ? "on" : ""}`}>
                   {debugArmed ? (
                     <>
@@ -2999,157 +1946,26 @@ export function ScriptsModal({
                     {debugStatus}
                   </span>
                 </div>
-                <div class="script-code">
-                  <div
-                    ref={gutterRef}
-                    class="script-gutter"
-                    title="Click a line to toggle a breakpoint"
-                    onClick={(event) => {
-                      const area = textareaRef.current;
-                      if (!area) return;
-                      const gutter = event.currentTarget as HTMLDivElement;
-                      const style = getComputedStyle(area);
-                      const lineHeight =
-                        Number.parseFloat(style.lineHeight) ||
-                        (Number.parseFloat(style.fontSize) || 11.5) * 1.45;
-                      const padTop =
-                        Number.parseFloat(style.paddingTop) || 8;
-                      const border =
-                        Number.parseFloat(
-                          getComputedStyle(gutter).borderTopWidth,
-                        ) || 0;
-                      const rect = gutter.getBoundingClientRect();
-                      const y =
-                        event.clientY -
-                        rect.top -
-                        border +
-                        gutter.scrollTop -
-                        padTop;
-                      toggleBreakpoint(
-                        Math.max(1, Math.floor(y / lineHeight) + 1),
-                      );
-                    }}
+                <div class="script-cm-wrap">
+                  <Suspense
+                    fallback={
+                      <div class="script-cm-loading">Loading editor…</div>
+                    }
                   >
-                    <pre ref={gutterNumsRef} class="script-gutter-nums" />
-                    {breakpoints.map((line) => (
-                      <span
-                        key={`bp:${line}`}
-                        class="bp"
-                        style={{
-                          top: `calc(8px + ${((line - 0.5) * 1.45).toFixed(2)}em)`,
-                        }}
-                      />
-                    ))}
-                    {debugLine != null && (
-                      <span
-                        class="cur"
-                        style={{
-                          top: `calc(8px + ${((debugLine - 1) * 1.45).toFixed(2)}em)`,
-                        }}
-                      />
-                    )}
-                  </div>
-                  <div class="script-editor">
-                  <pre
-                    ref={highlightRef}
-                    class="script-highlight"
-                    aria-hidden="true"
-                  />
-                  {showIssue && issue && (
-                    <div ref={issueLineRef} class="script-issue-line" />
-                  )}
-                  {debugLine != null && (
-                    <div ref={debugLineRef} class="script-debug-line" />
-                  )}
-                  <textarea
-                    ref={textareaRef}
-                    class={`script-textarea ${composing ? "composing" : ""}`}
-                    spellcheck={false}
-                    value={draft}
-                    placeholder="on start { … }"
-                    onKeyDown={handleEditorKeyDown}
-                    onCompositionStart={() => {
-                      setComposing(true);
-                      setCompletion(null);
-                    }}
-                    onCompositionEnd={() => setComposing(false)}
-                    onInput={(event) => {
-                      const area = event.currentTarget as HTMLTextAreaElement;
-                      edit(area.value);
-                      if (!(event as InputEvent).isComposing) {
-                        refreshSignature(area);
-                        refreshCompletion(area, false);
-                      }
-                    }}
-                    onScroll={(event) => {
-                      const area = event.target as HTMLTextAreaElement;
-                      const pre = highlightRef.current;
-                      if (pre) {
-                        pre.scrollTop = area.scrollTop;
-                        pre.scrollLeft = area.scrollLeft;
-                      }
-                      if (gutterRef.current) {
-                        gutterRef.current.scrollTop = area.scrollTop;
-                      }
-                      setCompletion(null);
-                      setSignature(null);
-                      syncEditorOverlays(area);
-                    }}
-                    onClick={(event) => {
-                      setCompletion(null);
-                      refreshSignature(event.currentTarget);
-                    }}
-                    onKeyUp={(event) => {
-                      if (
-                        event.key === "ArrowLeft" ||
-                        event.key === "ArrowRight" ||
-                        event.key === "Home" ||
-                        event.key === "End"
-                      ) {
-                        refreshSignature(
-                          event.currentTarget as HTMLTextAreaElement,
-                        );
-                      }
-                    }}
-                    onBlur={() => {
-                      setCompletion(null);
-                      setSignature(null);
-                    }}
-                  />
-                  {completion && (
-                    <div
-                      class="script-complete"
-                      role="listbox"
-                      style={{
-                        left: `${completion.left}px`,
-                        top: `${completion.top}px`,
-                      }}
-                    >
-                      {completion.items.map((item, index) => (
-                        <div
-                          key={`${item.label}:${index}`}
-                          role="option"
-                          aria-selected={index === completion.active}
-                          class={`script-complete-item ${
-                            index === completion.active ? "on" : ""
-                          }`}
-                          onMouseDown={(event) => {
-                            event.preventDefault();
-                            applyCompletion(item);
-                          }}
-                          onMouseEnter={() =>
-                            setCompletion((current) =>
-                              current ? { ...current, active: index } : current,
-                            )
-                          }
-                        >
-                          <strong>{item.label}</strong>
-                          <small>{item.detail}</small>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                  {signature && !completion && (
+                    <ScriptCodeEditor
+                      doc={draft}
+                      scriptId={selected}
+                      breakpoints={breakpoints}
+                      debugLine={debugLine}
+                      issueLine={issueLine}
+                      completion={complete}
+                      onChange={edit}
+                      onToggleBreakpoint={toggleBreakpoint}
+                      onCursor={updateSignature}
+                      apiRef={editorApi}
+                    />
+                  </Suspense>
+                  {signature && (
                     <div
                       class="script-signature"
                       aria-hidden="true"
@@ -3180,7 +1996,6 @@ export function ScriptsModal({
                       )
                     </div>
                   )}
-                  </div>
                 </div>
                 {debugPaused && debugView && (
                   <div class="script-debug-panel">

@@ -8,8 +8,6 @@ import type {
 import {
   buildCandidates,
   callAtCaret,
-  findMatches,
-  highlightLine,
   localSymbols,
   signatureArgs,
 } from "./ScriptsModal";
@@ -207,34 +205,8 @@ describe("local symbols", () => {
   });
 });
 
-describe("highlight lines", () => {
-  it("marks tokens and carries block comments across lines", () => {
-    const line = highlightLine('    print("x") // note', false, false);
-    expect(line.block).toBe(false);
-    expect(line.html).toContain('class="tok-fn">print</span>');
-    expect(line.html).toContain('class="tok-string"');
-    expect(line.html).toContain('class="tok-comment"');
-    const value = highlightLine("let value = 42;", false, false);
-    expect(value.html).toContain('class="tok-keyword">let</span>');
-    expect(value.html).toContain('class="tok-number">42</span>');
-    const first = highlightLine("/* block", false, false);
-    expect(first.block).toBe(true);
-    expect(first.html).toContain('class="tok-comment"');
-    const second = highlightLine("   end */ print(1);", true, false);
-    expect(second.block).toBe(false);
-    expect(second.html).toContain('class="tok-comment"');
-    expect(second.html).toContain('class="tok-fn">print</span>');
-    expect(second.html).toContain('class="tok-number">1</span>');
-    const open = highlightLine("let x = 1; /* open", false, false);
-    expect(open.block).toBe(true);
-    expect(open.html).toContain('class="tok-number">1</span>');
-    expect(open.html).toContain('class="tok-comment">/* open</span>');
-  });
-});
-
-describe("find and signature helpers", () => {
-  it("finds matches, calls and usage arguments", () => {
-    expect(findMatches("Alpha alpha ALPHA", "alpha")).toEqual([0, 6, 12]);
+describe("signature helpers", () => {
+  it("finds calls and usage arguments", () => {
     const calls: [string, number, { name: string; active: number }][] = [
       ["print()", 6, { name: "print", active: 0 }],
       ["get_sig(buffer, )", 16, { name: "get_sig", active: 1 }],

@@ -1,0 +1,21 @@
+/// Keywords shared by the editor mode and the completion engine.
+export const SCRIPT_KEYWORDS = new Set([
+  "on",
+  "start",
+  "stop",
+  "timer",
+  "if",
+  "else",
+  "for",
+  "while",
+  "return",
+  "let",
+  "var",
+  "const",
+  "true",
+  "false",
+  "break",
+  "continue",
+  "this",
+  "node",
+]);
