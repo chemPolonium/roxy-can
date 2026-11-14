@@ -4139,6 +4139,16 @@ fn new_project_starts_completely_empty() {
 }
 
 #[test]
+fn an_empty_project_mints_can1() {
+    let mut app = App::headless();
+    ProjectV2::default().apply(&mut app);
+    assert_eq!(app.can_count(), 0, "an empty project has no buses");
+    app.add_empty_channel();
+    app.settle();
+    assert_eq!(app.channel_name(0), "CAN1");
+}
+
+#[test]
 fn a_contended_mailbox_keeps_last_frames_snapshot() {
     let mut app = App::headless();
     assert_eq!(app.channel_name(0), "CAN1");

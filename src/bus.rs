@@ -5537,11 +5537,21 @@ impl BusCore {
         }
     }
 
+    /// The next free "CAN{n}" for a newly added bus. An empty workspace starts
+    /// from CAN1 even if a restored project carried a stale counter from
+    /// buses that no longer exist.
+    fn next_can_name(&mut self) -> String {
+        if self.can_count() == 0 {
+            self.bus_counter = 0;
+        }
+        self.bus_counter += 1;
+        format!("CAN{}", self.bus_counter)
+    }
+
     /// Adds a bus with the sample DBC path, loads it and pre-populates its
     /// generator from the database.
     fn add_channel(&mut self, status: &mut String) {
-        self.bus_counter += 1;
-        let name = format!("CAN{}", self.bus_counter);
+        let name = self.next_can_name();
         let cluster = self.cluster_ids.allocate();
         self.can_cluster_ids.push(cluster);
         let sources: Vec<crate::model::ClusterSource> = vec![crate::model::ClusterSource::Dbc {
@@ -5574,8 +5584,7 @@ impl BusCore {
     /// Adds a CAN bus with no description at all: raw monitoring, and the
     /// Buses detail binds DBC/ARXML files afterwards.
     fn add_empty_channel(&mut self, status: &mut String) {
-        self.bus_counter += 1;
-        let name = format!("CAN{}", self.bus_counter);
+        let name = self.next_can_name();
         let cluster = self.cluster_ids.allocate();
         self.can_cluster_ids.push(cluster);
         self.model_comms

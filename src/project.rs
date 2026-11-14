@@ -255,7 +255,15 @@ impl ProjectV2 {
                 }
             }
         }
-        app.set_bus_counter(self.bus_counter.max(can_clusters.len()));
+        // An empty project must mint CAN1, not continue from the sample
+        // workspace's two channels that `reset_to_defaults` temporarily put
+        // back. Projects with clusters keep their saved counter.
+        let counter = if can_clusters.is_empty() {
+            0
+        } else {
+            self.bus_counter.max(can_clusters.len())
+        };
+        app.set_bus_counter(counter);
         app.settle();
 
         for cluster in self
