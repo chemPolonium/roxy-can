@@ -543,6 +543,10 @@ pub struct VectorChannel {
 /// else, and a physical channel whose transmits were never acknowledged
 /// produced none of them.
 const XL_CAN_EV_TAG_TX_DONE: u16 = 0x0404;
+/// `vxlapi.h`: an EDL/BRS flag was set while the channel is configured as
+/// classic CAN. Returning it as a driver error hides the real cause, so the
+/// write path checks the channel mode first.
+const XL_ERR_INVALID_FDFLAG_MODE20: XlStatus = 515;
 /// The driver's own periodic housekeeping -- 16 to 30 a second on every channel
 /// measured, healthy or not.
 const XL_CAN_EV_TAG_SYSTIME: u16 = 0x0409;
@@ -794,6 +798,16 @@ impl VectorChannel {
     /// frames carry the EDL/BRS flags (they fail on a channel whose
     /// Vector configuration has no FD data-phase params).
     pub fn write_frame(&self, f: &CanFrame) -> Result<(), String> {
+        if f.is_fd() && !self.fd {
+            return Err(match &self.fd_error {
+                Some(error) => {
+                    format!("CAN FD frame refused: channel is in classic CAN mode ({error})")
+                }
+                None => "CAN FD frame refused: channel is in classic CAN mode \
+                     (enable the bus's FD data rate and check that the adapter supports CAN FD)"
+                    .to_string(),
+            });
+        }
         let lib = Vxlapi::lib().ok_or("Vector driver unavailable")?;
         let payload = if f.is_remote() { &[][..] } else { f.payload() };
         let len = payload.len().min(MAX_CAN_FD_LEN);
@@ -831,6 +845,10 @@ impl VectorChannel {
             Ok(())
         } else if status == 0 {
             Err("frame was not queued for transmission".to_string())
+        } else if status == XL_ERR_INVALID_FDFLAG_MODE20 {
+            Err("CAN FD frame refused: channel is configured as CAN 2.0 \
+                 (re-attach the bus with an FD data rate)"
+                .to_string())
         } else {
             Err(format!("xlCanTransmitEx failed ({})", lib.error(status)))
         }
@@ -1716,6 +1734,32 @@ mod tests {
             (conf.sjw_dbr, conf.tseg1_dbr, conf.tseg2_dbr),
             FD_NOMINAL_TIMING
         );
+    }
+
+    /// The driver's 515 means the channel is in CAN 2.0 mode; refuse the FD
+    /// frame before calling `xlCanTransmitEx` so the UI gets the real reason.
+    #[test]
+    fn fd_frame_is_refused_before_the_classic_driver_call() {
+        let channel = VectorChannel {
+            port: 0,
+            mask: 1,
+            fd: false,
+            fd_error: Some("adapter rejected CAN FD".to_string()),
+            tags: Default::default(),
+        };
+        let frame = CanFrame {
+            t_us: 0,
+            channel: 0,
+            id: 0x7EF,
+            extended: false,
+            len: 8,
+            data: [0; MAX_CAN_FD_LEN],
+            dir: Direction::Tx,
+            flags: FrameFlags::FD,
+        };
+        let error = channel.write_frame(&frame).expect_err("FD on classic");
+        assert!(error.contains("classic CAN mode"), "{error}");
+        assert!(error.contains("adapter rejected CAN FD"), "{error}");
     }
 
     use flexray::*;

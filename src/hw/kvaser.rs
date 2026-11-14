@@ -300,6 +300,11 @@ impl KvaserChannel {
     /// frame's flag — the same canWrite call the official migration
     /// guide uses, with the FD bits in the high flag byte.
     pub fn write_frame(&self, f: &CanFrame) -> Result<(), String> {
+        if f.is_fd() && !self.fd {
+            return Err("CAN FD frame refused: channel is in classic CAN mode \
+                 (enable the bus's FD data rate)"
+                .to_string());
+        }
         let lib = Canlib::lib().ok_or("Kvaser driver unavailable")?;
         // RTR carries no payload but its `len` is the requested byte
         // count: the DLC goes out as the request, not the empty payload.

@@ -574,14 +574,28 @@ impl Hardware {
         if !self.live {
             return;
         }
-        if let Some(bh) = self.buses.get_mut(&bus)
-            && let Err(e) = bh.port.write_frame(f)
-        {
-            match &mut bh.tx_fail {
-                Some((_, n)) => *n += 1,
-                None => {
-                    bh.tx_fail = Some((e, 1));
-                    self.pending_tx_fail.push(bus);
+        if let Some(bh) = self.buses.get_mut(&bus) {
+            if !bh.can_tx {
+                match &mut bh.tx_fail {
+                    Some((_, n)) => *n += 1,
+                    None => {
+                        bh.tx_fail = Some((
+                            "channel is attached receive-only (another program holds it)"
+                                .to_string(),
+                            1,
+                        ));
+                        self.pending_tx_fail.push(bus);
+                    }
+                }
+                return;
+            }
+            if let Err(e) = bh.port.write_frame(f) {
+                match &mut bh.tx_fail {
+                    Some((_, n)) => *n += 1,
+                    None => {
+                        bh.tx_fail = Some((e, 1));
+                        self.pending_tx_fail.push(bus);
+                    }
                 }
             }
         }
@@ -848,5 +862,44 @@ mod tests {
             },
         );
         assert_eq!(written.lock().unwrap().len(), 1);
+    }
+
+    /// A receive-only attachment (another program owns the channel) must not
+    /// hand frames to the driver at all; the old path tried every write and
+    /// let Vector report status 515 for FD frames.
+    #[test]
+    fn a_receive_only_attachment_never_writes() {
+        let mut hw = Hardware::new();
+        let written = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        hw.attach(
+            0,
+            HwDriver::Vector,
+            1,
+            500,
+            false,
+            HwPort::Mock(MockPort {
+                written: written.clone(),
+                incoming: Default::default(),
+                refuse: Default::default(),
+                tags: Default::default(),
+            }),
+        );
+        hw.write_if_live(
+            0,
+            &CanFrame {
+                t_us: 0,
+                channel: 0,
+                id: 0x7EF,
+                extended: false,
+                len: 8,
+                data: [0; MAX_CAN_FD_LEN],
+                dir: Direction::Tx,
+                flags: FrameFlags::FD,
+            },
+        );
+        assert!(written.lock().unwrap().is_empty());
+        let (reason, count) = hw.tx_fail(0).expect("refusal latched");
+        assert!(reason.contains("receive-only"), "{reason}");
+        assert_eq!(count, 1);
     }
 }
