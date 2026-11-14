@@ -1,5 +1,12 @@
-import { autocompletion, closeBrackets, closeBracketsKeymap, completionKeymap, startCompletion } from "@codemirror/autocomplete";
-import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
+import {
+  acceptCompletion,
+  autocompletion,
+  closeBrackets,
+  closeBracketsKeymap,
+  completionKeymap,
+  startCompletion,
+} from "@codemirror/autocomplete";
+import { defaultKeymap, history, historyKeymap, indentMore, indentWithTab } from "@codemirror/commands";
 import {
   bracketMatching,
   foldGutter,
@@ -409,6 +416,8 @@ export function createScriptEditor(
       },
     },
     { key: "Alt-/", run: startCompletion },
+    // Tab accepts an open completion first; with no list it indents.
+    { key: "Tab", run: (view) => acceptCompletion(view) || indentMore(view) },
     indentWithTab,
   ];
 
