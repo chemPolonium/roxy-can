@@ -1,6 +1,6 @@
 # roxy-can
 
-基于 Rust 的 CAN / FlexRay / Ethernet 总线分析工具，使用本地 Web UI（axum + Preact）。多总线、每条总线各加载一份 DBC，覆盖经典 CAN、CAN FD、错误帧与远程帧，支持 Kvaser / Vector 硬件连接、与 Vector 工具链兼容的 ASC / BLF 录制与回放、经典 PCAP / PCAPNG 以太网抓包回放与 PCAP 录制，以及类 CAPL 的仿真节点脚本。Windows x64 可执行文件见 [Releases](https://github.com/chemPolonium/roxy-can/releases)。
+基于 Rust 的 CAN / FlexRay / Ethernet 总线分析工具，使用本地 Web UI（axum + Preact，见 [web/README.md](web/README.md)）。多总线、每条总线各加载一份 DBC，覆盖经典 CAN、CAN FD、错误帧与远程帧，支持 Kvaser / Vector 硬件连接、与 Vector 工具链兼容的 ASC / BLF 录制与回放、经典 PCAP / PCAPNG 以太网抓包回放与 PCAP 录制，以及类 CAPL 的仿真节点脚本。Windows x64 可执行文件见 [Releases](https://github.com/chemPolonium/roxy-can/releases)。
 
 ![roxy-can](screenshot.png)
 
@@ -12,7 +12,7 @@
 
 截图使用浅色主题：首图是 Main + side（Signals / Monitor / Data），下表展示 Quad（Rate / Bus load / State / Write）和 Focus（曲线与 A/B 游标），最后是 Panel 操作页。
 
-完整操作语义见 [docs/usage.md](docs/usage.md)，结构说明见 [docs/architecture.md](docs/architecture.md)，脚本语言见 [docs/script_language.md](docs/script_language.md)。
+完整操作语义见 [docs/usage.md](docs/usage.md)，产品定位与体验准则见 [docs/product.md](docs/product.md)，脚本语言见 [docs/script_language.md](docs/script_language.md)。
 
 ## 功能
 
@@ -48,25 +48,15 @@ Spec / SOME/IP / Write 都是单实例页面，可放进任意槽位。入口与
 - **工程文件（.rxproj）**：总线与 DBC、CAN 硬件挂载、观测窗口及过滤、信号选择、生成器配置、触发器、窗口布局存一个 JSON；DBC 路径相对工程目录，整个文件夹可移动。
 - **中文字体**：Web UI 不内嵌中文字体，按系统字体显示。
 
-## Web 快捷键
-
-| 按键 | 功能 |
-| --- | --- |
-| F9 | 启动 / 停止测量 |
-| Ctrl+S / Ctrl+Shift+S | 保存工程 / 另存为（脚本编辑区内 Ctrl+S 为 Apply） |
-| Ctrl+O | 打开工程（主机文件浏览器） |
-| Ctrl+E | 导出 |
-| Ctrl+K | 命令面板 |
-| Ctrl+G | 跳到指定时刻 |
-| ? | 快捷键与关于（输入框内不触发） |
-
 ## 构建与运行
 
 需要 Rust 工具链（edition 2024）。Web UI 还需要先构建前端。
 
 ```sh
 cd web && npm install && npm run build && cd ..
-cargo run                       # Web UI, opens http://127.0.0.1:2010
+cargo run                                         # http://127.0.0.1:2010
+cargo run -- --web --project <path.rxproj>        # 载入工程（停止状态）
+cargo run -- --web --replay <path.asc|blf|pcap>   # 载入并开始回放
 ```
 
 运行测试：
@@ -75,33 +65,12 @@ cargo run                       # Web UI, opens http://127.0.0.1:2010
 cargo test
 ```
 
-### Web UI
-
-Web 版本在 `web/`，技术栈是 axum + Preact/Vite；这是唯一 UI，不再依赖
-Dear ImGui 或 wgpu。
-
-```sh
-cd web && npm install && npm run build && cd ..
-cargo run                                       # http://127.0.0.1:2010 演示仿真
-cargo run -- --web --project <path.rxproj>      # 载入工程（停止状态）
-cargo run -- --web --replay <path.asc|blf|pcap|pcapng> # 载入并开始回放
-```
-
 `cargo build --release` 产出的 exe 已内嵌前端资源，可以单独拷走运行。双击会
 保留一个终端窗口，服务地址和启动失败原因都打印在那里；`--port <n>` 可换端口。
 不带参数启动会在普通交互终端里自动打开默认浏览器；**以管理员身份运行、或输出被
 重定向（脚本/代理运行、`cargo run > log`）时不会自动打开**——前者会启动管理员浏览器，
 后者会打断浏览器的单实例握手，都会弹权限提示——按终端打印的地址手动打开即可。
 `ROXY_WEB_NO_OPEN=1` 可完全关闭自动打开。
-
-当前 Web 端包括：
-
-- **主视图**：Trace / Messages（CAN、FlexRay、Ethernet 同行混排，方向、仅解码、Payload、时间范围、ID 包含/排除过滤，50k 行虚拟化）、总线速率/负载曲线、DBC 信号多泳道曲线与游标读数、Start/Stop/Pause；回放条（Speed 0.5x–Fast、Step 10ms–5s、Play for 1–60s、Play to 绝对时间，只向前）。
-- **工程与录制**：品牌菜单的 **Open project… / Recent projects** 与 Ctrl+O 打开工程，**Save / Save as** 保存（保留工作区与 Signals 曲线配置，未保存有标记）；**Setup** 菜单里的 **Recording…**（ASC/BLF/PCAP、文件名模板与 `100, 3F4x, FR0:13` 白名单，写入工程旁 `Record/`）、**Replay…**（保存的日志文件夹、录制列表、Channel map）与 **Scripts…**（节点脚本的编辑、应用、日志、断点单步、断言）。
-- **配置**：**Buses…** 增删/改名/改速率/加载 DBC·FIBEX·ARXML，探测并挂载 Kvaser/Vector 通道、切换 Simulated/Real bus，每个 DBC 节点以 chip 切换 Simulated/Offline；**Setup → Generator…** 编辑 CAN/FlexRay 发送条目（On、周期、hex，CAN 另有 FD/BRS，一键模拟节点）与 **Replay blocks**；**Sources** 给 DBC 信号加波形（Ramp/Sine/Step/Random/Triangle/Counter）；**Triggers…** 与 **Variables…** 管理规则和系统变量。
-- **布局与导出**：页眉菜单把 **Rate / Signals / Monitor / Data / State / Messages stats / Bus load / Spec / SOME/IP / Write** 放进四种布局的槽位；页眉的下载图标（Export）按扩展名导出 ASC/PCAP 与 CSV/TXT。
-
-观测覆盖 CAN、FlexRay 与 Ethernet；生成覆盖 CAN 与 FlexRay 会话帧（FlexRay 端口仍只收），Ethernet 可挂 Npcap 实时口收发，未挂口时 Panel/Trigger 只注入本会话。布局、信号选择、曲线、CAN 硬件挂载与 Monitor/Data/State 行随工程保存。
 
 ## 上手
 
@@ -130,9 +99,11 @@ roxy-can --vector-tx-probe 2                    # 打印该通道实际收到的
 
 ## 文档
 
+- [产品定位与体验准则](docs/product.md)：能力边界与改界面的取舍
 - [使用说明](docs/usage.md)：每个窗口的操作语义与统计口径
 - [节点脚本语言参考](docs/script_language.md)：完整的语言手册
 - [架构文档](docs/architecture.md)：线程模型、命令/快照边界与开发约定
+- [TODO.md](TODO.md)：还没做的事
 
 ## 主要依赖
 
