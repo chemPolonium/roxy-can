@@ -31,6 +31,8 @@ Standard 工作区可选 Focus / Split / Main + side / Quad 四种布局，每�
 - **Run mode**（顶栏，Start ▶ 左侧）：**Simulation** 运行生成器并分析总线/硬件流量；**Replay** 播放 Setup → Replay 选中的录制。它决定“这一趟数据从哪来”。
 - **测量状态**（状态栏左侧）：**STOPPED / MEASURING / PAUSED**。顶栏的 ▶ / ■ / ⏸ 只改变测量状态，不改变 Run mode。
 - 状态栏第二段写 `Simulation · <project/log>` 或 `Replay · <log>`，把运行模式和当前数据来源放在一起，避免把两者混成一个“模式”。
+- 顶栏下的统计条一格一项：Frames / Frame rate / Trace ring / Sim time / **Record** / Bus。Run mode 只在顶栏显示，不在这里重复；**Record** 写 `Off / Armed / REC`，与顶栏的 Record 按钮是同一状态。
+- 状态栏末尾只留服务地址；轮询频率与 UI 帧率收在它的悬停说明里，不再占一行常驻。
 
 ## 命令行（无头模式）
 
@@ -180,13 +182,14 @@ roxy-can -h                               完整帮助
 
 - **游标 A/B**（曲线区的旗标图标）：点一下在可见数据中点放一条游标（依次标 A、B、C…，Δt 取 A/B 两条），按住游标线拖动微调，垃圾桶图标（Clear）清掉全部。右上角读数给 `A`/`B` 两个时刻与 **Δt**（自动换单位，B 在 A 前就读负数），下面每个 **Plot** 或 **Read** 信号一行 `名字 A值 → B值 Δ差值`。
 - **Read 信号**：Signals 选择器里每个信号都有 **Plot / Read** 两段式模式开关。Read 只订阅、不画 lane，但读数表始终存在：没有游标时显示 **Live values** 与最新值（列头 `Now`），有游标时切到游标值，A/B 时一起显示 A/B/Δ 与区间统计。点当前模式可取消，切换另一段直接换模式，Ctrl-click 信号名也能切换 Read。图上一个 lane 都没有时仍可拖游标读数，Read 集合随工程 workspace 保存。
+- **大库选择**：选择器默认按报文收起，只先列出 bus / frame；点报文头展开信号，搜索时自动展开命中的报文。顶部 **Selected** 区汇总已选信号和只读信号，点一下可移除，**Selected only** 只显示当前已选/已读项。DBC Explorer 同样默认收起报文，并提供 **In use only** 过滤已加入曲线或 Monitor 的信号。
 - **Maximize 读数**：Signals 页最大化时读数表变成左侧竖栏，信号名与 A/B/Δ 值同行紧挨，图表占右侧；未最大化仍保留图下方的读数表。
 - 游标记的是**时间**：平移、缩放、实时推进都让线跟着视图走，标的点不动；跑出视野的游标不画线，时刻仍留在读数里。没打上的那条印 `-`，没有样本的时刻也印 `-`——不把 0 当成一个读数显示。
 - 曲线 A/B 游标位置与 Read 集合保存在 Web workspace 里，随工程保存恢复。
 
 ## Panel（操作页）
 
-- 画布上方是页面标签栏：点击切换页面，键盘 ←/→ 切换（Home/End 到首尾）；Edit 下 `+` 新建空页，**右键页签**打开页面操作菜单（Rename / Duplicate / Import / Export / Delete；至少保留一页），双击页名就地重命名。每页有自己的画幅尺寸和控件，切换页面会清空选区、撤销历史和剪贴板，但保留 Edit 模式。
+- 画布上方是页面标签栏：点击切换页面，键盘 ←/→ 切换（Home/End 到首尾）；Edit 下 `+` 新建空页，**右键页签**打开页面操作菜单（Rename / Duplicate / Import / Export / Delete；至少保留一页），双击页名就地重命名。**含控件的页删除要再点一次确认**（空页直接删），避免误删后撤销不回来。每页有自己的画幅尺寸和控件，切换页面会清空选区、撤销历史和剪贴板，但保留 Edit 模式。
 - 顶栏 **Standard / Panel** 进入操作页：固定画布默认 **1280×720**，始终显示 **8px 网格线**；画幅 W×H 在未选中控件时显示于右侧 Panel 属性，按 8px 取整，缩小到会把控件挤出画布时会拒绝；窗口不够大时画布出现滚动条，不缩放、不重排。控件尺寸变化时按钮/数值的字号与内边距按控件大小自适应，长标签省略显示，不需要手工调字号。
 - **Edit** 进入编辑：右侧属性栏常驻，点控件显示控件属性，点空白显示 **Panel** 属性（画幅 W×H 与控件数），切换选区时画布宽度不变。**+ Add** 菜单添加 Button / Value / Bar / Gauge / Lamp / Toggle / Setpoint，拖动控件移动、拖右下角缩放，位置和尺寸实时吸附网格；最小尺寸按类型，重叠的落点会被拒绝。编辑时控件不触发动作。
 - 选中控件后右侧属性栏按类型编辑：**Button** 的 **On click** 二选一、互斥——**Send message**（一次发一条 CAN / FlexRay / Ethernet / SOME/IP 报文；CAN 可填 raw 或目录报文，目录报文与 FR/ETH 已知帧可按物理值编码；FR 只注入本会话，ETH/SOME/IP 有实时口时从端口发出，否则只注入本会话；SOME/IP 按 service/method 列出 ARXML 字段，数字/字符串/枚举分别输入，没有描述时退回 `name=value`，union 用 `name.$selector`）或 **Script action**（动作名 + 可选数值参数）；**Value** 填 Source（信号 key、`derived:Name` 或 `sysvar:ns::name`）与小数位，只读显示实时值；**Bar / Gauge** 填 Source、最小值/最大值与小数位，按比例填充并同样可用 **Color bands**；**Lamp** 填 Source、点亮阈值（Lit at or above）与点亮颜色，源值达到阈值时亮起；**Toggle** 填系统变量名，显示 ON/OFF 并写 1/0；**Setpoint** 先选 Target（SysVar 或信号），再填目标、小数位与步进（Step），输入后按 Enter/失焦写入，按对应后端的量程夹取，并可带值触发同名脚本动作。**Color bands** 在所有只读控件上一致：按升序添加上限（`≤`）并为每段选 Neutral / OK / Warning / Critical，可再加一条 `above` 兜底最高段，只改数字/填充颜色、不改卡片底色。属性栏里的 **Duplicate** 与 **Delete** 复制/删除控件。
@@ -208,7 +211,7 @@ roxy-can -h                               完整帮助
 ## Monitor（轻量监控面板）
 
 - **Monitor 页**（可从任意页眉菜单放到任意槽位）：一行一个信号 `[状态点] 标签 值 单位`，从与 Data/Signals 同一棵选择树里挑（数据库信号 / 派生信号 / 系统变量通吃）。
-- 每行可开一条阈值规则（`>=` 或 `<=` 时整行换色），行内改阈值、切方向、点色号换色。
+- 每行可开一条阈值规则（`>=` 或 `<=` 时整行换色）。规则默认收起：点行内的 **rule** 才展开阈值、方向、小数位与颜色；关掉后这一行恢复成单行，屏幕上能同时看到更多信号。
 - 行随工程保存（键、标签、小数位、规则全部写入工程）；垃圾桶图标（Clear）清空，单行 `x` 删除。
 
 ## 系统变量
@@ -269,6 +272,7 @@ string/union 的 length-field 宽度与 alignment 会读取 SOMEIP-TRANSFORMATIO
 - 工程（`.rxproj`）单文件 JSON，DBC 路径相对工程目录。
 - 只保留当前格式：旧版本工程里已删除的字段不会再被迁移（例如 ImGui 时代的 desktop dock 状态、`sim_nodes`、单 FIBEX 路径）；未知字段按 serde 规则忽略。
 - 新会话的 Standard 默认是 **Main + side**（Messages / Rate / Messages stats）；四个布局各自保存页面分配与分隔比例。打开工程时布局、Signals 曲线配置与 Panel 页按文件恢复。
+- 未保存的工程在项目名旁显示 **Save**（也可 Ctrl+S）；Panel 页的改动同样算未保存，关闭或刷新页面时浏览器会提示，避免直接丢掉改动。浏览器标签页标题跟随当前工程，未保存时带 `*`。
 - 坏库容错：复用报文的 mux 条件引用了不存在的开关时按"无条件"处理（显示数据而不是空解码）。
 - 信号类型标记（`[u16]` / `[f32]`）按 `SIG_VALTYPE_` 声明解位模式。
 

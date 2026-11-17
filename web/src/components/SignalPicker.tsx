@@ -47,6 +47,20 @@ function messageId(channel: CatalogChannel, message: CatalogMessage): string {
   return `0x${message.id.toString(16).toUpperCase().padStart(width, "0")}`;
 }
 
+function messageKey(
+  channel: CatalogChannel,
+  message: CatalogMessage,
+): string {
+  return `${channel.kind}:${channel.index}:${message.id}:${message.extended}`;
+}
+
+function toggleSet(set: Set<string>, key: string): Set<string> {
+  const next = new Set(set);
+  if (next.has(key)) next.delete(key);
+  else next.add(key);
+  return next;
+}
+
 export function SignalPicker({
   catalog,
   loading,
@@ -67,6 +81,17 @@ export function SignalPicker({
   onClose,
 }: Props) {
   const [query, setQuery] = useState("");
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const [collapsedSearch, setCollapsedSearch] = useState<Set<string>>(
+    new Set(),
+  );
+  const [selectedOnly, setSelectedOnly] = useState(false);
+
+  useEffect(() => {
+    // A new search starts with every matching message open; clearing it
+    // returns to the frames the user had explicitly expanded.
+    setCollapsedSearch(new Set());
+  }, [query]);
 
   useEffect(() => {
     const close = (event: KeyboardEvent) => {
@@ -79,6 +104,7 @@ export function SignalPicker({
   const groups = useMemo(() => {
     if (!catalog) return [];
     const needle = query.trim().toLowerCase();
+    const active = (key: string) => selected.has(key) || !!read?.has(key);
     return catalog.channels
       .filter((channel) => !kinds || kinds.includes(channel.kind))
       .map((channel) => {
@@ -90,20 +116,68 @@ export function SignalPicker({
               channelHit ||
               message.name.toLowerCase().includes(needle) ||
               messageId(channel, message).toLowerCase().includes(needle);
-            const signals = messageHit
+            let signals = messageHit
               ? message.signals
               : message.signals.filter(
                   (signal) =>
                     signal.name.toLowerCase().includes(needle) ||
-                    signal.unit.toLowerCase().includes(needle),
+                    signal.unit.toLowerCase().includes(needle) ||
+                    (signal.comment ?? "").toLowerCase().includes(needle),
                 );
-            return { message, signals };
+            if (selectedOnly) {
+              signals = signals.filter((signal) => active(signal.key));
+            }
+            return {
+              message,
+              signals,
+              key: messageKey(channel, message),
+              total: message.signals.length,
+              active: message.signals.filter((signal) => active(signal.key))
+                .length,
+            };
           })
           .filter((entry) => entry.signals.length > 0);
         return { channel, messages };
       })
       .filter((group) => group.messages.length > 0);
-  }, [catalog, query, kinds]);
+  }, [catalog, query, kinds, selectedOnly, selected, read]);
+
+  const selectedEntries = useMemo(() => {
+    if (!catalog) return [];
+    const out: {
+      channel: CatalogChannel;
+      message: CatalogMessage;
+      signal: CatalogSignal;
+      readOnly: boolean;
+    }[] = [];
+    for (const channel of catalog.channels) {
+      for (const message of channel.messages) {
+        for (const signal of message.signals) {
+          const plotted = selected.has(signal.key);
+          const reading = !!read?.has(signal.key);
+          if (plotted || reading) {
+            out.push({
+              channel,
+              message,
+              signal,
+              readOnly: reading && !plotted,
+            });
+          }
+        }
+      }
+    }
+    return out;
+  }, [catalog, selected, read]);
+
+  const selectedDerived = useMemo(
+    () =>
+      derived.filter(
+        (definition) =>
+          selected.has(`derived:${definition.id}`) ||
+          !!read?.has(`derived:${definition.id}`),
+      ),
+    [derived, selected, read],
+  );
 
   const computed = useMemo(() => {
     const needle = query.trim().toLowerCase();
@@ -114,6 +188,52 @@ export function SignalPicker({
         definition.expression.toLowerCase().includes(needle),
     );
   }, [derived, query]);
+
+  const visibleComputed = selectedOnly
+    ? computed.filter(
+        (definition) =>
+          selected.has(`derived:${definition.id}`) ||
+          !!read?.has(`derived:${definition.id}`),
+      )
+    : computed;
+
+  const selectedCount = selectedEntries.length + selectedDerived.length;
+  const querying = query.trim().length > 0;
+  const visibleSelected = selectedEntries.slice(0, 16);
+  const visibleDerived = selectedDerived.slice(0, 8);
+  const hiddenSelected =
+    selectedEntries.length -
+    visibleSelected.length +
+    (selectedDerived.length - visibleDerived.length);
+
+  const messageOpen = (key: string) =>
+    selectedOnly ||
+    (querying ? !collapsedSearch.has(key) : expanded.has(key));
+
+  const toggleMessage = (key: string) => {
+    if (querying) {
+      setCollapsedSearch((old) => toggleSet(old, key));
+    } else {
+      setExpanded((old) => toggleSet(old, key));
+    }
+  };
+
+  const removeSelected = (entry: (typeof selectedEntries)[number]) => {
+    if (selected.has(entry.signal.key)) {
+      onToggle(entry.channel, entry.message, entry.signal, false);
+    } else if (entry.readOnly) {
+      onReadToggle?.(entry.channel, entry.message, entry.signal, false);
+    }
+  };
+
+  const removeDerived = (definition: DerivedDef) => {
+    const key = `derived:${definition.id}`;
+    if (selected.has(key)) {
+      onDerivedToggle?.(definition, false);
+    } else if (read?.has(key)) {
+      onDerivedReadToggle?.(definition, false);
+    }
+  };
 
   return (
     <div class="modal-backdrop" onMouseDown={onClose}>
@@ -147,6 +267,15 @@ export function SignalPicker({
               setQuery((event.target as HTMLInputElement).value)
             }
           />
+          <button
+            type="button"
+            class={`mini ${selectedOnly ? "on" : ""}`}
+            aria-pressed={selectedOnly}
+            title="Show only plotted or read signals"
+            onClick={() => setSelectedOnly((old) => !old)}
+          >
+            Selected only
+          </button>
         </div>
         <div class="picker-body">
           {loading && (
@@ -160,15 +289,69 @@ export function SignalPicker({
               <span>{error}</span>
             </div>
           )}
-          {!loading && !error && groups.length === 0 && computed.length === 0 && (
+          {!loading && !error && groups.length === 0 && visibleComputed.length === 0 && selectedCount === 0 && (
             <div class="empty">
-              <strong>{query ? "No matching signals" : "No signals available"}</strong>
+              <strong>
+                {selectedOnly
+                  ? "No selected signals"
+                  : query
+                    ? "No matching signals"
+                    : "No signals available"}
+              </strong>
               <span>
-                {query
-                  ? "Try a different bus, message or signal name."
-                  : "Load a description file into the project first."}
+                {selectedOnly
+                  ? "Select a signal from a frame first, then turn on Selected only."
+                  : query
+                    ? "Try a different bus, message or signal name."
+                    : "Load a description file into the project first."}
               </span>
             </div>
+          )}
+          {!loading && !error && selectedCount > 0 && (
+            <section class="picker-selected">
+              <div class="picker-selected-head">
+                <h4>Selected</h4>
+                <span>{selectedCount}</span>
+              </div>
+              <div class="picker-selected-list">
+                {visibleSelected.map((entry) => (
+                  <button
+                    key={entry.signal.key}
+                    type="button"
+                    class="picker-chip"
+                    title={`${entry.message.name} / ${entry.signal.name}`}
+                    onClick={() => removeSelected(entry)}
+                  >
+                    <span>{entry.signal.name}</span>
+                    <small>{entry.message.name}</small>
+                    {entry.readOnly && <small>read</small>}
+                    <b>×</b>
+                  </button>
+                ))}
+                {visibleDerived.map((definition) => (
+                  <button
+                    key={definition.id}
+                    type="button"
+                    class="picker-chip"
+                    title={definition.expression}
+                    onClick={() => removeDerived(definition)}
+                  >
+                    <span>{definition.name}</span>
+                    <small>computed</small>
+                    <b>×</b>
+                  </button>
+                ))}
+                {hiddenSelected > 0 && (
+                  <button
+                    type="button"
+                    class="picker-chip more"
+                    onClick={() => setSelectedOnly(true)}
+                  >
+                    +{hiddenSelected} more
+                  </button>
+                )}
+              </div>
+            </section>
           )}
           {!loading &&
             !error &&
@@ -178,16 +361,34 @@ export function SignalPicker({
                 key={`${channel.kind}:${channel.index}`}
               >
                 <h4>{channel.name}</h4>
-                {messages.map(({ message, signals }) => (
-                  <div
-                    class="picker-message"
-                    key={`${channel.kind}:${channel.index}:${message.id}:${message.extended}`}
-                  >
-                    <div class="picker-message-head">
-                      <span>{message.name}</span>
-                      <em>{messageId(channel, message)}</em>
-                    </div>
-                    {signals.map((signal) => {
+                {messages.map(({ message, signals, key, total, active }) => {
+                  const open = messageOpen(key);
+                  return (
+                    <div class="picker-message" key={key}>
+                      <button
+                        type="button"
+                        class="picker-message-head"
+                        aria-expanded={open}
+                        onClick={() => toggleMessage(key)}
+                      >
+                        <span class="picker-message-title">
+                          <span class="picker-chevron">
+                            {open ? "▾" : "▸"}
+                          </span>
+                          {message.name}
+                        </span>
+                        <span class="picker-message-meta">
+                          <em>{messageId(channel, message)}</em>
+                          <small>
+                            {signals.length}
+                            {querying || selectedOnly ? ` / ${total}` : ""}{" "}
+                            signals
+                          </small>
+                          {active > 0 && <small>{active} selected</small>}
+                        </span>
+                      </button>
+                      {open &&
+                        signals.map((signal) => {
                       const on = selected.has(signal.key);
                       const reading = !!read?.has(signal.key);
                       return (
@@ -301,11 +502,12 @@ export function SignalPicker({
                         </div>
                       );
                     })}
-                  </div>
-                ))}
+                    </div>
+                  );
+                })}
               </section>
             ))}
-          {!loading && !error && computed.length > 0 && (
+          {!loading && !error && visibleComputed.length > 0 && (
             <section class="picker-channel picker-computed">
               <h4>
                 Computed
@@ -319,7 +521,7 @@ export function SignalPicker({
                   </button>
                 )}
               </h4>
-              {computed.map((definition) => {
+              {visibleComputed.map((definition) => {
                 const key = `derived:${definition.id}`;
                 const on = selected.has(key);
                 const reading = !!read?.has(key);

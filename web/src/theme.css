@@ -10,7 +10,7 @@
   --head: #f2f5f8;
   --line: #d5dce5;
   --line-soft: #e6ebf1;
-  --muted: #667386;
+  --muted: #5c6878;
   --accent: #1f6fd0;
   --accent-soft: #e8f1fd;
   --tx: #a15f00;
@@ -138,7 +138,7 @@
 }
 
 [data-theme="light"] .statusbar {
-  color: #6b7788;
+  color: #5f6b7a;
 }
 
 [data-theme="light"] .statusbar .state {
@@ -355,6 +355,7 @@
 [data-theme="light"] .state-bands.on,
 [data-theme="light"] .spec-filters label.on,
 [data-theme="light"] .monitor-rule .mini.on,
+[data-theme="light"] .monitor-rule-toggle.on,
 [data-theme="light"] .script-item.on {
   border-color: #a9c8ea;
   background: #e3eefc;

@@ -739,7 +739,7 @@ export function BusesModal({
           <h2>Buses</h2>
           <div class="picker-head-right">
             <span>
-              {buses.length} bus{buses.length === 1 ? "" : "s"} ·{" "}
+              {buses.length} bus{buses.length === 1 ? "" : "es"} ·{" "}
               {attachedCount} attached
             </span>
             <input

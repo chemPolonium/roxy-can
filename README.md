@@ -41,11 +41,11 @@ Spec / SOME/IP / Write 都是单实例页面，可放进任意槽位。入口与
 - **仿真节点**：类 CAPL 的小语言编译执行，`on start` / `on message` / `on fr slot` / `on timer` / `on errorFrame` 事件驱动，读写 DBC 信号、收发帧、随机与波形内建；`send` 超过 8 字节自动 FD，`send_fd(id, buffer[, brs])` 可强制 8 字节 FD 并可选 BRS。每个回调有指令预算，有缺陷的脚本不会卡住总线，出错节点自动停止运行。可绑定到 DBC 节点，绑定后能否发送由该节点的角色决定。编辑器三栏：处理器大纲、静态收发事实表、函数与报文速插；源码区基于 CodeMirror 6，带行号、语法高亮、搜索/替换、括号匹配、代码折叠和撤销/重做。语言参考见 [docs/script_language.md](docs/script_language.md)，可运行示例见 `examples/`。
 - **派生信号**：脚本 `emit_value("名", 表达式)` 一行发布，像数据库信号一样进 Signals / Data / State。
 - **系统变量**：CANoe 式的命名空间变量（初值 / 界限 / 单位 / 备注），专用窗口管理，脚本读写，同时发布为可观测流；每次测量开始复位为初值。
-- **Monitor 监控面板**：轻量纯文本行，一行一个信号，行内阈值着色，超过阈值直接变色。
+- **Monitor 监控面板**：轻量纯文本行，一行一个信号；阈值规则默认收起，点行内 **rule** 展开阈值/方向/小数位/颜色，超过阈值直接变色。
 - **State Tracker**：对订阅信号的历史做状态分段——枚举标签、二进制方波、会话稳定配色，支持自定义区间与固定颜色，短区段按最短显示时长合并，区段表可导出 CSV。
 - **Write 窗口**：整系统一条滚动输出——节点 `print`、装配层检查与告警、节点停止的错误、命令事件分色带时间戳；可按类别过滤、导出文本。
 - **录制与回放**：读写 Vector ASC 与 BLF（经典 / FD / 错误 / 远程帧、FlexRay 收帧与 Ethernet 对象），有以太网帧时另写同名 `.eth.pcap`（ASC/BLF 自身都已含 Ethernet，sidecar 是给 Wireshark/回放用的），也可选 PCAP 格式只录 Ethernet；自家录的文件放回去是同一批帧；`--convert` 纯流式转码。播放器式控制——倍速增减、**Fast**（一次读到末尾）、按步长单步、播放指定时长或到指定时间后自动暂停（都只向前）；按时间戳顺序调度，不做进度条随机跳转。别人的日志只带通道编号，**Setup → Replay…** 里的 **Channel map** 把那些编号指到本工程的各路（CAN、FlexRay、以太网各一组，随工程保存）。录制支持按 id 过滤（CAN 写 hex、FlexRay 写 `FR0:13`）。
-- **工程文件（.rxproj）**：总线与 DBC、CAN 硬件挂载、观测窗口及过滤、信号选择、生成器配置、触发器、窗口布局存一个 JSON；DBC 路径相对工程目录，整个文件夹可移动。
+- **工程文件（.rxproj）**：总线与 DBC、CAN 硬件挂载、观测窗口及过滤、信号选择、生成器配置、触发器、窗口布局存一个 JSON；DBC 路径相对工程目录，整个文件夹可移动。浏览器标签页标题跟随工程名，未保存时带 `*`。
 - **中文字体**：Web UI 不内嵌中文字体，按系统字体显示。
 
 ## 构建与运行
@@ -77,7 +77,7 @@ cargo test
 1. 品牌菜单 **Open project…**（Ctrl+O）打开工程，或 **Sample project** 生成示例；在 **Buses…** 里加总线、加载 DBC
 2. 顶栏 **Run mode** 选 **Simulation** 或 **Replay** 后点 **▶**；Replay 先在 **Setup → Replay…** 勾选录制
 3. **Buses…** 里把 DBC 节点切到 **Simulated**，在 **Setup → Generator…** 里逐条打开发送的报文、调数值、加激励
-4. **Setup → Recording…** 配好文件名与格式，点顶栏 **Record** 开始/停止；**Save** 保存工程
+4. **Setup → Recording…** 配好文件名与格式，点顶栏 **Record** 开始/停止；项目名旁的 **Save**（或 Ctrl+S）保存工程
 5. **Spec** 页看实测流量与数据库声明的对账结果
 
 ## 命令行

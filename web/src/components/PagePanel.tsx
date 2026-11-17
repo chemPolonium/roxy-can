@@ -1669,6 +1669,7 @@ export function PagePanel({
   const addTrigger = useRef<HTMLButtonElement>(null);
   const addMenu = useRef<HTMLDivElement>(null);
   const [menu, setMenu] = useState<PageMenu | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const importInput = useRef<HTMLInputElement>(null);
   const [pageNotice, setPageNotice] = useState("");
@@ -1709,6 +1710,7 @@ export function PagePanel({
 
   useEffect(() => {
     if (!menu) return;
+    setConfirmDelete(null);
     menuRef.current
       ?.querySelector<HTMLButtonElement>("button:not(:disabled)")
       ?.focus();
@@ -3064,13 +3066,26 @@ export function PagePanel({
               <button
                 type="button"
                 role="menuitem"
+                class={confirmDelete === menu.id ? "danger" : undefined}
                 disabled={book.pages.length <= 1}
                 onClick={() => {
+                  const target = book.pages.find(
+                    (entry) => entry.id === menu.id,
+                  );
+                  if (!target) return;
+                  // An empty page can go at once; a page with controls gets
+                  // the same two-step confirm as Clear Trace.
+                  if (target.widgets.length > 0 && confirmDelete !== menu.id) {
+                    setConfirmDelete(menu.id);
+                    return;
+                  }
                   setMenu(null);
                   deletePageById(menu.id);
                 }}
               >
-                Delete page
+                {confirmDelete === menu.id
+                  ? "Delete page and controls?"
+                  : "Delete page"}
               </button>
             </>
           )}

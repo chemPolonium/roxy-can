@@ -495,6 +495,9 @@ export function App() {
   const [panelBook, setPanelBook] = useState<PanelBook>(
     savedView.panelBook ?? defaultPanelBook(),
   );
+  // Panel pages only enter the project on Save, so their edits are dirty even
+  // when the core's project flag is still clean.
+  const [panelDirty, setPanelDirty] = useState(false);
   const [maximizedSlot, setMaximizedSlot] = useState<number | null>(null);
   const [focusedSlot, setFocusedSlot] = useState(0);
   const [dockDrag, setDockDrag] = useState<DockDrag>(null);
@@ -609,6 +612,16 @@ export function App() {
     }, 2600);
   };
 
+  const panelContentSignature = (book: PanelBook) =>
+    book.pages.map((page) => exportPanelFile(page)).join("\n");
+
+  const updatePanelBook = (book: PanelBook) => {
+    if (panelContentSignature(book) !== panelContentSignature(panelBook)) {
+      setPanelDirty(true);
+    }
+    setPanelBook(book);
+  };
+
   const applyWorkspace = (raw: unknown) => {
     if (!raw || typeof raw !== "object") {
       setShellMode("standard");
@@ -624,6 +637,7 @@ export function App() {
       setMessageColumns(undefined);
       setStatsColumns(undefined);
       setPanelBook(defaultPanelBook());
+      setPanelDirty(false);
       chartCursorSeq.current = 1;
       return;
     }
@@ -648,6 +662,7 @@ export function App() {
     setReadSignals(savedReads);
     setDerivedReads(view.derivedReads ?? []);
     setPanelBook(view.panelBook ?? defaultPanelBook());
+    setPanelDirty(false);
     for (const spec of savedReads) void run(readSpecCommand(spec));
     for (const spec of view.derivedReads ?? []) {
       void run({
@@ -688,6 +703,8 @@ export function App() {
     if (appliedPanelPages.current === key) return;
     appliedPanelPages.current = key;
     setPanelBook((book) => mergeProjectPanels(book, pages));
+    // These pages came from the project file, so they are already saved.
+    setPanelDirty(false);
   }, [workspaceHydrated, state?.projectPath, panelPagesSignature]);
 
   // The core owns the derived list; mirror it for the editor.
@@ -1133,15 +1150,17 @@ export function App() {
     };
   }, [dockDrag, dock.layout]);
 
-  const run = async (command: Command) => {
+  const run = async (command: Command): Promise<boolean> => {
     setBusy(true);
     try {
       await sendCommand(command);
       setError("");
+      return true;
     } catch (e) {
       const message = describeError(e);
       setError(message);
       showToast(message);
+      return false;
     } finally {
       setBusy(false);
     }
@@ -1537,7 +1556,9 @@ export function App() {
     // Flush the current view before the file is written; the debounced sync
     // may still be waiting and would otherwise save the previous workspace.
     await pushWorkspace().catch(() => {});
-    await run({ type: "save_project", path, panels: projectPanels() });
+    if (await run({ type: "save_project", path, panels: projectPanels() })) {
+      setPanelDirty(false);
+    }
   };
 
   const saveProjectAs = async () => {
@@ -1550,7 +1571,12 @@ export function App() {
       initialPath: projectFolder,
       initialName: `${base}.rxproj`,
     });
-    if (path) await run({ type: "save_project", path, panels: projectPanels() });
+    if (
+      path &&
+      (await run({ type: "save_project", path, panels: projectPanels() }))
+    ) {
+      setPanelDirty(false);
+    }
   };
 
   const handleDroppedFile = async (file: File) => {
@@ -1582,7 +1608,7 @@ export function App() {
           return;
         }
         const added = addPanelPageFromFile(panelBook, result.page);
-        setPanelBook(added.book);
+        updatePanelBook(added.book);
         setShellMode("panel");
         showToast(`Imported ${added.page.name}`);
         return;
@@ -1698,6 +1724,28 @@ export function App() {
     if (shellMode !== "panel" || catalogLoading) return;
     if (!catalog || catalogKey !== catalogBusKey) void loadCatalog();
   }, [shellMode, catalog, catalogLoading, catalogKey, catalogBusKey]);
+
+  // Closing the tab with unsaved project changes would discard them silently;
+  // the browser's own prompt is the only warning that works on unload.
+  useEffect(() => {
+    if (!state?.dirty && !panelDirty) return;
+    const warn = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      event.returnValue = "";
+    };
+    window.addEventListener("beforeunload", warn);
+    return () => window.removeEventListener("beforeunload", warn);
+  }, [state?.dirty, panelDirty]);
+
+  // The browser tab is a second place the user looks for "which project is
+  // this?", so follow the project name (or the replayed log when untitled).
+  useEffect(() => {
+    const label = state?.project || (state?.log ? baseName(state.log) : "");
+    const mark = state?.dirty || panelDirty ? " *" : "";
+    document.title = label
+      ? `${label}${mark} · Roxy CAN`
+      : `Roxy CAN${mark}`;
+  }, [state?.project, state?.log, state?.dirty, panelDirty]);
 
   const openPicker = () => {
     revealPanel("signals");
@@ -2409,6 +2457,7 @@ export function App() {
   const runModeLabel = replaying ? "Replay" : "Simulation";
   const recordActive = Boolean(state?.recording) && measuring;
   const recordArmed = Boolean(state?.recording) && !measuring;
+  const dirty = Boolean(state?.dirty) || panelDirty;
   const projectFolder = (() => {
     const path = state?.projectPath;
     if (!path) return null;
@@ -3056,7 +3105,10 @@ export function App() {
 
   const renderRate = () =>
     state && state.buses.length === 0 ? (
-      <div class="rate-empty" />
+      <div class="empty">
+        <strong>No bus rate yet</strong>
+        <span>Open a project or add a bus to start charting traffic.</span>
+      </div>
     ) : (
       <RateChart
         points={state?.series ?? []}
@@ -4430,9 +4482,7 @@ export function App() {
                     <path d="M5.5 2.5v4h5v-4M5.5 13v-4h5v4" />
                   </svg>
                   <span>Save project</span>
-                  {state?.dirty && (
-                    <span class="brand-menu-state">unsaved</span>
-                  )}
+                  {dirty && <span class="brand-menu-state">unsaved</span>}
                 </button>
                 <button
                   type="button"
@@ -4509,10 +4559,19 @@ export function App() {
                       `${state.channels.length} buses · ${state.channels.map((c) => c.name).join(", ")}`
                   : "connecting to the bus core"}
               </span>
-              {state?.dirty && (
-                <span class="brand-dirty" title="Unsaved changes">
-                  *
-                </span>
+              {dirty && (
+                <button
+                  type="button"
+                  class="brand-save"
+                  title="Unsaved changes · save the project (Ctrl+S)"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    if (state?.projectPath) void saveProject(null);
+                    else void saveProjectAs();
+                  }}
+                >
+                  Save
+                </button>
               )}
             </div>
           </div>
@@ -4854,9 +4913,22 @@ export function App() {
           <span>Sim time</span>
           <strong>{state ? `${seconds(state.simTimeUs, 2)} s` : "—"}</strong>
         </div>
-        <div class="stat">
-          <span>Run mode</span>
-          <strong>{state ? runModeLabel : "—"}</strong>
+        <div
+          class="stat"
+          title={
+            recordActive
+              ? `Recording to ${
+                  state?.recordFile ? baseName(state.recordFile) : "a new file"
+                }`
+              : recordArmed
+                ? "Recording is armed; Start opens a new file"
+                : "Recording is off"
+          }
+        >
+          <span>Record</span>
+          <strong class={recordActive ? "rec" : recordArmed ? "armed" : ""}>
+            {!state ? "—" : recordActive ? "REC" : recordArmed ? "Armed" : "Off"}
+          </strong>
         </div>
         <div class="stat">
           <span>Bus</span>
@@ -5097,7 +5169,7 @@ export function App() {
             actionNames={pageActionNames}
             view={pageView}
             actionContext={pageActionContext}
-            onBook={setPanelBook}
+            onBook={updatePanelBook}
             onRun={runPanelAction}
             onToggle={togglePageSysVar}
             onSetNumber={setPageNumber}
@@ -5137,9 +5209,11 @@ export function App() {
             {toast}
           </span>
         )}
-        <span>poll 10 Hz</span>
-        <span>{uiFps ? `UI ${uiFps} fps` : "UI —"}</span>
-        <span>{window.location.host}</span>
+        <span
+          title={`Polling 10 Hz${uiFps ? ` · UI ${uiFps} fps` : ""}`}
+        >
+          {window.location.host}
+        </span>
       </footer>
 
       {triggersOpen && (

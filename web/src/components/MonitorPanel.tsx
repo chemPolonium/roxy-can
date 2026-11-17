@@ -98,6 +98,23 @@ export function MonitorPanel({ rows, theme, onEdit, onRemove }: Props) {
                   {row.hasValue ? row.value.toFixed(row.digits) : "—"}
                   {row.hasValue && row.unit && <em>{row.unit}</em>}
                 </strong>
+                {row.kind !== "derived" && (
+                  <button
+                    type="button"
+                    class={`mini monitor-rule-toggle ${
+                      row.ruleOn ? "on" : ""
+                    }`}
+                    aria-pressed={row.ruleOn}
+                    title={
+                      row.ruleOn
+                        ? "Color threshold on; click to turn off"
+                        : "Add a color threshold rule"
+                    }
+                    onClick={() => onEdit(row, { ruleOn: !row.ruleOn })}
+                  >
+                    rule
+                  </button>
+                )}
                 <button
                   type="button"
                   class="mini"
@@ -107,16 +124,8 @@ export function MonitorPanel({ rows, theme, onEdit, onRemove }: Props) {
                   ×
                 </button>
               </div>
-              {row.kind !== "derived" && (
+              {row.kind !== "derived" && row.ruleOn && (
                 <div class="monitor-rule">
-                  <button
-                    type="button"
-                    class={`mini ${row.ruleOn ? "on" : ""}`}
-                    title="Toggle the coloring rule"
-                    onClick={() => onEdit(row, { ruleOn: !row.ruleOn })}
-                  >
-                    rule {row.ruleOn ? "on" : "off"}
-                  </button>
                   <ThresholdInput
                     value={row.threshold}
                     onCommit={(threshold) => onEdit(row, { threshold })}
