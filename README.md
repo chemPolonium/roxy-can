@@ -1,6 +1,6 @@
 # roxy-can
 
-基于 Rust 的 CAN / FlexRay / Ethernet 总线分析工具，使用本地 Web UI（axum + Preact，见 [web/README.md](web/README.md)）。多总线、每条总线各加载一份 DBC，覆盖经典 CAN、CAN FD、错误帧与远程帧，支持 Kvaser / Vector 硬件连接、与 Vector 工具链兼容的 ASC / BLF 录制与回放、经典 PCAP / PCAPNG 以太网抓包回放与 PCAP 录制，以及类 CAPL 的仿真节点脚本。Windows x64 可执行文件见 [Releases](https://github.com/chemPolonium/roxy-can/releases)。
+基于 Rust 的 CAN / FlexRay / Ethernet 总线分析工具，使用本地 Web UI（axum + Preact）。多总线、每条总线各加载一份 DBC，覆盖经典 CAN、CAN FD、错误帧与远程帧，支持 Kvaser / Vector 硬件连接、与 Vector 工具链兼容的 ASC / BLF 录制与回放、经典 PCAP / PCAPNG 以太网抓包回放与 PCAP 录制，以及类 CAPL 的仿真节点脚本。Windows x64 可执行文件见 [Releases](https://github.com/chemPolonium/roxy-can/releases)。
 
 ![roxy-can](screenshot.png)
 
@@ -12,7 +12,7 @@
 
 截图使用浅色主题：首图是 Main + side（Signals / Monitor / Data），下表展示 Quad（Rate / Bus load / State / Write）和 Focus（曲线与 A/B 游标），最后是 Panel 操作页。
 
-完整操作语义见 [docs/usage.md](docs/usage.md)，产品定位与体验准则见 [docs/product.md](docs/product.md)，这一页只说有什么。
+完整操作语义见 [docs/usage.md](docs/usage.md)，结构说明见 [docs/architecture.md](docs/architecture.md)，脚本语言见 [docs/script_language.md](docs/script_language.md)。
 
 ## 功能
 
@@ -20,7 +20,7 @@
 四种布局，每个槽位用页眉菜单选面板或移动；顶栏 **Standard / Panel** 切换操作页。
 Trace / Messages / Rate / Signals / Monitor / Data / State / Messages stats / Bus load /
 Spec / SOME/IP / Write 都是单实例页面，可放进任意槽位。入口与操作见
-[web/README.md](web/README.md)。下文的“窗口”指 core 的观测模型，Web 用对应页面呈现。
+[docs/usage.md](docs/usage.md)。下文的“窗口”指 core 的观测模型，Web 用对应页面呈现。
 
 - **动态总线**：数量不固定，在 Buses 窗口增删、改名，每条总线单独加载 DBC；删除总线时观测器、过滤器与生成器条目自动跟着重映射。
 - **DBC 解码**：复用报文只解当前那一组；值表显示枚举文本；浮点信号按位模式解码并带类型标记。
@@ -130,11 +130,9 @@ roxy-can --vector-tx-probe 2                    # 打印该通道实际收到的
 
 ## 文档
 
-- [产品定位与体验准则](docs/product.md)：能力边界与改界面的取舍
 - [使用说明](docs/usage.md)：每个窗口的操作语义与统计口径
 - [节点脚本语言参考](docs/script_language.md)：完整的语言手册
 - [架构文档](docs/architecture.md)：线程模型、命令/快照边界与开发约定
-- [TODO.md](TODO.md)：还没做的事
 
 ## 主要依赖
 
