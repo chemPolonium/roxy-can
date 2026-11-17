@@ -1,6 +1,6 @@
 # roxy-can
 
-基于 Rust 的 CAN / FlexRay / Ethernet 总线分析工具，使用本地 Web UI（axum + Preact，见 [web/README.md](web/README.md)）。多总线、每条总线各加载一份 DBC，覆盖经典 CAN、CAN FD、错误帧与远程帧，支持 Vector 硬件连接、与 Vector 工具链兼容的 ASC / BLF 录制与回放、经典 PCAP / PCAPNG 以太网抓包回放与 PCAP 录制，以及类 CAPL 的仿真节点脚本。Windows x64 可执行文件见 [Releases](https://github.com/chemPolonium/roxy-can/releases)。
+基于 Rust 的 CAN / FlexRay / Ethernet 总线分析工具，使用本地 Web UI（axum + Preact，见 [web/README.md](web/README.md)）。多总线、每条总线各加载一份 DBC，覆盖经典 CAN、CAN FD、错误帧与远程帧，支持 Kvaser / Vector 硬件连接、与 Vector 工具链兼容的 ASC / BLF 录制与回放、经典 PCAP / PCAPNG 以太网抓包回放与 PCAP 录制，以及类 CAPL 的仿真节点脚本。Windows x64 可执行文件见 [Releases](https://github.com/chemPolonium/roxy-can/releases)。
 
 ![roxy-can](screenshot.png)
 
@@ -32,8 +32,8 @@ Spec / SOME/IP / Write 都是单实例页面，可放进任意槽位。入口与
 - **Interactive Generator（节点中心）**：DBC 报文按声明周期发送，按信号拖物理值或直接改 hex；每个信号可添加 Ramp / Sine / Step / Random / Triangle / Counter 激励。条目在 **Setup → Generator…** 里按总线编辑，行上标出所属 DBC 节点；新建默认不发送，发不发逐条由你决定。
 - **触发器**：条件有信号越阈、ID 出现、错误帧、周期超时、FlexRay 帧到达、FlexRay 信号越阈、FlexRay 槽超时、系统变量越阈、CAN 载荷字节匹配、CAN E2E 计数器 gap/jump、以太网 flow 出现与 SOME/IP service 消息（可按 method / message type 收窄）；动作可开始/停止录制（带预触发上下文与 post-roll）、发反应帧（CAN / FlexRay / Ethernet 整条消息或 SOME/IP 消息；CAN 触发帧的同名信号自动镜像过去）、插入标记、清空 Trace、写系统变量或跑脚本动作。每条规则可设冷却、最大触发次数以及自己的 pre/post 录制帧数，行上单独 Re-arm；每次触发都进 Write 并可在回放条上用 **←/→**（Prev/Next trigger）跳转，Trace/曲线的右键菜单能就地建规则。规则可整表导出为 `.rxtriggers` 或从文件导入；导入按总线名重映射，逐条校验并报告跳过原因。
 - **节点与脚本**：**Buses** 里每个 DBC 节点是模拟/离线开关（缺省离线）；**Setup → Generator…** 按总线列出条目并在行上标节点；**Setup → Scripts…** 新建或绑定节点脚本，编辑、应用与调试。
-- **Profile 与硬件映射**：`profiles/<名>.toml` 存角色覆盖与硬件映射，配合 `--profile` 让同一份工程在仿真 / 台架 / CI 之间零修改切换；错配整份拒绝，绝不只生效一半。
-- **Kvaser / Vector 硬件连接**：Buses 里选中总线、选硬件通道再点 **Attach**；挂载的驱动与通道随工程保存，重新打开工程会自动重连；通道被别的程序占用时自动降级为仅接收并在行上标注；CAN FD 按总线的数据段波特率申请，硬件不支持就降级经典并标注。连接期间收到的帧照常进入所有视图，真实节点不必被模拟。发送被线路拒绝不再是静默的：第一次写入 Write 窗口带驱动给的原因，之后只在 Buses 行上累计次数。
+- **Profile 覆盖**：`profiles/<名>.toml` 可选地覆盖节点角色和整套硬件映射，配合 `--profile` 在仿真、台架、CI 之间切换。工程本身也会保存当前的 CAN 挂载；档案里的总线或节点对不上工程时整份不应用。
+- **Kvaser / Vector 硬件连接**：在 Buses 里选总线和通道后点 **Attach**。挂载的驱动与通道会写进工程，下次打开自动重连；适配器不在或被别的程序占用时，只在总线和状态栏报错，工程照常打开。CAN FD 申请失败会退回经典并注明原因，发送被线路拒绝时第一次写进 Write，之后在 Buses 行累计次数。
 - **FlexRay**：可同时监听多路，每路一份自己的集群描述（FIBEX 2.x/3.x 或 AUTOSAR ARXML，中文编码无碍）。帧名与信号都按该路的描述解码，与 CAN 帧在 Trace 里按时间混排；Messages 逐帧给计数与周期均值±抖动，负载与规格照常判定；信号可订阅画曲线、进 State Tracker；帧到达与信号越阈都能作触发条件。**目前仅接收**：生成器条目与脚本发的 FlexRay 帧只进入本会话（所有视图与录制都看得见），但不出端口、不会被另一台设备收到。
 - **车载以太网**：Buses 加载 AUTOSAR Ethernet 矩阵（ARXML）或 FIBEX 的 CHANNEL/FRAME/PDU/SIGNAL，没有 frame 的 PDU-only ARXML 也保留 PDU 与 endpoint 清单；Buses 的 **Live port…** 可把 Npcap 接口挂到 ETH 路，实时收帧、发帧；离线 PCAP/PCAPNG 与 BLF 的以太网帧按 VLAN/长度/EtherType 匹配帧定义并解码 PDU/I-Signal；录制时 ASC/BLF 在有以太网帧时另写同名 `.eth.pcap`（纯 CAN 不产生空 sidecar），也可直接选 PCAP 格式只录 Ethernet；帧与 CAN/FlexRay 在 Trace 同表按时间混排，Messages stats 有 flow 行，信号可订阅画曲线；SOME/IP over UDP/TCP（含 Service Discovery）解码到 **SOME/IP** 页，分 Events / Services / Availability 查看 service/method/type/endpoint、ARXML 参数与 SD 可用性；Trace 导出 `.pcap`（MAC/VLAN/EtherType/载荷），ASC 导出负责 CAN/FlexRay。`FRAME-LENGTH 含 L2 头` 随工程保存。
 - **统一 ARXML 导入**：Buses 的 `Import ARXML...` 一次读取文件里的全部 CAN / FlexRay / Ethernet cluster，各自建一路；CAN ARXML 读标识符/帧类、帧→PDU、I-Signal、compu/单位、PDU 周期与 ECU 端口发送方，和 DBC 共用同一套分析路径。
@@ -41,12 +41,12 @@ Spec / SOME/IP / Write 都是单实例页面，可放进任意槽位。入口与
 - **仿真节点**：类 CAPL 的小语言编译执行，`on start` / `on message` / `on fr slot` / `on timer` / `on errorFrame` 事件驱动，读写 DBC 信号、收发帧、随机与波形内建；`send` 超过 8 字节自动 FD，`send_fd(id, buffer[, brs])` 可强制 8 字节 FD 并可选 BRS。每个回调有指令预算，有缺陷的脚本不会卡住总线，出错节点自动停止运行。可绑定到 DBC 节点，绑定后能否发送由该节点的角色决定。编辑器三栏：处理器大纲、静态收发事实表、函数与报文速插；源码区基于 CodeMirror 6，带行号、语法高亮、搜索/替换、括号匹配、代码折叠和撤销/重做。语言参考见 [docs/script_language.md](docs/script_language.md)，可运行示例见 `examples/`。
 - **派生信号**：脚本 `emit_value("名", 表达式)` 一行发布，像数据库信号一样进 Signals / Data / State。
 - **系统变量**：CANoe 式的命名空间变量（初值 / 界限 / 单位 / 备注），专用窗口管理，脚本读写，同时发布为可观测流；每次测量开始复位为初值。
-- **Monitor 监控面板**：轻量纯文本行，一行一个信号，行内阈值着色规则让"温度超 90 变红"这类告警一眼可见。
+- **Monitor 监控面板**：轻量纯文本行，一行一个信号，行内阈值着色，超过阈值直接变色。
 - **State Tracker**：对订阅信号的历史做状态分段——枚举标签、二进制方波、会话稳定配色，支持自定义区间与固定颜色，短区段按最短显示时长合并，区段表可导出 CSV。
 - **Write 窗口**：整系统一条滚动输出——节点 `print`、装配层检查与告警、节点停止的错误、命令事件分色带时间戳；可按类别过滤、导出文本。
 - **录制与回放**：读写 Vector ASC 与 BLF（经典 / FD / 错误 / 远程帧、FlexRay 收帧与 Ethernet 对象），有以太网帧时另写同名 `.eth.pcap`（ASC/BLF 自身都已含 Ethernet，sidecar 是给 Wireshark/回放用的），也可选 PCAP 格式只录 Ethernet；自家录的文件放回去是同一批帧；`--convert` 纯流式转码。播放器式控制——倍速增减、**Fast**（一次读到末尾）、按步长单步、播放指定时长或到指定时间后自动暂停（都只向前）；按时间戳顺序调度，不做进度条随机跳转。别人的日志只带通道编号，**Setup → Replay…** 里的 **Channel map** 把那些编号指到本工程的各路（CAN、FlexRay、以太网各一组，随工程保存）。录制支持按 id 过滤（CAN 写 hex、FlexRay 写 `FR0:13`）。
-- **工程文件（.rxproj）**：总线与 DBC、观测窗口及过滤、信号选择、生成器配置、触发器、窗口布局全存一个 JSON；DBC 路径相对工程目录，工程文件夹可整体移动。
-- **中文字体**：Web UI 跟随系统中文输入与显示。
+- **工程文件（.rxproj）**：总线与 DBC、CAN 硬件挂载、观测窗口及过滤、信号选择、生成器配置、触发器、窗口布局存一个 JSON；DBC 路径相对工程目录，整个文件夹可移动。
+- **中文字体**：Web UI 不内嵌中文字体，按系统字体显示。
 
 ## Web 快捷键
 
@@ -94,7 +94,14 @@ cargo run -- --web --replay <path.asc|blf|pcap|pcapng> # 载入并开始回放
 后者会打断浏览器的单实例握手，都会弹权限提示——按终端打印的地址手动打开即可。
 `ROXY_WEB_NO_OPEN=1` 可完全关闭自动打开。
 
-当前 Web 端已有：Trace / Messages 主视图（CAN、FlexRay、Ethernet 同行混排，方向、仅解码、Payload、时间范围、ID 包含/排除过滤，50k 行虚拟化）、总线速率/负载曲线、DBC 信号多泳道曲线与游标读数、Start/Stop/Pause；回放条（Speed 0.5x–Fast、Step 10ms–5s、Play for 1–60s、Play to 绝对时间，只向前）；品牌菜单的 **Open project… / Recent projects** 与 Ctrl+O 打开工程，**Save / Save as** 保存（保留工作区与 Signals 曲线配置，未保存有标记）；**Setup** 菜单里的 **Recording…**（ASC/BLF/PCAP、文件名模板与 `100, 3F4x, FR0:13` 白名单，写入工程旁 `Record/`）、**Replay…**（保存的日志文件夹、录制列表、Channel map）与 **Scripts…**（节点脚本的编辑、应用、日志、断点单步、断言）；**Buses…** 增删/改名/改速率/加载 DBC·FIBEX·ARXML，探测并挂载 Kvaser/Vector 通道、切换 Simulated/Real bus，每个 DBC 节点以 chip 切换 Simulated/Offline；**Setup → Generator…** 编辑 CAN/FlexRay 发送条目（On、周期、hex，CAN 另有 FD/BRS，一键模拟节点）与 **Replay blocks**，**Sources** 给 DBC 信号加波形（Ramp/Sine/Step/Random/Triangle/Counter）；**Triggers…** 与 **Variables…** 管理规则和系统变量；页眉菜单把 **Rate / Signals / Monitor / Data / State / Messages stats / Bus load / Spec / SOME/IP / Write** 放进四种布局的槽位；页眉的下载图标（Export）按扩展名导出 ASC/PCAP 与 CSV/TXT。观测覆盖 CAN、FlexRay 与 Ethernet；生成覆盖 CAN 与 FlexRay 会话帧（FlexRay 端口仍只收），Ethernet 可挂 Npcap 实时口收发，未挂口时 Panel/Trigger 只注入本会话。布局、信号选择、曲线与 Monitor/Data/State 行随工程保存。
+当前 Web 端包括：
+
+- **主视图**：Trace / Messages（CAN、FlexRay、Ethernet 同行混排，方向、仅解码、Payload、时间范围、ID 包含/排除过滤，50k 行虚拟化）、总线速率/负载曲线、DBC 信号多泳道曲线与游标读数、Start/Stop/Pause；回放条（Speed 0.5x–Fast、Step 10ms–5s、Play for 1–60s、Play to 绝对时间，只向前）。
+- **工程与录制**：品牌菜单的 **Open project… / Recent projects** 与 Ctrl+O 打开工程，**Save / Save as** 保存（保留工作区与 Signals 曲线配置，未保存有标记）；**Setup** 菜单里的 **Recording…**（ASC/BLF/PCAP、文件名模板与 `100, 3F4x, FR0:13` 白名单，写入工程旁 `Record/`）、**Replay…**（保存的日志文件夹、录制列表、Channel map）与 **Scripts…**（节点脚本的编辑、应用、日志、断点单步、断言）。
+- **配置**：**Buses…** 增删/改名/改速率/加载 DBC·FIBEX·ARXML，探测并挂载 Kvaser/Vector 通道、切换 Simulated/Real bus，每个 DBC 节点以 chip 切换 Simulated/Offline；**Setup → Generator…** 编辑 CAN/FlexRay 发送条目（On、周期、hex，CAN 另有 FD/BRS，一键模拟节点）与 **Replay blocks**；**Sources** 给 DBC 信号加波形（Ramp/Sine/Step/Random/Triangle/Counter）；**Triggers…** 与 **Variables…** 管理规则和系统变量。
+- **布局与导出**：页眉菜单把 **Rate / Signals / Monitor / Data / State / Messages stats / Bus load / Spec / SOME/IP / Write** 放进四种布局的槽位；页眉的下载图标（Export）按扩展名导出 ASC/PCAP 与 CSV/TXT。
+
+观测覆盖 CAN、FlexRay 与 Ethernet；生成覆盖 CAN 与 FlexRay 会话帧（FlexRay 端口仍只收），Ethernet 可挂 Npcap 实时口收发，未挂口时 Panel/Trigger 只注入本会话。布局、信号选择、曲线、CAN 硬件挂载与 Monitor/Data/State 行随工程保存。
 
 ## 上手
 
@@ -111,7 +118,7 @@ cargo run -- --web --replay <path.asc|blf|pcap|pcapng> # 载入并开始回放
 ```sh
 roxy-can --check-script <node.rxcan>            # 编译脚本，打印静态收发集与响应映射
 roxy-can --project <p.rxproj> --duration 10 --stats out.csv   # 无头仿真整个工程
-roxy-can --project <p.rxproj> --profile bench   # 叠加 profiles/bench.toml 的角色覆盖与硬件映射
+roxy-can --project <p.rxproj> --profile bench   # 用档案覆盖角色和整套硬件挂载
 roxy-can --convert <in.blf> <out.asc>           # 日志转码，保留 FlexRay 行
 roxy-can --export-csv <in.blf> --dbc <a.dbc> --out signals.csv  # 按信号定义把日志导成 CSV
 roxy-can --kvaser-probe                         # 列出 Kvaser 驱动可见的通道

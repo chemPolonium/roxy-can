@@ -6,7 +6,7 @@ Preact 10 + TypeScript + Vite，构建产物由 Rust 宿主嵌入。产品定位
 
 ```powershell
 npm install
-npm run dev        # 需要同时运行 dsh web / roxy-can --web
+npm run dev        # 另开一个终端运行 roxy-can --web
 npm run build
 npm run typecheck
 npx vitest run
