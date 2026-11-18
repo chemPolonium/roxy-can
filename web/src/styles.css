@@ -3490,8 +3490,8 @@ body.row-resizing {
   button:not(.script-item):not(.script-issue):not(.picker-mode):not(
     .description-remove
   ):not(.picker-message-toggle):not(.picker-frame-action):not(
-    .grouped-select-option
-  ),
+    .picker-name
+  ):not(.grouped-select-option),
 .modal-backdrop > :not(.palette) select,
 .modal-backdrop
   > :not(.palette)
@@ -3910,10 +3910,11 @@ body.row-resizing {
 }
 
 /* The mode switch needs a stable row height: selected buttons and text
-   fallback fonts must not grow one signal taller than its neighbours. */
+   fallback fonts must not grow one signal taller than its neighbours.
+   Height 26 = the 20 px switch plus the row's 3 px top/bottom padding. */
 .picker-signal.with-modes {
   flex: 0 0 auto;
-  height: 32px;
+  height: 26px;
 }
 
 .picker-signal:hover {
