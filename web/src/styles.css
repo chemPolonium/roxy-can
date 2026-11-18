@@ -2747,6 +2747,50 @@ button.icon-btn svg {
   font-size: 10px;
 }
 
+.message-signal-tools td {
+  height: auto;
+  padding: 2px 8px 3px 20px;
+}
+
+.message-signal-filter {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.message-signal-filter-input {
+  flex: 0 1 190px;
+  min-width: 90px;
+  height: 18px;
+  padding: 0 6px;
+  font-size: 10px;
+  line-height: 16px;
+}
+
+.message-signal-filter-count {
+  flex: 0 0 auto;
+  color: var(--muted);
+  font-size: 9.5px;
+  font-variant-numeric: tabular-nums;
+}
+
+.message-signal-more {
+  flex: 0 0 auto;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  font-size: 10px;
+  line-height: 16px;
+}
+
+.message-signal-more:hover:not(:disabled) {
+  border: 0;
+  background: transparent;
+  text-decoration: underline;
+}
+
 .badge {
   display: inline-block;
   margin-left: 5px;

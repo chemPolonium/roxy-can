@@ -7,6 +7,11 @@ import {
   useColumnWidths,
   type ColumnWidthDef,
 } from "../tableColumns";
+import {
+  MESSAGE_SIGNAL_FILTER_MIN,
+  MESSAGE_SIGNAL_INITIAL_ROWS,
+  messageSignalRows,
+} from "../messageSignals";
 
 /// Bus and Cycle keep the page readable at a glance; Name carries the frame
 /// name and Data absorbs the remaining width. All but Data can be dragged.
@@ -68,6 +73,12 @@ export function MessageTable({
     dir: "asc" | "desc";
     order: string[];
   } | null>(null);
+  const [signalQueries, setSignalQueries] = useState<Record<string, string>>(
+    {},
+  );
+  const [showAllSignals, setShowAllSignals] = useState<Record<string, boolean>>(
+    {},
+  );
   const sortKey = sort?.key ?? null;
   const sortDir = sort?.dir ?? "asc";
   const sortedRows = useMemo(() => {
@@ -135,6 +146,112 @@ export function MessageTable({
   const toggle = (message: Message) => {
     if (message.signalCount === 0) return;
     onExpand?.(message.key, (message.signals?.length ?? 0) === 0);
+  };
+
+  const setSignalQuery = (message: Message, value: string) => {
+    setSignalQueries((old) => ({ ...old, [message.key]: value }));
+    setShowAllSignals((old) =>
+      old[message.key] ? { ...old, [message.key]: false } : old,
+    );
+  };
+
+  const renderSignalRows = (message: Message) => {
+    const signals = message.signals ?? [];
+    if (signals.length === 0) {
+      return (
+        <tr class="message-signal-row" key={`${message.key}:loading`}>
+          <td colSpan={showBus ? 5 : 4} class="message-signal-empty">
+            Loading signals…
+          </td>
+        </tr>
+      );
+    }
+    const query = signalQueries[message.key] ?? "";
+    const showAll = showAllSignals[message.key] ?? false;
+    const view = messageSignalRows(signals, query, showAll);
+    const filtered = query.trim() !== "";
+    const canShowAll = view.hidden > 0;
+    const canCollapse = showAll && view.matches > MESSAGE_SIGNAL_INITIAL_ROWS;
+    const colSpan = showBus ? 5 : 4;
+    return (
+      <>
+        {view.total > MESSAGE_SIGNAL_FILTER_MIN && (
+          <tr class="message-signal-row message-signal-tools">
+            <td colSpan={colSpan}>
+              <div class="message-signal-filter">
+                <input
+                  type="search"
+                  class="message-signal-filter-input"
+                  value={query}
+                  placeholder={`Filter ${view.total} signals…`}
+                  aria-label={`Filter signals in ${message.name || message.addr || hexId(message)}`}
+                  onInput={(event) =>
+                    setSignalQuery(
+                      message,
+                      (event.target as HTMLInputElement).value,
+                    )
+                  }
+                  onKeyDown={(event) => {
+                    if (event.key !== "Escape") return;
+                    event.stopPropagation();
+                    setSignalQuery(message, "");
+                  }}
+                />
+                <span class="message-signal-filter-count">
+                  {view.visible.length} / {view.total}
+                </span>
+                {(canShowAll || canCollapse) && (
+                  <button
+                    type="button"
+                    class="message-signal-more"
+                    onClick={() =>
+                      setShowAllSignals((old) => ({
+                        ...old,
+                        [message.key]: !old[message.key],
+                      }))
+                    }
+                  >
+                    {canCollapse
+                      ? `Show first ${MESSAGE_SIGNAL_INITIAL_ROWS}`
+                      : `Show all ${view.matches} ${filtered ? "matches" : "signals"}`}
+                  </button>
+                )}
+              </div>
+            </td>
+          </tr>
+        )}
+        {view.visible.length === 0 ? (
+          <tr class="message-signal-row" key={`${message.key}:no-match`}>
+            <td colSpan={colSpan} class="message-signal-empty">
+              No signals match “{query.trim()}”.
+            </td>
+          </tr>
+        ) : (
+          view.visible.map((signal, index) => (
+            <tr
+              class="message-signal-row"
+              key={`${message.key}:${signal.name}:${index}`}
+            >
+              {showBus && <td />}
+              <td />
+              <td class="name message-signal-name">
+                <span>↳ {signal.name}</span>
+              </td>
+              <td
+                class="num mono message-signal-value"
+                title={`raw ${signal.raw}`}
+              >
+                {signal.value}
+              </td>
+              <td class="mono data message-signal-unit">
+                {signal.unit && <em>{signal.unit}</em>}
+                {signal.label && <small>{signal.label}</small>}
+              </td>
+            </tr>
+          ))
+        )}
+      </>
+    );
   };
 
   return (
@@ -248,40 +365,9 @@ export function MessageTable({
                     {message.data || <span class="dash">—</span>}
                   </td>
                 </tr>
-                {open && message.signalCount > 0 && (
-                  <>
-                    {(message.signals?.length ?? 0) === 0 ? (
-                      <tr class="message-signal-row" key={`${message.key}:loading`}>
-                        <td colSpan={showBus ? 5 : 4} class="message-signal-empty">
-                          Loading signals…
-                        </td>
-                      </tr>
-                    ) : (
-                      message.signals?.map((signal, index) => (
-                        <tr
-                          class="message-signal-row"
-                          key={`${message.key}:${signal.name}:${index}`}
-                        >
-                          {showBus && <td />}
-                          <td />
-                          <td class="name message-signal-name">
-                            <span>↳ {signal.name}</span>
-                          </td>
-                          <td
-                            class="num mono message-signal-value"
-                            title={`raw ${signal.raw}`}
-                          >
-                            {signal.value}
-                          </td>
-                          <td class="mono data message-signal-unit">
-                            {signal.unit && <em>{signal.unit}</em>}
-                            {signal.label && <small>{signal.label}</small>}
-                          </td>
-                        </tr>
-                      ))
-                    )}
-                  </>
-                )}
+                {open &&
+                  message.signalCount > 0 &&
+                  renderSignalRows(message)}
               </Fragment>
             );
           })}
