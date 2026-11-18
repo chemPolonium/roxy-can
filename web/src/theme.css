@@ -345,11 +345,18 @@
 [data-theme="light"] .picker-name:hover,
 [data-theme="light"] .picker-modes button:hover:not(:disabled):not(.on) {
   color: #1f2937;
-  background: rgb(15 23 42 / 5%);
+  background: transparent;
+}
+
+[data-theme="light"] .picker-frame-action,
+[data-theme="light"] .picker-frame-action:hover:not(:disabled),
+[data-theme="light"] .picker-modes button {
+  border-color: transparent;
+  background: transparent;
 }
 
 [data-theme="light"] .picker-modes button.on {
-  background: #e3eefc;
+  background: transparent;
   color: #1557a8;
 }
 

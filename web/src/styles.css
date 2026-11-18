@@ -3796,15 +3796,24 @@ body.row-resizing {
 .picker-message-actions {
   display: flex;
   flex: 0 0 auto;
-  gap: 4px;
+  gap: 2px;
 }
 
 .picker-frame-action {
   height: 18px;
   padding: 0 5px;
+  border: 0;
+  background: transparent;
   color: var(--muted);
   font-size: 9.5px;
   line-height: 16px;
+}
+
+.picker-frame-action:hover:not(:disabled) {
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  text-decoration: underline;
 }
 
 .picker-message-title {
@@ -3941,17 +3950,17 @@ body.row-resizing {
   display: inline-flex;
   flex: 0 0 auto;
   height: 20px;
-  overflow: hidden;
-  border: 1px solid var(--line);
-  border-radius: 3px;
+  overflow: visible;
+  border: 0;
+  border-radius: 0;
 }
 
 .picker-modes button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  height: 100%;
-  padding: 0 7px;
+  height: 20px;
+  padding: 0 5px;
   border: 0;
   border-radius: 0;
   background: transparent;
@@ -3961,17 +3970,18 @@ body.row-resizing {
 }
 
 .picker-modes button + button {
-  border-left: 1px solid var(--line);
+  border-left: 0;
 }
 
 .picker-modes button:hover:not(:disabled):not(.on) {
-  background: rgb(255 255 255 / 6%);
-  color: #d9e3ef;
+  background: transparent;
+  color: inherit;
+  text-decoration: underline;
 }
 
 .picker-modes button.on {
-  background: rgb(76 157 255 / 24%);
-  color: #cfe7ff;
+  background: transparent;
+  color: var(--accent);
   font-weight: 600;
 }
 
