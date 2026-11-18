@@ -109,7 +109,6 @@ roxy-can --vector-tx-probe 2                    # 打印该通道实际收到的
 
 - [axum](https://github.com/tokio-rs/axum) + [Preact](https://preactjs.com/)：本地 Web 宿主与前端
 - [can-dbc](https://github.com/marcelbuesing/can-dbc)：DBC 解析
-- [rfd](https://github.com/PolyMeilex/rfd)：原生文件对话框
 - [memmap2](https://github.com/Razaek/memmap2-rs)：ASC/BLF 大文件流式读取
 - [flate2](https://github.com/emoryns/rust-flate2)（rust_backend）：BLF zlib 容器解压
 

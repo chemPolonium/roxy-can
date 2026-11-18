@@ -34,5 +34,5 @@ flate2 = { version = "1", default-features = false, features = ["rust_backend"] 
 roxmltree = "0.21"
 
 [build-dependencies]
-# build.rs puts roxy-can.ico into the exe's PE resources (Windows only).
+# build.rs embeds roxy-can.ico as the exe's file icon (Windows only).
 winresource = "0.1"

@@ -1,5 +1,6 @@
-//! Embeds `roxy-can.ico` into the exe's PE resources, so Explorer, a shortcut,
-//! and the taskbar all show it.
+//! Embeds `roxy-can.ico` into the exe's PE resources so Explorer and
+//! shortcuts show it. The app is a console/web host now, so there is no
+//! runtime window icon to set; the desktop UI's decoder is gone.
 
 fn main() {
     println!("cargo:rerun-if-changed=roxy-can.ico");
