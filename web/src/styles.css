@@ -3748,8 +3748,11 @@ body.row-resizing {
 
 .picker-message {
   margin-bottom: 4px;
-  border: 1px solid var(--line-soft);
-  border-radius: 3px;
+  /* Frames are separated by their header rule and the gap, not by a box
+     outline; the extra right/bottom edge read as a drop shadow in light
+     theme. */
+  border: 0;
+  border-radius: 0;
   overflow: hidden;
 }
 
