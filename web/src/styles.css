@@ -3761,7 +3761,7 @@ body.row-resizing {
   align-items: center;
   gap: 8px;
   padding: 0 8px 0 0;
-  border-bottom: 1px solid var(--line-soft);
+  border: 0;
   background: #0e131a;
   color: #aab7c7;
 }
