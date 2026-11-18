@@ -2,15 +2,15 @@
 
 基于 Rust 的 CAN / FlexRay / Ethernet 总线分析工具，使用本地 Web UI（axum + Preact，见 [web/README.md](web/README.md)）。多总线、每条总线各加载一份 DBC，覆盖经典 CAN、CAN FD、错误帧与远程帧，支持 Kvaser / Vector 硬件连接、与 Vector 工具链兼容的 ASC / BLF 录制与回放、经典 PCAP / PCAPNG 以太网抓包回放与 PCAP 录制，以及类 CAPL 的仿真节点脚本。Windows x64 可执行文件见 [Releases](https://github.com/chemPolonium/roxy-can/releases)。
 
-![roxy-can](screenshot.png)
+![Main + side: Signals, Monitor and Data](screenshot.png)
 
-![Quad layout](screenshot-layouts.png)
+![Quad layout: Rate, Bus load, State and Write](screenshot-layouts.png)
 
-![Signal cursors](screenshot-signals.png)
+![Focus layout with A/B signal cursors](screenshot-signals.png)
 
-![Panel](screenshot-panel.png)
+![Panel workspace in edit mode](screenshot-panel.png)
 
-截图使用浅色主题：首图是 Main + side（Signals / Monitor / Data），下表展示 Quad（Rate / Bus load / State / Write）和 Focus（曲线与 A/B 游标），最后是 Panel 操作页。
+截图使用浅色主题：首图是 Main + side（Signals / Monitor / Data）；随后是 Quad（Rate / Bus load / State / Write）、Focus（曲线与 A/B 游标），最后是 Panel 操作页。
 
 完整操作语义见 [docs/usage.md](docs/usage.md)，产品定位与体验准则见 [docs/product.md](docs/product.md)，脚本语言见 [docs/script_language.md](docs/script_language.md)。
 
