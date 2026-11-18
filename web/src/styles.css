@@ -3893,6 +3893,7 @@ body.row-resizing {
   align-items: center;
   gap: 8px;
   padding: 3px 8px 3px 30px;
+  background: var(--panel-2);
   color: #aebccd;
   font-size: 11px;
 }
@@ -3915,10 +3916,6 @@ body.row-resizing {
 .picker-signal.with-modes {
   flex: 0 0 auto;
   height: 26px;
-}
-
-.picker-signal:hover {
-  background: #16202b;
 }
 
 .picker-signal:hover::before {
@@ -3969,6 +3966,11 @@ body.row-resizing {
   line-height: inherit;
   text-align: left;
   cursor: pointer;
+}
+
+.picker-name:hover:not(:disabled) {
+  border: 0;
+  background: transparent;
 }
 
 .picker-name:hover {

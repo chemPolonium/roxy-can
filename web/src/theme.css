@@ -344,16 +344,18 @@
   background: #d7e0ea;
 }
 
-[data-theme="light"] .picker-signal:hover {
-  background: #eef4fb;
-}
-
 [data-theme="light"] .picker-signal:hover::before {
   background: #c4d1df;
 }
 
 [data-theme="light"] .picker-signal.on {
   color: #1f2937;
+}
+
+[data-theme="light"] .picker-name,
+[data-theme="light"] .picker-name:hover:not(:disabled) {
+  border-color: transparent;
+  background: transparent;
 }
 
 [data-theme="light"] .picker-name:hover {
@@ -384,7 +386,7 @@
 }
 
 [data-theme="light"] .picker-modes button:hover:not(:disabled):not(.on) {
-  background: #f2f5f9;
+  background: var(--accent-soft);
   color: #1f2937;
 }
 
