@@ -117,7 +117,7 @@ roxy-can -h                               完整帮助
 - **FlexRay 发的是本会话的流量，不是总线上的帧**：端口目前仅接收，所以生成的帧从接收侧进入会话——Trace / Messages stats、负载与规格、触发器、脚本、录制全都看得见，但它不出端口、也不会被另一台设备收到。面板标题与行上 chip 就这么写。FlexRay 侧没有 DBC 节点，所以也没有角色开关，条目只有 On 与 MUTE 两态。
 - 回放时该槽若被日志自己带着，条目整个回放期间不发送（chip 显示 MUTE），退出回放照常。
 - 行内 hex 与信号值是**最近一次实际发出的那一帧**；描述被移除后条目照旧存在并发送（行上写明"没有描述，无人解码它"）。
-- 信号行：物理值拖拽编辑（被激励接管的只读，改回 Constant 解除）、激励 Ramp / Sine / Step / Random / Triangle / Counter 带参数弹窗。
+- 信号行：物理值拖拽编辑（被激励接管的只读，改回 Constant 解除）、激励 Ramp / Sine / Step / Random / Triangle / Counter 带参数弹窗；**Sources** 里用可搜索选择器按信号名/单位过滤，选中即添加，已驱动的信号不再列出。
 
 ## 硬件联动（Kvaser / Vector）
 
@@ -167,6 +167,7 @@ roxy-can -h                               完整帮助
 ## 触发器（Triggers 窗口）
 
 - **条件**：信号越阈（沿触发）、ID 出现、错误帧、周期超时、FlexRay 帧到达（按路 + 槽）、FlexRay 信号越阈、FlexRay 槽超时、系统变量越阈、CAN 载荷字节匹配（未描述帧：字节/掩码/期望值）、CAN 消息 E2E 计数器 gap/jump、以太网 flow 出现（路 + EtherType + 可选 VLAN）、SOME/IP service 消息（路 + service，可选 method 与 message type；留空为任意）。CAN 与 FlexRay 的条件形状一致。
+- **CAN 信号条件**：帧与信号合成一个可搜索列表，按帧名、ID、信号名、单位或注释过滤，组头下只列该帧的信号；方向键选择、Enter 确认，选中后 ID 与信号一起填入。
 - **动作**：开始 / 停止录制、发送整条消息（CAN / FlexRay / Ethernet / SOME/IP；CAN 反应帧可镜像触发帧的同名信号；Ethernet 用矩阵帧名 + hex 载荷，VLAN/EtherType/长度取自矩阵；SOME/IP 填 service/method/client/session/type，并可选 UDP/TCP 与 TCP host/port；session 填 0 表示自动递增；并可按 ARXML 字段名填 `name=value`（留空则用 hex payload））、插入标记、清空 Trace，以及写系统变量、跑脚本动作（`on panel_action`，可带值）。写单个信号不再作为动作：要临时改一个值，用系统变量做中间量，再由脚本/Setpoint 落到信号。
 - **添加与工具**：顶部 **Add rule** 按 CAN / FlexRay / Ethernet / Global 分组列出条件类型；**More** 收纳 Check、Re-arm latched、Export、Import。录制默认值折叠在 **Recording limits** 里，规则行只保留开关、Edit、单条 Re-arm 和删除。
 - **每条规则自己的节流与录制上下文**：**Cooldown ms** 限制两次触发的最小间隔，**Max fires** 到数后不再触发（0 = 不限）；**Pre frames / Post frames** 留空继承全局，填写后只影响这条规则启动/停止的录制；行上的 **Re-arm** 只复位这一条的锁存与计数，表头的 **Re-arm latched** 仍管全部。

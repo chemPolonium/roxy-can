@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "preact/hooks";
 import type {
   Bus,
   Catalog,
+  CatalogMessage,
   CatalogSignal,
   FrTxEntry,
   ReplayBlock,
@@ -9,6 +10,8 @@ import type {
   TxSource,
 } from "../types";
 import { HostPathPick, fileBrowserOpen } from "./FileBrowser";
+import { GroupedSelect } from "./GroupedSelect";
+import type { GroupedOption } from "../groupedOptions";
 import { formatReplayIds, parseReplayIds } from "../replayIds";
 
 interface Props {
@@ -227,20 +230,29 @@ function SourceRow({
 
 function SourceEditor({
   entry,
+  message,
   signals,
   onSource,
   onClearSource,
 }: {
   entry: TxEntry;
+  message: CatalogMessage | null;
   signals: CatalogSignal[];
   onSource: (entry: TxEntry, src: TxSource) => void;
   onClearSource: (entry: TxEntry, name: string) => void;
 }) {
-  const [name, setName] = useState("");
   const available = signals.filter(
     (signal) => !entry.srcs.some((src) => src.name === signal.name),
   );
-  const add = () => {
+  const options: GroupedOption[] = available.map((signal) => ({
+    key: signal.name,
+    group: message?.name || entry.name || hexId(entry.id),
+    groupMeta: `${hexId(entry.id)}${message?.extended ? " ext" : ""}`,
+    label: signal.name,
+    meta: `${signal.unit || "no unit"} · ${signal.min}..${signal.max}`,
+    search: [signal.comment, signal.group].filter(Boolean).join(" "),
+  }));
+  const add = (name: string) => {
     const signal = signals.find((candidate) => candidate.name === name);
     if (!signal) return;
     onSource(entry, {
@@ -254,7 +266,6 @@ function SourceEditor({
       seed: 0x5eed1234,
       redrawUs: 0,
     });
-    setName("");
   };
   return (
     <div class="gen-srcs">
@@ -270,25 +281,22 @@ function SourceEditor({
         <div class="gen-src-empty">
           Load a DBC for this message to drive its signals.
         </div>
+      ) : available.length === 0 ? (
+        <div class="gen-src-empty">All signals driven.</div>
       ) : (
         <div class="gen-src-add">
-          <select
-            value={name}
-            onChange={(event) => setName((event.target as HTMLSelectElement).value)}
-          >
-            <option value="">
-              {available.length === 0 ? "All signals driven" : "Add source…"}
-            </option>
-            {available.map((signal) => (
-              <option key={signal.name} value={signal.name}>
-                {signal.name} ({signal.min}..{signal.max}
-                {signal.unit ? ` ${signal.unit}` : ""})
-              </option>
-            ))}
-          </select>
-          <button type="button" disabled={!name} onClick={add}>
-            + Source
-          </button>
+          <GroupedSelect
+            options={options}
+            valueKey=""
+            valueLabel=""
+            placeholder="Add source…"
+            searchPlaceholder="Search signal or unit…"
+            ariaLabel={`Add a source to ${message?.name || entry.name || hexId(entry.id)}`}
+            className="gen-source-select"
+            menuWidth={360}
+            noMatchText="No matching signals"
+            onPick={(option) => add(option.key)}
+          />
         </div>
       )}
     </div>
@@ -301,6 +309,7 @@ function hexId(id: number): string {
 
 function EntryRow({
   entry,
+  message,
   signals,
   onToggle,
   onCycle,
@@ -312,6 +321,7 @@ function EntryRow({
   onRemove,
 }: {
   entry: TxEntry;
+  message: CatalogMessage | null;
   signals: CatalogSignal[];
   onToggle: (entry: TxEntry, on: boolean) => void;
   onCycle: (entry: TxEntry, cycleUs: number) => void;
@@ -458,6 +468,7 @@ function EntryRow({
       {sourcesOpen && (
         <SourceEditor
           entry={entry}
+          message={message}
           signals={signals}
           onSource={onSource}
           onClearSource={onClearSource}
@@ -588,24 +599,27 @@ function BusGroup({
           No generator entries on this bus. Add a DBC message above.
         </div>
       ) : (
-        entries.map((entry) => (
-          <EntryRow
-            key={`${entry.channel}:${entry.id}`}
-            entry={entry}
-            signals={
-              catalogMessages.find((message) => message.id === entry.id)
-                ?.signals ?? []
-            }
-            onToggle={onToggle}
-            onCycle={onCycle}
-            onFd={onFd}
-            onBrs={onBrs}
-            onHex={onHex}
-            onSource={onSource}
-            onClearSource={onClearSource}
-            onRemove={onRemove}
-          />
-        ))
+        entries.map((entry) => {
+          const message =
+            catalogMessages.find((candidate) => candidate.id === entry.id) ??
+            null;
+          return (
+            <EntryRow
+              key={`${entry.channel}:${entry.id}`}
+              entry={entry}
+              message={message}
+              signals={message?.signals ?? []}
+              onToggle={onToggle}
+              onCycle={onCycle}
+              onFd={onFd}
+              onBrs={onBrs}
+              onHex={onHex}
+              onSource={onSource}
+              onClearSource={onClearSource}
+              onRemove={onRemove}
+            />
+          );
+        })
       )}
     </section>
   );

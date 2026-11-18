@@ -1,7 +1,9 @@
-import { useEffect, useState } from "preact/hooks";
+import { useEffect, useMemo, useState } from "preact/hooks";
 import { FilePick } from "./FilePick";
 import { checkTriggers } from "../triggerCheck";
 import { MenuButton } from "./MenuButton";
+import { GroupedSelect } from "./GroupedSelect";
+import type { GroupedOption } from "../groupedOptions";
 import type {
   Bus,
   Catalog,
@@ -225,11 +227,40 @@ function TriggerEditor({
   const set = (patch: Partial<Draft>) => onChange({ ...draft, ...patch });
   const messages = catalog?.channels[draft.ch]?.messages ?? [];
   const id = parseHex(draft.idText);
-  const message =
-    messages.find(
-      (candidate) => candidate.id === id && candidate.extended === draft.ext,
-    ) ?? null;
-  const signals = message?.signals ?? [];
+  const signalChoices = useMemo(
+    () =>
+      messages.flatMap((candidate) =>
+        candidate.signals.map((signal) => ({
+          key: `${candidate.id}:${candidate.extended ? 1 : 0}:${signal.name}`,
+          message: candidate,
+          signal,
+        })),
+      ),
+    [messages],
+  );
+  const signalOptions = useMemo<GroupedOption[]>(
+    () =>
+      signalChoices.map(({ key, message, signal }) => ({
+        key,
+        group: message.name || hexId(message.id),
+        groupMeta: `${hexId(message.id)}${message.extended ? " ext" : ""}`,
+        label: signal.name,
+        meta: `${signal.unit || "no unit"} · ${signal.min}..${signal.max}`,
+        search: [signal.comment, signal.group, message.comment]
+          .filter(Boolean)
+          .join(" "),
+      })),
+    [signalChoices],
+  );
+  const selectedChoice = signalChoices.find(
+    (choice) =>
+      choice.message.id === id &&
+      choice.message.extended === draft.ext &&
+      choice.signal.name === draft.signal,
+  );
+  const selectedLabel = selectedChoice
+    ? `${selectedChoice.message.name || hexId(selectedChoice.message.id)} / ${selectedChoice.signal.name}`
+    : draft.signal;
   const needsSignal = draft.kind === "signal" || draft.kind === "fr_signal";
   const isFr =
     draft.kind === "fr_frame" ||
@@ -248,17 +279,6 @@ function TriggerEditor({
     (draft.kind !== "sysvar" || draft.key.trim().length > 0) &&
     (!isDerived || draft.derivedId.length > 0) &&
     (!needsSignal || draft.signal.trim().length > 0);
-
-  const chooseMessage = (messageId: number, extended: boolean) => {
-    const chosen = messages.find(
-      (candidate) => candidate.id === messageId && candidate.extended === extended,
-    );
-    set({
-      idText: messageId.toString(16).toUpperCase(),
-      ext: extended,
-      signal: chosen?.signals[0]?.name ?? draft.signal,
-    });
-  };
 
   const sendKey = `${draft.sendCh}:${draft.sendId}`;
 
@@ -435,55 +455,38 @@ function TriggerEditor({
         )}
 
         {draft.kind === "signal" && (
-          <>
-            <label class="trig-field">
-              Message
-              <select
-                value={message ? String(message.id) : ""}
-                disabled={catalogLoading || messages.length === 0}
-                onChange={(event) => {
-                  const chosen = messages.find(
-                    (candidate) =>
-                      candidate.id ===
-                      Number((event.target as HTMLSelectElement).value),
-                  );
-                  if (chosen) chooseMessage(chosen.id, chosen.extended);
-                }}
-              >
-                <option value="">
-                  {catalogLoading ? "Loading…" : "Pick a message…"}
-                </option>
-                {messages.map((candidate) => (
-                  <option key={candidate.id} value={candidate.id}>
-                    {hexId(candidate.id)} {candidate.name}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label class="trig-field trig-wide">
-              Signal
-              <select
-                value={draft.signal}
-                disabled={signals.length === 0}
-                onChange={(event) =>
-                  set({
-                    signal: (event.target as HTMLSelectElement).value,
-                  })
-                }
-              >
-                <option value="">Pick a signal…</option>
-                {signals.map((signal) => (
-                  <option key={signal.name} value={signal.name}>
-                    {signal.name}
-                  </option>
-                ))}
-                {draft.signal &&
-                  !signals.some((signal) => signal.name === draft.signal) && (
-                    <option value={draft.signal}>{draft.signal}</option>
-                  )}
-              </select>
-            </label>
-          </>
+          <label class="trig-field trig-wide">
+            Signal
+            <GroupedSelect
+              options={signalOptions}
+              valueKey={selectedChoice?.key ?? ""}
+              valueLabel={selectedLabel}
+              placeholder={
+                catalogLoading
+                  ? "Loading signals…"
+                  : signalOptions.length === 0
+                    ? "No DBC signals"
+                    : "Pick a message or signal…"
+              }
+              searchPlaceholder="Search message, id or signal…"
+              ariaLabel="Trigger signal"
+              disabled={catalogLoading || signalOptions.length === 0}
+              className="trig-signal-select"
+              menuWidth={380}
+              noMatchText="No matching signals"
+              onPick={(option) => {
+                const chosen = signalChoices.find(
+                  (candidate) => candidate.key === option.key,
+                );
+                if (!chosen) return;
+                set({
+                  idText: chosen.message.id.toString(16).toUpperCase(),
+                  ext: chosen.message.extended,
+                  signal: chosen.signal.name,
+                });
+              }}
+            />
+          </label>
         )}
 
         {isFr && (
