@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "preact/hooks";
+import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 import type {
   Catalog,
   CatalogChannel,
@@ -23,6 +23,15 @@ interface Props {
     signal: CatalogSignal,
     on: boolean,
   ) => void;
+  /// Batch frame actions. Without it each target falls back to onToggle.
+  onToggleMany?: (
+    channel: CatalogChannel,
+    message: CatalogMessage,
+    signals: CatalogSignal[],
+    on: boolean,
+  ) => void | Promise<void>;
+  /// Ask before a frame's All would add more than this many chart lanes.
+  chartBatchLimit?: number;
   onReadToggle?: (
     channel: CatalogChannel,
     message: CatalogMessage,
@@ -71,6 +80,8 @@ export function SignalPicker({
   title = "Signals",
   kinds,
   onToggle,
+  onToggleMany,
+  chartBatchLimit,
   onReadToggle,
   onCopyTo,
   derived = [],
@@ -86,6 +97,17 @@ export function SignalPicker({
     new Set(),
   );
   const [selectedOnly, setSelectedOnly] = useState(false);
+  const [pendingBulk, setPendingBulk] = useState<{
+    channel: CatalogChannel;
+    message: CatalogMessage;
+    signals: CatalogSignal[];
+    on: boolean;
+  } | null>(null);
+  const bulkConfirm = useRef<HTMLButtonElement>(null);
+
+  useEffect(() => {
+    if (pendingBulk) bulkConfirm.current?.focus();
+  }, [pendingBulk]);
 
   useEffect(() => {
     // A new search starts with every matching message open; clearing it
@@ -95,11 +117,16 @@ export function SignalPicker({
 
   useEffect(() => {
     const close = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onClose();
+      if (event.key !== "Escape") return;
+      if (pendingBulk) {
+        setPendingBulk(null);
+        return;
+      }
+      onClose();
     };
     window.addEventListener("keydown", close);
     return () => window.removeEventListener("keydown", close);
-  }, [onClose]);
+  }, [onClose, pendingBulk]);
 
   const groups = useMemo(() => {
     if (!catalog) return [];
@@ -235,6 +262,43 @@ export function SignalPicker({
     }
   };
 
+  const commitBulk = (
+    channel: CatalogChannel,
+    message: CatalogMessage,
+    signals: CatalogSignal[],
+    on: boolean,
+  ) => {
+    if (signals.length === 0) return;
+    if (onToggleMany) {
+      void onToggleMany(channel, message, signals, on);
+      return;
+    }
+    for (const signal of signals) {
+      if (on) {
+        onToggle(channel, message, signal, true);
+      } else if (selected.has(signal.key)) {
+        onToggle(channel, message, signal, false);
+      } else if (read?.has(signal.key)) {
+        onReadToggle?.(channel, message, signal, false);
+      }
+    }
+  };
+
+  const requestBulk = (
+    channel: CatalogChannel,
+    message: CatalogMessage,
+    signals: CatalogSignal[],
+    on: boolean,
+  ) => {
+    setPendingBulk(null);
+    if (signals.length === 0) return;
+    if (on && chartBatchLimit != null && signals.length > chartBatchLimit) {
+      setPendingBulk({ channel, message, signals, on });
+      return;
+    }
+    commitBulk(channel, message, signals, on);
+  };
+
   return (
     <div class="modal-backdrop" onMouseDown={onClose}>
       <div
@@ -263,20 +327,57 @@ export function SignalPicker({
             autoFocus
             value={query}
             placeholder="Filter bus, message or signal…"
-            onInput={(event) =>
-              setQuery((event.target as HTMLInputElement).value)
-            }
+            onInput={(event) => {
+              setQuery((event.target as HTMLInputElement).value);
+              setPendingBulk(null);
+            }}
           />
           <button
             type="button"
             class={`mini ${selectedOnly ? "on" : ""}`}
             aria-pressed={selectedOnly}
             title="Show only plotted or read signals"
-            onClick={() => setSelectedOnly((old) => !old)}
+            onClick={() => {
+              setSelectedOnly((old) => !old);
+              setPendingBulk(null);
+            }}
           >
             Selected only
           </button>
         </div>
+        {pendingBulk && (
+          <div class="picker-batch" role="alert">
+            <span>
+              Add <strong>{pendingBulk.signals.length}</strong>{" "}
+              {pendingBulk.signals.length === 1 ? "signal" : "signals"} from{" "}
+              <strong>
+                {pendingBulk.message.name ||
+                  messageId(pendingBulk.channel, pendingBulk.message)}
+              </strong>{" "}
+              to the chart? Each one becomes a lane.
+            </span>
+            <button
+              ref={bulkConfirm}
+              type="button"
+              class="primary"
+              onClick={() => {
+                const bulk = pendingBulk;
+                setPendingBulk(null);
+                commitBulk(
+                  bulk.channel,
+                  bulk.message,
+                  bulk.signals,
+                  bulk.on,
+                );
+              }}
+            >
+              Add {pendingBulk.signals.length}
+            </button>
+            <button type="button" onClick={() => setPendingBulk(null)}>
+              Cancel
+            </button>
+          </div>
+        )}
         <div class="picker-body">
           {loading && (
             <div class="empty">
@@ -363,30 +464,77 @@ export function SignalPicker({
                 <h4>{channel.name}</h4>
                 {messages.map(({ message, signals, key, total, active }) => {
                   const open = messageOpen(key);
+                  const addTargets = signals.filter(
+                    (signal) => !selected.has(signal.key),
+                  );
+                  const activeSignals = signals.filter(
+                    (signal) =>
+                      selected.has(signal.key) || !!read?.has(signal.key),
+                  );
                   return (
                     <div class="picker-message" key={key}>
-                      <button
-                        type="button"
-                        class="picker-message-head"
-                        aria-expanded={open}
-                        onClick={() => toggleMessage(key)}
-                      >
-                        <span class="picker-message-title">
-                          <span class="picker-chevron">
-                            {open ? "▾" : "▸"}
+                      <div class="picker-message-head">
+                        <button
+                          type="button"
+                          class="picker-message-toggle"
+                          aria-expanded={open}
+                          onClick={() => toggleMessage(key)}
+                        >
+                          <span class="picker-message-title">
+                            <span class="picker-chevron">
+                              {open ? "▾" : "▸"}
+                            </span>
+                            {message.name}
                           </span>
-                          {message.name}
-                        </span>
-                        <span class="picker-message-meta">
-                          <em>{messageId(channel, message)}</em>
-                          <small>
-                            {signals.length}
-                            {querying || selectedOnly ? ` / ${total}` : ""}{" "}
-                            signals
-                          </small>
-                          {active > 0 && <small>{active} selected</small>}
-                        </span>
-                      </button>
+                          <span class="picker-message-meta">
+                            <em>{messageId(channel, message)}</em>
+                            <small>
+                              {signals.length}
+                              {querying || selectedOnly
+                                ? ` / ${total}`
+                                : ""}{" "}
+                              signals
+                            </small>
+                            {active > 0 && <small>{active} selected</small>}
+                          </span>
+                        </button>
+                        {open && (
+                          <span class="picker-message-actions">
+                            <button
+                              type="button"
+                              class="mini picker-frame-action"
+                              disabled={addTargets.length === 0}
+                              title={`Add all ${addTargets.length} visible signals from this frame`}
+                              onClick={() =>
+                                requestBulk(
+                                  channel,
+                                  message,
+                                  addTargets,
+                                  true,
+                                )
+                              }
+                            >
+                              All
+                            </button>
+                            <button
+                              type="button"
+                              class="mini picker-frame-action"
+                              disabled={activeSignals.length === 0}
+                              title={`Remove all ${activeSignals.length} active signals from this frame`}
+                              onClick={() =>
+                                requestBulk(
+                                  channel,
+                                  message,
+                                  activeSignals,
+                                  false,
+                                )
+                              }
+                            >
+                              None
+                            </button>
+                          </span>
+                        )}
+                      </div>
                       {open &&
                         signals.map((signal) => {
                       const on = selected.has(signal.key);

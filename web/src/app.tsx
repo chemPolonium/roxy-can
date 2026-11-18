@@ -2082,6 +2082,52 @@ export function App() {
     void run(catalogSignalCommand(channel, message, signal, null));
   };
 
+  type ObserverTarget = "monitor" | "data" | "state";
+
+  const observerSignalCommand = (
+    channel: CatalogChannel,
+    message: CatalogMessage,
+    signal: CatalogSignal,
+    target: ObserverTarget,
+    on: boolean,
+  ): Command => ({
+    type: `${on ? "add" : "remove"}_${target}` as
+      | "add_monitor"
+      | "remove_monitor"
+      | "add_data"
+      | "remove_data"
+      | "add_state"
+      | "remove_state",
+    kind: channel.kind,
+    ch: channel.index,
+    id: message.id,
+    ext: message.extended,
+    frame: message.frame,
+    name: signal.name,
+  });
+
+  /// Frame-level actions send the whole set together instead of racing one
+  /// request per signal through run().
+  const applySignalBatch = async (
+    signals: CatalogSignal[],
+    make: (signal: CatalogSignal) => Command,
+  ): Promise<boolean> => {
+    if (signals.length === 0) return true;
+    setBusy(true);
+    try {
+      await Promise.all(signals.map((signal) => sendCommand(make(signal))));
+      setError("");
+      return true;
+    } catch (e) {
+      const text = describeError(e);
+      setError(text);
+      showToast(text);
+      return false;
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const toggleDerivedSignal = (definition: DerivedDef, on: boolean) => {
     setDerivedReads((old) =>
       old.filter((entry) => entry.id !== definition.id),
@@ -5445,6 +5491,18 @@ export function App() {
           read={readKeys}
           kinds={["can", "fr", "eth"]}
           onToggle={toggleSignal}
+          onToggleMany={async (channel, message, signals, on) => {
+            const ok = await applySignalBatch(signals, (signal) =>
+              catalogSignalCommand(channel, message, signal, on ? false : null),
+            );
+            if (!ok) return;
+            const keys = new Set(signals.map((signal) => signal.key));
+            setReadSignals((old) =>
+              old.filter((spec) => !keys.has(spec.key)),
+            );
+            if (on) announceHidden("signals");
+          }}
+          chartBatchLimit={8}
           onReadToggle={toggleReadSignal}
           onCopyTo={copyChartSelection}
           derived={derivedDefs}
@@ -5495,6 +5553,11 @@ export function App() {
                   },
             )
           }
+          onToggleMany={async (channel, message, signals, on) => {
+            await applySignalBatch(signals, (signal) =>
+              observerSignalCommand(channel, message, signal, "monitor", on),
+            );
+          }}
           onClose={() => setMonitorPickerOpen(false)}
         />
       )}
@@ -5535,6 +5598,11 @@ export function App() {
                   },
             )
           }
+          onToggleMany={async (channel, message, signals, on) => {
+            await applySignalBatch(signals, (signal) =>
+              observerSignalCommand(channel, message, signal, "data", on),
+            );
+          }}
           onClose={() => setDataPickerOpen(false)}
         />
       )}
@@ -5575,6 +5643,11 @@ export function App() {
                   },
             )
           }
+          onToggleMany={async (channel, message, signals, on) => {
+            await applySignalBatch(signals, (signal) =>
+              observerSignalCommand(channel, message, signal, "state", on),
+            );
+          }}
           onClose={() => setStatePickerOpen(false)}
         />
       )}

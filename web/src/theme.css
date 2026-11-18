@@ -326,6 +326,10 @@
   color: #526174;
 }
 
+[data-theme="light"] .picker-message-head:hover {
+  background: #e9eef5;
+}
+
 [data-theme="light"] .picker-signal {
   color: #526174;
 }

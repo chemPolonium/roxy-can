@@ -3489,6 +3489,8 @@ body.row-resizing {
   > :not(.palette)
   button:not(.script-item):not(.script-issue):not(.picker-mode):not(
     .description-remove
+  ):not(.picker-message-toggle):not(.picker-frame-action):not(
+    .grouped-select-option
   ),
 .modal-backdrop > :not(.palette) select,
 .modal-backdrop
@@ -3622,6 +3624,32 @@ body.row-resizing {
   flex: 0 0 auto;
 }
 
+.picker-batch {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 12px;
+  border-bottom: 1px solid
+    color-mix(in srgb, var(--warn) 55%, var(--line));
+  background: color-mix(in srgb, var(--warn) 9%, transparent);
+  color: var(--warn);
+  font-size: 10.5px;
+}
+
+.picker-batch span {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.picker-batch strong {
+  font-weight: 600;
+}
+
+.picker-batch button {
+  flex: 0 0 auto;
+}
+
 .picker-selected {
   margin: 6px 0 8px;
   overflow: hidden;
@@ -3727,22 +3755,53 @@ body.row-resizing {
 
 .picker-message-head {
   display: flex;
-  width: 100%;
-  justify-content: space-between;
-  gap: 10px;
-  padding: 4px 8px;
-  border: 0;
+  align-items: center;
+  gap: 8px;
+  padding: 0 8px 0 0;
   border-bottom: 1px solid var(--line-soft);
   background: #0e131a;
   color: #aab7c7;
+}
+
+.picker-message-head:hover {
+  background: #16202b;
+}
+
+.picker-message-toggle {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+  height: auto;
+  padding: 4px 0 4px 8px;
+  border: 0;
+  background: transparent;
+  color: inherit;
   font: inherit;
   font-size: 10.5px;
   text-align: left;
   cursor: pointer;
 }
 
-.picker-message-head:hover {
-  background: #16202b;
+.picker-message-toggle:hover:not(:disabled) {
+  border: 0;
+  background: transparent;
+}
+
+.picker-message-actions {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 4px;
+}
+
+.picker-frame-action {
+  height: 18px;
+  padding: 0 5px;
+  color: var(--muted);
+  font-size: 9.5px;
+  line-height: 16px;
 }
 
 .picker-message-title {
