@@ -7480,6 +7480,47 @@ fn monitor_rows_hold_the_subscription_against_data_removal() {
     );
 }
 
+/// The web's row drag sends one move per drop: the row lands before the
+/// slot it was dropped on, and an oversized index clamps to the end.
+/// The project snapshot serialises the Vec order, so no extra bookkeeping
+/// is needed for the reorder to persist.
+#[test]
+fn monitor_and_data_rows_reorder_by_key() {
+    let mut app = App::headless();
+    app.new_data_window();
+    let a = SigKey::can_in(crate::model::ClusterId(1), 0x100, false, "EngineSpeed");
+    let b = SigKey::can_in(crate::model::ClusterId(1), 0x200, false, "VehicleSpeed");
+    app.set_win_signal(PopupTarget::Monitor, a.clone(), true);
+    app.set_win_signal(PopupTarget::Monitor, b.clone(), true);
+    app.set_win_signal(PopupTarget::Data(0), a.clone(), true);
+    app.set_win_signal(PopupTarget::Data(0), b.clone(), true);
+
+    // Move b to slot 0: "to" is the post-removal index, so it lands first.
+    app.move_monitor_row(&b, 0);
+    assert_eq!(app.monitor_view.rows[0].key, b);
+    assert_eq!(app.monitor_view.rows[1].key, a);
+
+    // An unknown key is a no-op; an oversized index clamps to the end.
+    let missing = SigKey::can_in(crate::model::ClusterId(1), 0x777, false, "Nope");
+    app.move_monitor_row(&missing, 0);
+    app.move_monitor_row(&b, 99);
+    assert_eq!(app.monitor_view.rows[0].key, a);
+    assert_eq!(app.monitor_view.rows[1].key, b);
+
+    // The Data window reorders through the same rule.
+    app.move_data_row(&b, 0);
+    let window = app.data_windows.first().expect("data window");
+    assert_eq!(window.signals[0].key, b);
+    assert_eq!(window.signals[1].key, a);
+
+    // Derived keys match by definition id: the wire form drops the name.
+    let d1 = SigKey::derived("d1", "Load");
+    app.set_win_signal(PopupTarget::Monitor, d1.clone(), true);
+    let wire = crate::observe::SigKey::from_text("derived:d1").expect("parses");
+    app.move_monitor_row(&wire, 0);
+    assert_eq!(app.monitor_view.rows[0].key, d1);
+}
+
 #[test]
 fn sysvars_define_clamp_and_reset_on_run_start() {
     let mut app = App::headless();

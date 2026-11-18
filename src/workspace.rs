@@ -515,6 +515,19 @@ pub struct StatsWin {
 use crate::app::App;
 use crate::can::frame::{CanFrame, Direction, FrameFlags};
 use crate::observe::{DataWindow, GfxSignal, GraphicsWindow};
+
+/// Row identity for the move commands. Derived keys lose their display name
+/// on the `derived:{id}` wire form, so those match by definition id alone.
+fn same_row_key(a: &crate::observe::SigKey, b: &crate::observe::SigKey) -> bool {
+    match (a, b) {
+        (
+            crate::observe::SigKey::Derived { id: left, .. },
+            crate::observe::SigKey::Derived { id: right, .. },
+        ) => left == right,
+        _ => a == b,
+    }
+}
+
 impl App {
     /// Adds or removes a signal in a Graphics/Data window's signal list
     /// (used by the Signal Selection popup).
@@ -575,6 +588,41 @@ impl App {
         } else {
             self.prune_signal(&key);
         }
+    }
+
+    /// Moves a Monitor row to slot `to` -- the index it should occupy after
+    /// its own removal, clamped to the list. The drag-and-drop in the web
+    /// sends one of these; the project snapshot picks the new order up.
+    pub fn move_monitor_row(&mut self, key: &crate::observe::SigKey, to: usize) {
+        let Some(from) = self
+            .monitor_view
+            .rows
+            .iter()
+            .position(|row| same_row_key(&row.key, key))
+        else {
+            return;
+        };
+        let row = self.monitor_view.rows.remove(from);
+        let to = to.min(self.monitor_view.rows.len());
+        self.monitor_view.rows.insert(to, row);
+    }
+
+    /// Moves a Data window row the same way. The web Data page mirrors the
+    /// first window, so that is the only list this touches.
+    pub fn move_data_row(&mut self, key: &crate::observe::SigKey, to: usize) {
+        let Some(window) = self.data_windows.first_mut() else {
+            return;
+        };
+        let Some(from) = window
+            .signals
+            .iter()
+            .position(|signal| same_row_key(&signal.key, key))
+        else {
+            return;
+        };
+        let signal = window.signals.remove(from);
+        let to = to.min(window.signals.len());
+        window.signals.insert(to, signal);
     }
 
     pub fn new_trace_window(&mut self) {

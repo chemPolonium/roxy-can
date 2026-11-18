@@ -14,6 +14,9 @@ interface Props {
   rows: MonitorRow[];
   filtered?: boolean;
   theme: Theme;
+  /// Row drag: the `sig:` key lands before slot `to`. Absent disables
+  /// dragging (the panel is also read-only in some callers).
+  onMoveRow?: (key: string, to: number) => void;
   onEdit: (row: MonitorRow, patch: MonitorPatch) => void;
   onRemove: (row: MonitorRow) => void;
 }
@@ -63,10 +66,34 @@ export function MonitorPanel({
   rows,
   filtered = false,
   theme,
+  onMoveRow,
   onEdit,
   onRemove,
 }: Props) {
   const colors = palette(theme).monitors;
+  // Dragging reorders the full list, so it waits until the filter is
+  // clear; otherwise "before the hovered row" has no stable meaning.
+  const sortable = !!onMoveRow && !filtered;
+  const [dragKey, setDragKey] = useState<string | null>(null);
+  const [overKey, setOverKey] = useState<string | null>(null);
+
+  const dropOn = (target: MonitorRow) => {
+    if (!onMoveRow || !dragKey || dragKey === target.key) {
+      setDragKey(null);
+      setOverKey(null);
+      return;
+    }
+    const from = rows.findIndex((row) => row.key === dragKey);
+    const over = rows.findIndex((row) => row.key === target.key);
+    if (from >= 0 && over >= 0) {
+      // `to` is the index in the post-removal list, so the dragged row
+      // lands before the row it was dropped on in either direction.
+      onMoveRow(dragKey, from < over ? over - 1 : over);
+    }
+    setDragKey(null);
+    setOverKey(null);
+  };
+
   if (rows.length === 0) {
     return (
       <div class="empty">
@@ -91,9 +118,51 @@ export function MonitorPanel({
               (!row.rising && row.value <= row.threshold));
           return (
             <div
-              class={`monitor-row ${hot ? "hot" : ""}`}
+              class={`monitor-row ${hot ? "hot" : ""} ${
+                overKey === row.key && dragKey !== row.key ? "drag-over" : ""
+              } ${dragKey === row.key ? "dragging" : ""}`}
               key={`${row.kind}:${row.ch}:${row.id}:${row.ext}:${row.name}`}
               style={{ borderLeftColor: color }}
+              draggable={sortable}
+              title={
+                sortable
+                  ? "Drag onto another row to reorder; the order is saved with the project"
+                  : undefined
+              }
+              onDragStart={(event) => {
+                if (!sortable) return;
+                // Dragging from inside a field stays a text selection;
+                // the row handle is everywhere else on the card.
+                const tag = (event.target as HTMLElement).tagName;
+                if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") {
+                  event.preventDefault();
+                  return;
+                }
+                setDragKey(row.key);
+                event.dataTransfer?.setData("text/plain", row.key);
+                if (event.dataTransfer) {
+                  event.dataTransfer.effectAllowed = "move";
+                }
+              }}
+              onDragOver={(event) => {
+                if (!sortable || !dragKey) return;
+                event.preventDefault();
+                if (event.dataTransfer) {
+                  event.dataTransfer.dropEffect = "move";
+                }
+                setOverKey(row.key);
+              }}
+              onDragLeave={() => {
+                if (overKey === row.key) setOverKey(null);
+              }}
+              onDrop={(event) => {
+                event.preventDefault();
+                dropOn(row);
+              }}
+              onDragEnd={() => {
+                setDragKey(null);
+                setOverKey(null);
+              }}
             >
               <div class="monitor-main">
                 <span

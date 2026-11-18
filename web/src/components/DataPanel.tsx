@@ -1,8 +1,11 @@
+import { useState } from "preact/hooks";
 import type { DataRow } from "../types";
 
 interface Props {
   rows: DataRow[];
   filtered?: boolean;
+  /// Row drag: the `sig:` key lands before slot `to`.
+  onMoveRow?: (key: string, to: number) => void;
   onVisible: (row: DataRow, visible: boolean) => void;
   onRemove: (row: DataRow) => void;
 }
@@ -10,9 +13,33 @@ interface Props {
 export function DataPanel({
   rows,
   filtered = false,
+  onMoveRow,
   onVisible,
   onRemove,
 }: Props) {
+  // Reordering needs the unfiltered list; the hover index would otherwise
+  // not match the backend's slots.
+  const sortable = !!onMoveRow && !filtered;
+  const [dragKey, setDragKey] = useState<string | null>(null);
+  const [overKey, setOverKey] = useState<string | null>(null);
+
+  const dropOn = (target: DataRow) => {
+    if (!onMoveRow || !dragKey || dragKey === target.key) {
+      setDragKey(null);
+      setOverKey(null);
+      return;
+    }
+    const from = rows.findIndex((row) => row.key === dragKey);
+    const over = rows.findIndex((row) => row.key === target.key);
+    if (from >= 0 && over >= 0) {
+      // `to` is the post-removal index, so the row lands before the one
+      // it was dropped on in either direction.
+      onMoveRow(dragKey, from < over ? over - 1 : over);
+    }
+    setDragKey(null);
+    setOverKey(null);
+  };
+
   if (rows.length === 0) {
     return (
       <div class="empty">
@@ -29,8 +56,50 @@ export function DataPanel({
     <div class="data-list">
       {rows.map((row) => (
         <div
-          class={`data-row ${row.visible ? "" : "hidden"}`}
+          class={`data-row ${row.visible ? "" : "hidden"} ${
+            overKey === row.key && dragKey !== row.key ? "drag-over" : ""
+          } ${dragKey === row.key ? "dragging" : ""}`}
           key={`${row.kind}:${row.ch}:${row.id}:${row.ext}:${row.name}`}
+          draggable={sortable}
+          title={
+            sortable
+              ? "Drag onto another row to reorder; the order is saved with the project"
+              : undefined
+          }
+          onDragStart={(event) => {
+            if (!sortable) return;
+            // Dragging from the checkbox or a field keeps its normal
+            // behaviour; the row handle is everywhere else on the card.
+            const tag = (event.target as HTMLElement).tagName;
+            if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") {
+              event.preventDefault();
+              return;
+            }
+            setDragKey(row.key);
+            event.dataTransfer?.setData("text/plain", row.key);
+            if (event.dataTransfer) {
+              event.dataTransfer.effectAllowed = "move";
+            }
+          }}
+          onDragOver={(event) => {
+            if (!sortable || !dragKey) return;
+            event.preventDefault();
+            if (event.dataTransfer) {
+              event.dataTransfer.dropEffect = "move";
+            }
+            setOverKey(row.key);
+          }}
+          onDragLeave={() => {
+            if (overKey === row.key) setOverKey(null);
+          }}
+          onDrop={(event) => {
+            event.preventDefault();
+            dropOn(row);
+          }}
+          onDragEnd={() => {
+            setDragKey(null);
+            setOverKey(null);
+          }}
         >
           {row.kind === "derived" ? (
             <span class="data-check" />

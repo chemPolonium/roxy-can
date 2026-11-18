@@ -251,6 +251,9 @@ pub enum TriggerCmd {
     /// menus and the web seed command). Uses the default action.
     AddCond(TriggerCond),
     Remove(usize),
+    /// Clone rule `index` onto the end: condition, action and every limit.
+    /// The copy starts disarmed with a clean latch, like any new rule.
+    Duplicate(usize),
     SetEnabled {
         index: usize,
         on: bool,
@@ -531,6 +534,9 @@ impl App {
                 },
                 TriggerCmd::AddCond(cond) => self.add_trigger_cond(cond),
                 TriggerCmd::Remove(index) => self.remove_trigger(index),
+                TriggerCmd::Duplicate(index) => {
+                    self.send(crate::bus::BusCommand::DuplicateTrigger { index });
+                }
                 TriggerCmd::SetEnabled { index, on } => {
                     self.send(crate::bus::BusCommand::SetTriggerEnabled { index, on });
                 }

@@ -3,6 +3,7 @@
 /// row of buttons reads as one set. Text labels stay in `title`/`aria-label`.
 export type UiIconName =
   | "book"
+  | "camera"
   | "download"
   | "funnel"
   | "columns"
@@ -31,6 +32,13 @@ export function UiIcon({ name }: { name: UiIconName }) {
         <svg viewBox="0 0 16 16" aria-hidden="true">
           <path d="M3 3.5h4a2 2 0 0 1 2 2V13a2 2 0 0 0-2-2H3z" />
           <path d="M13 3.5H9a2 2 0 0 0-2 2V13a2 2 0 0 1 2-2h4z" />
+        </svg>
+      );
+    case "camera":
+      return (
+        <svg viewBox="0 0 16 16" aria-hidden="true">
+          <path d="M5.5 4 6.3 2.5h3.4L10.5 4H13a1 1 0 0 1 1 1v7a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1z" />
+          <circle cx="8" cy="7.7" r="2.4" />
         </svg>
       );
     case "download":

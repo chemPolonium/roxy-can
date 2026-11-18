@@ -7,6 +7,7 @@ import {
   type YMemory,
 } from "../chartScale";
 import { palette, type Theme } from "../theme";
+import { triggerDownload } from "../download";
 
 const GUTTER = 108;
 const AXIS_H = 18;
@@ -483,6 +484,7 @@ export function SignalChart({
   yModes,
   onYMode,
   ranges,
+  exportRef,
 }: {
   series: SignalSeries[];
   markers?: number[];
@@ -516,6 +518,9 @@ export function SignalChart({
   onYMode?: (key: string, mode: ChartYMode) => void;
   /// Declared communication ranges by series key, for the DBC mode.
   ranges?: Record<string, { min: number; max: number }>;
+  /// Receives the "save the current view as a PNG" callback so the page
+  /// header can trigger it without reaching into the canvas.
+  exportRef?: { current: (() => void) | null };
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const dragRef = useRef<{ x: number; endS: number } | null>(null);
@@ -545,6 +550,43 @@ export function SignalChart({
   const timeBounds =
     series.length > 0 ? bounds(series) : (readRange ?? bounds(series));
   const liveEnd = view.endS ?? timeBounds.last;
+
+  /// Hands the page header a one-click "save this view as a PNG". The
+  /// canvas is transparent, so the export composites it over the theme's
+  /// page background; cursors, lane names and the LIVE tag are already
+  /// painted on the canvas itself.
+  useEffect(() => {
+    if (!exportRef) return;
+    exportRef.current = () => {
+      const canvas = canvasRef.current;
+      if (!canvas || canvas.width === 0 || canvas.height === 0) return;
+      const out = document.createElement("canvas");
+      out.width = canvas.width;
+      out.height = canvas.height;
+      const ctx = out.getContext("2d");
+      if (!ctx) return;
+      const styles = window.getComputedStyle(document.documentElement);
+      ctx.fillStyle = styles.getPropertyValue("--bg").trim() || "#0a0c10";
+      ctx.fillRect(0, 0, out.width, out.height);
+      ctx.drawImage(canvas, 0, 0);
+      out.toBlob((blob) => {
+        if (!blob) return;
+        const url = URL.createObjectURL(blob);
+        const stamp = new Date();
+        const pad = (value: number) => String(value).padStart(2, "0");
+        const name = `signals-${stamp.getFullYear()}${pad(
+          stamp.getMonth() + 1,
+        )}${pad(stamp.getDate())}-${pad(stamp.getHours())}${pad(
+          stamp.getMinutes(),
+        )}${pad(stamp.getSeconds())}.png`;
+        triggerDownload(url, name);
+        window.setTimeout(() => URL.revokeObjectURL(url), 2_000);
+      }, "image/png");
+    };
+    return () => {
+      exportRef.current = null;
+    };
+  });
 
   /// Which lane is under the pointer. Reorder drags clamp above/below the
   /// stack to the first/last lane; a plain click outside the lanes does not

@@ -31,6 +31,8 @@ interface Props {
   onAdd: (kind: string) => void;
   onToggle: (index: number, on: boolean) => void;
   onRemove: (index: number) => void;
+  /// Clone a rule onto the end of the list; the copy starts disarmed.
+  onDuplicate: (index: number) => void;
   onRearm: () => void;
   onEdit: (edit: TriggerEdit) => void;
   onLimits: (limits: TriggerLimits) => void;
@@ -1081,6 +1083,7 @@ export function TriggersModal({
   onAdd,
   onToggle,
   onRemove,
+  onDuplicate,
   onRearm,
   onRearmOne,
   onEdit,
@@ -1448,6 +1451,15 @@ export function TriggersModal({
                 onClick={() => onRearmOne(index)}
               >
                 ↺
+              </button>
+              <button
+                type="button"
+                class="mini"
+                title="Duplicate this rule (condition, action and limits; starts off)"
+                aria-label="Duplicate rule"
+                onClick={() => onDuplicate(index)}
+              >
+                Copy
               </button>
               <button
                 type="button"

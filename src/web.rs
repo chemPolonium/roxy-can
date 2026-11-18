@@ -825,7 +825,7 @@ fn set_web_workspace(app: &mut App, rev: u64, workspace: serde_json::Value) {
 
 fn export_file(app: &mut App, kind: &str, path: &str, range: Option<(u64, u64)>) {
     if path.trim().is_empty() {
-        app.status = "export needs a path".to_string();
+        app.fail("export needs a path");
         return;
     }
     match kind {
@@ -840,7 +840,7 @@ fn export_file(app: &mut App, kind: &str, path: &str, range: Option<(u64, u64)>)
         "state" => app.export_state_csv(0, path),
         "graphics" => app.export_graphics_csv(0, path),
         "spec" => app.export_spec_csv(path),
-        other => app.status = format!("unknown export kind: {other}"),
+        other => app.fail(format!("unknown export kind: {other}")),
     }
 }
 
@@ -1004,7 +1004,7 @@ fn chart_move(app: &mut App, store: &mut SignalStore, key: &SigKey, to: usize) {
 /// and deduplicated; names are padded so every band has a label.
 fn set_state_rule(app: &mut App, key: &SigKey, cuts: Vec<f64>, names: Vec<String>) {
     let Some(window) = app.state_trackers.first_mut() else {
-        app.status = "state rule needs a State Tracker window".to_string();
+        app.fail("state rule needs a State Tracker window");
         return;
     };
     let mut cuts: Vec<f64> = cuts.into_iter().filter(|value| value.is_finite()).collect();
@@ -2439,6 +2439,12 @@ enum WebCommand {
         threshold: Option<f64>,
         color: Option<usize>,
     },
+    /// Reorder Monitor rows: the `sig:` key moves to slot `to` (index in the
+    /// post-removal list, clamped by the core).
+    MoveMonitorRow {
+        key: String,
+        to: usize,
+    },
     AddData {
         kind: String,
         ch: u8,
@@ -2456,6 +2462,12 @@ enum WebCommand {
         name: String,
     },
     ClearData,
+    /// Reorder the first Data window's rows, same semantics as the Monitor
+    /// move.
+    MoveDataRow {
+        key: String,
+        to: usize,
+    },
     SetDataVisible {
         kind: String,
         ch: u8,
@@ -2554,6 +2566,10 @@ enum WebCommand {
     RemoveReplayBlock {
         id: u64,
     },
+    /// Clone replay block `id` as a new disabled "… copy".
+    DuplicateReplayBlock {
+        id: u64,
+    },
     AddFrEntry {
         bus: u8,
         slot: u16,
@@ -2614,6 +2630,10 @@ enum WebCommand {
         on: bool,
     },
     RemoveTrigger {
+        index: usize,
+    },
+    /// Clone rule `index` onto the end; the copy starts disarmed.
+    DuplicateTrigger {
         index: usize,
     },
     RearmTriggers,
@@ -2757,7 +2777,7 @@ fn app_loop(
             .unwrap_or_else(|| std::path::Path::new("."));
         match crate::profile::apply_profile(&mut app, dir, profile) {
             Ok(summary) => app.status = format!("{}; profile: {summary}", app.status),
-            Err(error) => app.status = format!("profile failed: {error}"),
+            Err(error) => app.fail(format!("profile failed: {error}")),
         }
     }
     if let Ok(mut store) = signals.lock() {
@@ -2779,8 +2799,7 @@ fn app_loop(
                 WebCommand::Start => {
                     if !app.snap.measuring {
                         if app.snap.run_mode == Mode::Replay && app.log_path.is_empty() {
-                            app.status =
-                                "replay needs a log; start with --replay <path>".to_string();
+                            app.fail("replay needs a log; start with --replay <path>");
                         } else {
                             app.start_selected();
                             rate_window.clear();
@@ -2819,11 +2838,11 @@ fn app_loop(
                 }
                 WebCommand::SetReplayChannel { kind, raw, target } => {
                     let Some(kind) = crate::replay_map::LogBusKind::parse(&kind) else {
-                        app.status = format!("unknown replay bus kind: {kind}");
+                        app.fail(format!("unknown replay bus kind: {kind}"));
                         continue;
                     };
                     if let Err(message) = apply_replay_channel(&mut app, kind, raw, target) {
-                        app.status = message;
+                        app.fail(message);
                     }
                 }
                 WebCommand::RecordToggle { name, format } => {
@@ -2869,11 +2888,11 @@ fn app_loop(
                 WebCommand::RunPanelAction { name, value } => {
                     let name = name.trim().to_string();
                     if name.is_empty() {
-                        app.status = "[panel] action name is empty".to_string();
+                        app.fail("[panel] action name is empty");
                     } else if name.chars().count() > 80 {
-                        app.status = "[panel] action name is too long".to_string();
+                        app.fail("[panel] action name is too long");
                     } else if value.is_some_and(|value| !value.is_finite()) {
-                        app.status = "[panel] action value must be a number".to_string();
+                        app.fail("[panel] action value must be a number");
                     } else {
                         app.send(BusCommand::PanelAction { name, value });
                     }
@@ -2892,13 +2911,13 @@ fn app_loop(
                             app.send(BusCommand::PanelWriteSignal { key, value });
                         }
                         Some(crate::observe::SigKey::Derived { .. }) => {
-                            app.status = "[panel] derived signals are read-only".to_string();
+                            app.fail("[panel] derived signals are read-only");
                         }
                         Some(_) => {
-                            app.status = "[panel] setpoint value must be a number".to_string();
+                            app.fail("[panel] setpoint value must be a number");
                         }
                         None => {
-                            app.status = "[panel] setpoint source must be a signal key".to_string();
+                            app.fail("[panel] setpoint source must be a signal key");
                         }
                     }
                 }
@@ -3002,7 +3021,7 @@ fn app_loop(
                             );
                             app.status = format!("sample project created: {}", path.display());
                         }
-                        Err(e) => app.status = format!("sample project failed: {e}"),
+                        Err(e) => app.fail(format!("sample project failed: {e}")),
                     }
                 }
                 WebCommand::SetRunMode { mode } => {
@@ -3025,7 +3044,7 @@ fn app_loop(
                                 Mode::Replay => "replay mode".to_string(),
                             };
                         }
-                        None => app.status = format!("unknown run mode: {mode}"),
+                        None => app.fail(format!("unknown run mode: {mode}")),
                     }
                 }
                 WebCommand::OpenLog { path, play } => {
@@ -3051,22 +3070,18 @@ fn app_loop(
                         }
                     }
                 }
-                WebCommand::AddReplayFolder { path } => {
-                    app.status = match app.add_replay_folder(path.clone()) {
-                        Ok(count) => {
-                            format!("replay folder added: {path} · {count} recording(s)")
-                        }
-                        Err(e) => e,
-                    };
-                }
-                WebCommand::AddReplayFile { path } => {
-                    app.status = match app.add_replay_file(path.clone()) {
-                        Ok(count) => {
-                            format!("replay file added: {path} · {count} recording(s)")
-                        }
-                        Err(e) => e,
-                    };
-                }
+                WebCommand::AddReplayFolder { path } => match app.add_replay_folder(path.clone()) {
+                    Ok(count) => {
+                        app.status = format!("replay folder added: {path} · {count} recording(s)");
+                    }
+                    Err(e) => app.fail(e),
+                },
+                WebCommand::AddReplayFile { path } => match app.add_replay_file(path.clone()) {
+                    Ok(count) => {
+                        app.status = format!("replay file added: {path} · {count} recording(s)");
+                    }
+                    Err(e) => app.fail(e),
+                },
                 WebCommand::RemoveReplaySource { path, folder } => {
                     app.remove_replay_source(&path, folder);
                     app.status = "replay source removed".to_string();
@@ -3198,16 +3213,16 @@ fn app_loop(
                         && let Ok(mut store) = signals.lock()
                         && !chart_signal_action(&mut app, &mut store, &target, &action)
                     {
-                        app.status = format!("unknown chart signal action: {action}");
+                        app.fail(format!("unknown chart signal action: {action}"));
                     }
                 }
                 WebCommand::AttachHardware { bus, driver, index } => {
                     let Some(driver) = parse_driver(&driver) else {
-                        app.status = format!("unknown hardware driver: {driver}");
+                        app.fail(format!("unknown hardware driver: {driver}"));
                         continue;
                     };
                     let Some(channel) = app.snap.channels.get(bus as usize) else {
-                        app.status = format!("bus {bus} does not exist");
+                        app.fail(format!("bus {bus} does not exist"));
                         continue;
                     };
                     let (arb, data) = (channel.bitrate_kbps, channel.fd_data_kbps);
@@ -3315,22 +3330,22 @@ fn app_loop(
                             if let Some(cluster) = cluster
                                 && let Err(e) = app.load_can_arxml_on_bus(&path, cluster, bus)
                             {
-                                app.status = format!("CAN{}: {e}", bus + 1);
+                                app.fail(format!("CAN{}: {e}", bus + 1));
                             }
                         }
                         "flexray" | "fr" => {
                             let source = crate::channel::description_source(&path, cluster);
                             if let Err(e) = app.add_fr_description(bus, source) {
-                                app.status = format!("FR{bus}: {e}");
+                                app.fail(format!("FR{bus}: {e}"));
                             }
                         }
                         "ethernet" | "eth" => {
                             let source = crate::channel::description_source(&path, cluster);
                             if let Err(e) = app.add_eth_description(bus, source) {
-                                app.status = format!("ETH{bus}: {e}");
+                                app.fail(format!("ETH{bus}: {e}"));
                             }
                         }
-                        other => app.status = format!("unknown bus kind: {other}"),
+                        other => app.fail(format!("unknown bus kind: {other}")),
                     }
                 }
                 WebCommand::RemoveBusDescription {
@@ -3349,7 +3364,7 @@ fn app_loop(
                         "can" => app.remove_can_arxml(bus, &path, &cluster),
                         "flexray" | "fr" => app.remove_fr_description(bus, &path, &cluster),
                         "ethernet" | "eth" => app.remove_eth_description(bus, &path, &cluster),
-                        other => app.status = format!("unknown bus kind: {other}"),
+                        other => app.fail(format!("unknown bus kind: {other}")),
                     }
                 }
                 WebCommand::SaveProject { path, panels } => {
@@ -3363,7 +3378,7 @@ fn app_loop(
                             app.save_project(Some(target));
                         }
                         None => {
-                            app.status = "save needs a project path".to_string();
+                            app.fail("save needs a project path");
                         }
                     }
                 }
@@ -3397,11 +3412,11 @@ fn app_loop(
                 }
                 WebCommand::SaveScriptFile { path, source } => {
                     if path.trim().is_empty() {
-                        app.status = "script save needs a path".to_string();
+                        app.fail("script save needs a path");
                     } else {
                         match std::fs::write(&path, source) {
                             Ok(()) => app.status = format!("script saved: {path}"),
-                            Err(error) => app.status = format!("script save failed: {error}"),
+                            Err(error) => app.fail(format!("script save failed: {error}")),
                         }
                     }
                 }
@@ -3467,7 +3482,7 @@ fn app_loop(
                         }
                         app.send(BusCommand::DefineSysVar(def));
                     }
-                    Err(error) => app.status = format!("sysvar: {error}"),
+                    Err(error) => app.fail(format!("sysvar: {error}")),
                 },
                 WebCommand::DeleteSysVar { namespace, name } => {
                     app.send(BusCommand::DeleteSysVar { namespace, name });
@@ -3481,7 +3496,7 @@ fn app_loop(
                     name,
                 } => {
                     let Some(key) = command_key(&app, &kind, ch, id, ext, frame, name) else {
-                        app.status = format!("unknown signal kind: {kind}");
+                        app.fail(format!("unknown signal kind: {kind}"));
                         continue;
                     };
                     app.set_win_signal(crate::workspace::PopupTarget::Monitor, key, true);
@@ -3495,7 +3510,7 @@ fn app_loop(
                     name,
                 } => {
                     let Some(key) = command_key(&app, &kind, ch, id, ext, frame, name) else {
-                        app.status = format!("unknown signal kind: {kind}");
+                        app.fail(format!("unknown signal kind: {kind}"));
                         continue;
                     };
                     sync_chart_keep(&mut app, &signals);
@@ -3527,10 +3542,15 @@ fn app_loop(
                     color,
                 } => {
                     let Some(key) = command_key(&app, &kind, ch, id, ext, frame, name) else {
-                        app.status = format!("unknown signal kind: {kind}");
+                        app.fail(format!("unknown signal kind: {kind}"));
                         continue;
                     };
                     edit_monitor_row(&mut app, &key, digits, rule_on, rising, threshold, color);
+                }
+                WebCommand::MoveMonitorRow { key, to } => {
+                    if let Some(key) = SigKey::from_text(&key) {
+                        app.move_monitor_row(&key, to);
+                    }
                 }
                 WebCommand::AddData {
                     kind,
@@ -3541,7 +3561,7 @@ fn app_loop(
                     name,
                 } => {
                     let Some(key) = command_key(&app, &kind, ch, id, ext, frame, name) else {
-                        app.status = format!("unknown signal kind: {kind}");
+                        app.fail(format!("unknown signal kind: {kind}"));
                         continue;
                     };
                     if app.data_windows.is_empty() {
@@ -3558,7 +3578,7 @@ fn app_loop(
                     name,
                 } => {
                     let Some(key) = command_key(&app, &kind, ch, id, ext, frame, name) else {
-                        app.status = format!("unknown signal kind: {kind}");
+                        app.fail(format!("unknown signal kind: {kind}"));
                         continue;
                     };
                     sync_chart_keep(&mut app, &signals);
@@ -3581,6 +3601,11 @@ fn app_loop(
                         app.set_win_signal(crate::workspace::PopupTarget::Data(0), key, false);
                     }
                 }
+                WebCommand::MoveDataRow { key, to } => {
+                    if let Some(key) = SigKey::from_text(&key) {
+                        app.move_data_row(&key, to);
+                    }
+                }
                 WebCommand::SetDataVisible {
                     kind,
                     ch,
@@ -3591,7 +3616,7 @@ fn app_loop(
                     visible,
                 } => {
                     let Some(key) = command_key(&app, &kind, ch, id, ext, frame, name) else {
-                        app.status = format!("unknown signal kind: {kind}");
+                        app.fail(format!("unknown signal kind: {kind}"));
                         continue;
                     };
                     if let Some(signal) = app
@@ -3611,7 +3636,7 @@ fn app_loop(
                     name,
                 } => {
                     let Some(key) = command_key(&app, &kind, ch, id, ext, frame, name) else {
-                        app.status = format!("unknown signal kind: {kind}");
+                        app.fail(format!("unknown signal kind: {kind}"));
                         continue;
                     };
                     if app.state_trackers.is_empty() {
@@ -3628,7 +3653,7 @@ fn app_loop(
                     name,
                 } => {
                     let Some(key) = command_key(&app, &kind, ch, id, ext, frame, name) else {
-                        app.status = format!("unknown signal kind: {kind}");
+                        app.fail(format!("unknown signal kind: {kind}"));
                         continue;
                     };
                     sync_chart_keep(&mut app, &signals);
@@ -3667,7 +3692,7 @@ fn app_loop(
                     names,
                 } => {
                     let Some(key) = command_key(&app, &kind, ch, id, ext, frame, name) else {
-                        app.status = format!("unknown signal kind: {kind}");
+                        app.fail(format!("unknown signal kind: {kind}"));
                         continue;
                     };
                     set_state_rule(&mut app, &key, cuts, names);
@@ -3681,7 +3706,7 @@ fn app_loop(
                     name,
                 } => {
                     let Some(key) = command_key(&app, &kind, ch, id, ext, frame, name) else {
-                        app.status = format!("unknown signal kind: {kind}");
+                        app.fail(format!("unknown signal kind: {kind}"));
                         continue;
                     };
                     clear_state_rule(&mut app, &key);
@@ -3707,12 +3732,12 @@ fn app_loop(
                         .copied()
                         .find(|kind| kind.label().eq_ignore_ascii_case(&src.kind))
                     else {
-                        app.status = format!("unknown source kind: {}", src.kind);
+                        app.fail(format!("unknown source kind: {}", src.kind));
                         continue;
                     };
                     let name = src.name.trim().to_string();
                     if name.is_empty() {
-                        app.status = "source needs a signal name".to_string();
+                        app.fail("source needs a signal name");
                         continue;
                     }
                     app.send(BusCommand::SetEntrySource {
@@ -3803,6 +3828,9 @@ fn app_loop(
                 WebCommand::RemoveReplayBlock { id } => {
                     app.remove_replay_block(id);
                 }
+                WebCommand::DuplicateReplayBlock { id } => {
+                    app.duplicate_replay_block(id);
+                }
                 WebCommand::AddFrEntry { bus, slot } => {
                     app.add_fr_tx(bus, slot);
                 }
@@ -3868,21 +3896,20 @@ fn app_loop(
                                             })
                                         }
                                         crate::observe::SigKey::Eth { .. } => {
-                                            app.status =
-                                                "Ethernet signals have no trigger condition yet"
-                                                    .to_string();
+                                            app.fail(
+                                                "Ethernet signals have no trigger condition yet",
+                                            );
                                             None
                                         }
                                         crate::observe::SigKey::Derived { .. } => None,
                                     };
                                 }
                                 None => {
-                                    app.status =
-                                        "that signal's bus is not in this project".to_string();
+                                    app.fail("that signal's bus is not in this project");
                                 }
                             },
                             None => {
-                                app.status = format!("unrecognised signal key: {text}");
+                                app.fail(format!("unrecognised signal key: {text}"));
                             }
                         }
                     }
@@ -3917,6 +3944,9 @@ fn app_loop(
                 }
                 WebCommand::RemoveTrigger { index } => {
                     app.apply_trigger_cmds(vec![TriggerCmd::Remove(index)]);
+                }
+                WebCommand::DuplicateTrigger { index } => {
+                    app.apply_trigger_cmds(vec![TriggerCmd::Duplicate(index)]);
                 }
                 WebCommand::RearmTriggers => {
                     app.apply_trigger_cmds(vec![TriggerCmd::Rearm]);
@@ -4017,7 +4047,7 @@ fn app_loop(
                             message_type: cond_someip_type,
                         },
                         _ => {
-                            app.status = format!("unknown trigger kind: {kind}");
+                            app.fail(format!("unknown trigger kind: {kind}"));
                             continue;
                         }
                     };
@@ -4034,7 +4064,7 @@ fn app_loop(
                         },
                         "send_eth" => {
                             let Some(data) = crate::generator::parse_hex_bytes(&send_data) else {
-                                app.status = "Ethernet payload must be hex bytes".to_string();
+                                app.fail("Ethernet payload must be hex bytes");
                                 return;
                             };
                             TriggerAction::SendEth {
@@ -4047,7 +4077,7 @@ fn app_loop(
                             let data = if someip_values.is_empty() {
                                 let Some(data) = crate::generator::parse_hex_bytes(&send_data)
                                 else {
-                                    app.status = "SOME/IP payload must be hex bytes".to_string();
+                                    app.fail("SOME/IP payload must be hex bytes");
                                     return;
                                 };
                                 data
@@ -4079,7 +4109,7 @@ fn app_loop(
                             value: script_value,
                         },
                         _ => {
-                            app.status = format!("unknown trigger action: {action}");
+                            app.fail(format!("unknown trigger action: {action}"));
                             continue;
                         }
                     };
@@ -6224,6 +6254,8 @@ struct WebMonitorRow {
     #[serde(skip_serializing_if = "Option::is_none")]
     frame: Option<String>,
     name: String,
+    /// Canonical `sig:` key; the move command resolves it to reorder rows.
+    key: String,
     label: String,
     bus: String,
     /// `Frame / PDU / Signal` from the loaded model; empty for derived rows.
@@ -6249,6 +6281,8 @@ struct WebDataRow {
     #[serde(skip_serializing_if = "Option::is_none")]
     frame: Option<String>,
     name: String,
+    /// Canonical `sig:` key; the move command resolves it to reorder rows.
+    key: String,
     bus: String,
     /// `Frame / PDU / Signal` from the loaded model; empty for derived rows.
     #[serde(skip_serializing_if = "String::is_empty")]
@@ -7281,6 +7315,7 @@ fn build_state(app: &App, series: &VecDeque<WebSeriesPoint>, fps: f64) -> WebSta
                         ext,
                         frame,
                         name,
+                        key: series_key(&signal.key),
                         bus: signal_bus(app, &signal.key),
                         path: signal_path(app, &signal.key).unwrap_or_default(),
                         value,
@@ -7422,6 +7457,7 @@ fn build_state(app: &App, series: &VecDeque<WebSeriesPoint>, fps: f64) -> WebSta
                 ext,
                 frame,
                 name: row.key.name().to_string(),
+                key: series_key(&row.key),
                 label: row.label.clone(),
                 bus: signal_bus(app, &row.key),
                 path: signal_path(app, &row.key).unwrap_or_default(),
@@ -8425,6 +8461,89 @@ mod tests {
         assert_eq!(v.unit, "rpm");
     }
 
+    /// Duplicating a rule copies its whole shape -- condition, action and
+    /// limits -- while the copy starts disarmed with a clean latch and zero
+    /// fire count, exactly like a freshly added rule.
+    #[test]
+    fn a_duplicated_trigger_rule_copies_the_shape_but_starts_clean() {
+        let mut app = App::headless();
+        app.apply_trigger_cmds(vec![
+            TriggerCmd::Add(TriggerKind::Id),
+            TriggerCmd::Edit {
+                index: 0,
+                cond: TriggerCond::ErrorFrame { ch: 1 },
+                action: TriggerAction::InsertMarker,
+                cooldown_us: 5_000_000,
+                max_fires: 3,
+                pre_frames: Some(12),
+                post_frames: Some(4),
+            },
+            TriggerCmd::SetEnabled { index: 0, on: true },
+            TriggerCmd::Duplicate(0),
+        ]);
+        app.settle();
+        let state = build_state(&app, &VecDeque::new(), 0.0);
+        assert_eq!(state.triggers.len(), 2);
+        let first = state.triggers[0].clone();
+        let copy = state.triggers[1].clone();
+        assert!(first.enabled);
+        assert!(!copy.enabled, "the copy starts disarmed");
+        assert_eq!(copy.kind, first.kind);
+        assert_eq!(copy.ch, first.ch);
+        assert_eq!(copy.action_kind, first.action_kind);
+        assert_eq!(copy.cooldown_ms, first.cooldown_ms);
+        assert_eq!(copy.max_fires, first.max_fires);
+        assert_eq!(copy.pre_frames, first.pre_frames);
+        assert_eq!(copy.post_frames, first.post_frames);
+        assert_eq!(copy.fired, 0, "the copy has no fire history");
+    }
+
+    /// The generator's replay blocks duplicate as disabled copies that keep
+    /// the log, node filter and id filter of the original.
+    #[test]
+    fn a_duplicated_replay_block_is_a_disabled_copy() {
+        let mut app = App::headless();
+        app.add_replay_block(
+            0,
+            "restbus".to_string(),
+            "log.asc".to_string(),
+            Some("Engine".to_string()),
+            None,
+        );
+        app.settle();
+        let id = app.snap.blocks.first().expect("block exists").id;
+        app.duplicate_replay_block(id);
+        app.settle();
+        assert_eq!(app.snap.blocks.len(), 2);
+        let copy = app.snap.blocks[1].clone();
+        assert_ne!(copy.id, id, "the copy mints its own id");
+        assert!(copy.name.contains("copy"));
+        assert!(!copy.enabled, "the copy starts disabled like a new block");
+        assert_eq!(copy.path, "log.asc");
+        assert_eq!(
+            copy.node_filter.as_deref(),
+            Some("Engine"),
+            "the node filter carries over for id-filter variants"
+        );
+    }
+
+    /// Monitor rows carry their canonical key so the web can address them
+    /// for row reordering.
+    #[test]
+    fn the_state_lists_monitor_rows_with_their_keys() {
+        let mut app = App::headless();
+        let key = SigKey::can_in(crate::model::ClusterId(1), 0x100, false, "EngineSpeed");
+        app.set_win_signal(crate::workspace::PopupTarget::Monitor, key.clone(), true);
+        app.settle();
+        let state = build_state(&app, &VecDeque::new(), 0.0);
+        assert_eq!(state.monitor.len(), 1);
+        assert_eq!(
+            state.monitor[0].key,
+            series_key(&key),
+            "the row exposes the key text the move command resolves"
+        );
+    }
+
     /// Monitor rows carry their identity, live value and coloring rule to
     /// the web; edits stay in row state and removal unsubscribes the signal.
     #[test]
@@ -8698,6 +8817,25 @@ mod tests {
             );
             std::fs::remove_file(path).ok();
         }
+    }
+
+    /// A command that cannot run reports on the bar AND lands in the Write
+    /// ring: the bar holds one line and the next action erases it, so the
+    /// ring is the only place a minute-old failure can still be read.
+    #[test]
+    fn a_failed_command_lands_in_the_write_ring() {
+        let mut app = App::headless();
+        export_file(&mut app, "trace", "   ", None);
+        app.settle();
+        assert!(app.status.contains("export needs a path"));
+        assert!(
+            app.snap
+                .write
+                .iter()
+                .any(|line| line.kind == crate::bus::WriteKind::Error
+                    && line.text.contains("export needs a path")),
+            "the failure is still readable in Write"
+        );
     }
 
     /// Chart selection is also Graphics-window state, so it survives a

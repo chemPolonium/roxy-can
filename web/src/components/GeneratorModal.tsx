@@ -53,6 +53,9 @@ interface Props {
     node: string | null,
     ids: [number, boolean][],
   ) => void;
+  /// Clone a block as a new disabled "… copy": the cheap path to
+  /// id-filter or node-filter variants of one recording.
+  onBlockDuplicate: (id: number) => void;
   onBlockRemove: (id: number) => void;
   onClose: () => void;
 }
@@ -841,6 +844,7 @@ export function GeneratorModal({
   onBlockAdd,
   onBlockToggle,
   onBlockEdit,
+  onBlockDuplicate,
   onBlockRemove,
   onClose,
 }: Props) {
@@ -997,6 +1001,14 @@ export function GeneratorModal({
                         load failed
                       </span>
                     )}
+                    <button
+                      type="button"
+                      class="mini"
+                      title="Duplicate this block (same log and filters; starts off)"
+                      onClick={() => onBlockDuplicate(block.id)}
+                    >
+                      Copy
+                    </button>
                     <button
                       type="button"
                       onClick={() =>

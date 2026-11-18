@@ -597,6 +597,8 @@ export function App() {
     Math.max(0, ...(savedView.cursors ?? []).map((cursor) => cursor.id)) + 1,
   );
   const traceJumpSeq = useRef(0);
+  /// Filled in by the chart; the page-header camera button calls it.
+  const chartExportRef = useRef<(() => void) | null>(null);
   const toastTimer = useRef<number | null>(null);
   const lastStatus = useRef("");
   const statusReady = useRef(false);
@@ -2322,6 +2324,8 @@ export function App() {
     void run({ type: "set_trigger_enabled", index, on });
   const removeTrigger = (index: number) =>
     void run({ type: "remove_trigger", index });
+  const duplicateTrigger = (index: number) =>
+    void run({ type: "duplicate_trigger", index });
   const rearmTriggers = () => void run({ type: "rearm_triggers" });
   const rearmTrigger = (index: number) =>
     void run({ type: "rearm_trigger", index });
@@ -3625,6 +3629,16 @@ export function App() {
               <button
                 type="button"
                 class="mini icon-btn"
+                disabled={chartSeries.length === 0 && readSeries.length === 0}
+                title="Save the current chart view as a PNG image"
+                aria-label="Export chart image"
+                onClick={() => chartExportRef.current?.()}
+              >
+                <UiIcon name="camera" />
+              </button>
+              <button
+                type="button"
+                class="mini icon-btn"
                 title="Choose signals to plot or read at cursors"
                 aria-label="Add signals"
                 onClick={() => void openPicker()}
@@ -3662,6 +3676,7 @@ export function App() {
             readRange={readRange}
             readCount={readSeries.length}
             showCursorTools={false}
+            exportRef={chartExportRef}
           />
           {maximizedSlot === slot && (
             <CursorAnalysis
@@ -3728,6 +3743,9 @@ export function App() {
         rows={visibleMonitorRows}
         filtered={monitorQuery.trim() !== ""}
         theme={theme}
+        onMoveRow={(key, to) =>
+          void run({ type: "move_monitor_row", key, to })
+        }
         onEdit={editMonitor}
         onRemove={(row) =>
           row.kind === "derived"
@@ -3791,6 +3809,7 @@ export function App() {
       <DataPanel
         rows={visibleDataRows}
         filtered={dataQuery.trim() !== ""}
+        onMoveRow={(key, to) => void run({ type: "move_data_row", key, to })}
         onVisible={(row, visible) =>
           row.kind === "derived"
             ? showToast("Derived rows are always visible")
@@ -5341,6 +5360,7 @@ export function App() {
           onAdd={addTrigger}
           onToggle={setTriggerEnabled}
           onRemove={removeTrigger}
+          onDuplicate={duplicateTrigger}
           onRearm={rearmTriggers}
           onRearmOne={rearmTrigger}
           onEdit={editTrigger}
@@ -5407,6 +5427,9 @@ export function App() {
               node,
               ids,
             })
+          }
+          onBlockDuplicate={(id) =>
+            void run({ type: "duplicate_replay_block", id })
           }
           onBlockRemove={(id) =>
             void run({ type: "remove_replay_block", id })

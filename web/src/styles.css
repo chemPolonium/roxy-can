@@ -6612,6 +6612,23 @@ button.danger:hover:not(:disabled) {
   opacity: 0.5;
 }
 
+/* Row drag (Monitor/Data): the whole card is the handle. The top border
+   is the insertion point, not decoration. */
+.data-row[draggable="true"],
+.monitor-row[draggable="true"] {
+  cursor: grab;
+}
+
+.data-row.dragging,
+.monitor-row.dragging {
+  opacity: 0.55;
+}
+
+.data-row.drag-over,
+.monitor-row.drag-over {
+  border-top: 2px solid var(--accent);
+}
+
 .data-check {
   display: flex;
   grid-area: check;

@@ -566,6 +566,12 @@ pub enum BusCommand {
     RemoveReplayBlock {
         id: u64,
     },
+    /// Clone replay block `id` as a new disabled block: same log, node
+    /// filter and id filter, name suffixed with " copy". Editing the copy
+    /// is the cheap path to id-filter variants.
+    DuplicateReplayBlock {
+        id: u64,
+    },
     /// Toggle a replay block. Enabling loads its queue from the log right
     /// away, so a broken path surfaces as a status line, not as silence.
     SetReplayBlockEnabled {
@@ -620,6 +626,12 @@ pub enum BusCommand {
     },
     /// Drop trigger `index`.
     RemoveTrigger {
+        index: usize,
+    },
+    /// Clone trigger `index` onto the end of the list: condition, action
+    /// and limits all copy; the copy starts disarmed with a clean latch
+    /// and zeroed fire count.
+    DuplicateTrigger {
         index: usize,
     },
     /// Flip one trigger's enable checkbox.
@@ -2499,6 +2511,20 @@ impl BusCore {
                 self.replay_blocks.retain(|b| b.id != id);
                 self.nodes_dirty = true;
             }
+            BusCommand::DuplicateReplayBlock { id } => {
+                let Some(block) = self.replay_blocks.iter().find(|b| b.id == id) else {
+                    return;
+                };
+                let name = format!("{} copy", block.name);
+                let channel = block.channel;
+                let path = block.path.clone();
+                let node_filter = block.node_filter.clone();
+                let attached = block.attached.clone();
+                let ids = block.ids.clone();
+                // Reuse the add path so the copy mints its own id and
+                // reloads its queue only when someone enables it.
+                self.add_replay_block(name, channel, path, node_filter, attached, ids, status);
+            }
             BusCommand::SetReplayBlockEnabled { id, on } => {
                 self.set_replay_block_enabled(id, on, status)
             }
@@ -2984,6 +3010,21 @@ impl BusCore {
             BusCommand::RemoveTrigger { index } => {
                 if index < self.triggers.len() {
                     self.triggers.remove(index);
+                }
+            }
+            BusCommand::DuplicateTrigger { index } => {
+                if let Some(t) = self.triggers.get(index).cloned() {
+                    let mut copy = t;
+                    copy.enabled = false;
+                    copy.level = false;
+                    copy.fired = 0;
+                    copy.last_fire_t_us = 0;
+                    self.triggers.push(copy);
+                    *status = format!(
+                        "rule {} duplicated as rule {}",
+                        index + 1,
+                        self.triggers.len()
+                    );
                 }
             }
             BusCommand::SetTriggerEnabled { index, on } => {

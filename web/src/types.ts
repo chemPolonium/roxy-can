@@ -369,6 +369,8 @@ export interface MonitorRow {
   ext: boolean;
   frame?: string;
   name: string;
+  /// Canonical `sig:` key; row drag sends it back with a target slot.
+  key: string;
   label: string;
   bus: string;
   /// `Frame / PDU / Signal` from the loaded model; absent for derived rows.
@@ -390,6 +392,8 @@ export interface DataRow {
   ext: boolean;
   frame?: string;
   name: string;
+  /// Canonical `sig:` key; row drag sends it back with a target slot.
+  key: string;
   bus: string;
   /// `Frame / PDU / Signal` from the loaded model; absent for derived rows.
   path?: string;
@@ -909,6 +913,12 @@ export type Command =
     }
   | { type: "clear_monitor" }
   | {
+      /// Reorder Monitor rows: the `sig:` key lands before slot `to`.
+      type: "move_monitor_row";
+      key: string;
+      to: number;
+    }
+  | {
       type: "edit_monitor";
       kind: string;
       ch: number;
@@ -941,6 +951,12 @@ export type Command =
       name: string;
     }
   | { type: "clear_data" }
+  | {
+      /// Reorder the first Data window's rows, same semantics as Monitor.
+      type: "move_data_row";
+      key: string;
+      to: number;
+    }
   | {
       type: "set_data_visible";
       kind: string;
@@ -1089,6 +1105,11 @@ export type Command =
     }
   | { type: "set_replay_block_enabled"; id: number; on: boolean }
   | { type: "remove_replay_block"; id: number }
+  | {
+      /// Clone a replay block as a new disabled "… copy".
+      type: "duplicate_replay_block";
+      id: number;
+    }
   | { type: "add_fr_entry"; bus: number; slot: number }
   | { type: "remove_fr_entry"; bus: number; slot: number }
   | { type: "set_fr_entry_active"; bus: number; slot: number; on: boolean }
@@ -1109,6 +1130,11 @@ export type Command =
     }
   | { type: "set_trigger_enabled"; index: number; on: boolean }
   | { type: "remove_trigger"; index: number }
+  | {
+      /// Clone rule `index` onto the end; the copy starts disarmed.
+      type: "duplicate_trigger";
+      index: number;
+    }
   | { type: "rearm_triggers" }
   | { type: "rearm_trigger"; index: number }
   | {

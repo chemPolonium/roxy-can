@@ -332,6 +332,12 @@ impl App {
         self.send(crate::bus::BusCommand::RemoveReplayBlock { id });
     }
 
+    /// Clones a replay block as a new disabled "… copy" block: the cheap
+    /// path to id-filter or node-filter variants of one recording.
+    pub fn duplicate_replay_block(&mut self, id: u64) {
+        self.send(crate::bus::BusCommand::DuplicateReplayBlock { id });
+    }
+
     /// Sets the record filter: only the CAN frames and FlexRay slots it names
     /// land in the recorded file; both halves empty records everything.
     #[cfg(test)]
