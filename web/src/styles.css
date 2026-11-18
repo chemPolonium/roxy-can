@@ -3909,6 +3909,13 @@ body.row-resizing {
   content: "";
 }
 
+/* The mode switch needs a stable row height: selected buttons and text
+   fallback fonts must not grow one signal taller than its neighbours. */
+.picker-signal.with-modes {
+  flex: 0 0 auto;
+  height: 32px;
+}
+
 .picker-signal:hover {
   background: #16202b;
 }

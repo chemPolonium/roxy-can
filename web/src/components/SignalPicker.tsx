@@ -543,7 +543,7 @@ export function SignalPicker({
                         <div
                           class={`picker-signal ${on ? "on" : ""} ${
                             reading ? "read" : ""
-                          }`}
+                          } ${onReadToggle ? "with-modes" : ""}`}
                           key={signal.key}
                         >
                           {onReadToggle ? (
