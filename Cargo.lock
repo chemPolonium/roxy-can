@@ -590,7 +590,7 @@ dependencies = [
 
 [[package]]
 name = "roxy-can"
-version = "0.39.4"
+version = "0.39.5"
 dependencies = [
  "axum",
  "can-dbc",
