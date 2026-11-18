@@ -607,6 +607,12 @@ impl App {
         self.monitor_view.rows.insert(to, row);
     }
 
+    /// One or two rows per line; the web command validates the value but
+    /// the core keeps the clamp so project loads stay safe too.
+    pub fn set_monitor_columns(&mut self, columns: u8) {
+        self.monitor_view.columns = columns.clamp(1, 2);
+    }
+
     /// Moves a Data window row the same way. The web Data page mirrors the
     /// first window, so that is the only list this touches.
     pub fn move_data_row(&mut self, key: &crate::observe::SigKey, to: usize) {

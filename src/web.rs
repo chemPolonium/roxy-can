@@ -501,33 +501,44 @@ fn checked_sysvar(
 /// Applies the editable parts of a Monitor row (not its signal). The row is
 /// UI/project state, so the web edit lands in place; only adding/removing a
 /// signal touches the bus.
+/// Applies the Monitor row editor. Bands stay atomic: a bad cut or color
+/// list leaves the previous row untouched. `key` is the canonical `sig:`
+/// spelling, so derived rows (whose parsed name is empty) match by id.
 fn edit_monitor_row(
     app: &mut App,
-    key: &SigKey,
+    key: &str,
     digits: Option<usize>,
-    rule_on: Option<bool>,
-    rising: Option<bool>,
-    threshold: Option<f64>,
-    color: Option<usize>,
-) {
-    let Some(row) = app.monitor_view.rows.iter_mut().find(|row| &row.key == key) else {
-        return;
+    cuts: Option<Vec<f64>>,
+    colors: Option<Vec<usize>>,
+) -> Result<(), String> {
+    let Some(row) = app
+        .monitor_view
+        .rows
+        .iter_mut()
+        .find(|row| row.key.text() == key)
+    else {
+        return Err("monitor row not found".to_string());
     };
+    let next_cuts = cuts.unwrap_or_else(|| row.cuts.clone());
+    if next_cuts.iter().any(|cut| !cut.is_finite()) {
+        return Err("monitor cuts must be finite numbers".to_string());
+    }
+    if next_cuts.windows(2).any(|pair| pair[1] <= pair[0]) {
+        return Err("monitor cuts must be strictly ascending".to_string());
+    }
+    let mut next_colors = colors.unwrap_or_else(|| row.colors.clone());
+    if next_colors.is_empty() {
+        next_colors.push(0);
+    }
+    if next_colors.len() != next_cuts.len() + 1 {
+        return Err("monitor colors need one entry per band".to_string());
+    }
     if let Some(digits) = digits {
         row.digits = digits.min(3);
     }
-    if let Some(on) = rule_on {
-        row.rule_on = on;
-    }
-    if let Some(rising) = rising {
-        row.rising = rising;
-    }
-    if let Some(threshold) = threshold {
-        row.threshold = threshold;
-    }
-    if let Some(color) = color {
-        row.color = color;
-    }
+    row.cuts = next_cuts;
+    row.colors = next_colors;
+    Ok(())
 }
 
 /// Six-significant-digit state identity, the same quantization the State
@@ -2426,18 +2437,17 @@ enum WebCommand {
         name: String,
     },
     ClearMonitor,
-    EditMonitor {
-        kind: String,
-        ch: u8,
-        id: u32,
-        ext: bool,
-        frame: Option<String>,
-        name: String,
+    /// Edit one Monitor row: decimals and optional value bands. `key` is the
+    /// canonical `sig:` key; omitted fields keep their current value.
+    ConfigureMonitor {
+        key: String,
         digits: Option<usize>,
-        rule_on: Option<bool>,
-        rising: Option<bool>,
-        threshold: Option<f64>,
-        color: Option<usize>,
+        cuts: Option<Vec<f64>>,
+        colors: Option<Vec<usize>>,
+    },
+    /// One or two Monitor rows per line.
+    SetMonitorColumns {
+        columns: u8,
     },
     /// Reorder Monitor rows: the `sig:` key moves to slot `to` (index in the
     /// post-removal list, clamped by the core).
@@ -3528,24 +3538,22 @@ fn app_loop(
                         app.set_win_signal(crate::workspace::PopupTarget::Monitor, key, false);
                     }
                 }
-                WebCommand::EditMonitor {
-                    kind,
-                    ch,
-                    id,
-                    ext,
-                    frame,
-                    name,
+                WebCommand::ConfigureMonitor {
+                    key,
                     digits,
-                    rule_on,
-                    rising,
-                    threshold,
-                    color,
+                    cuts,
+                    colors,
                 } => {
-                    let Some(key) = command_key(&app, &kind, ch, id, ext, frame, name) else {
-                        app.fail(format!("unknown signal kind: {kind}"));
-                        continue;
-                    };
-                    edit_monitor_row(&mut app, &key, digits, rule_on, rising, threshold, color);
+                    if let Err(error) = edit_monitor_row(&mut app, &key, digits, cuts, colors) {
+                        app.fail(error);
+                    }
+                }
+                WebCommand::SetMonitorColumns { columns } => {
+                    if !(1..=2).contains(&columns) {
+                        app.fail("monitor columns must be 1 or 2");
+                    } else {
+                        app.set_monitor_columns(columns);
+                    }
                 }
                 WebCommand::MoveMonitorRow { key, to } => {
                     if let Some(key) = SigKey::from_text(&key) {
@@ -5834,6 +5842,8 @@ struct WebState {
     trigger_limits: WebTriggerLimits,
     sysvars: Vec<WebSysVar>,
     monitor: Vec<WebMonitorRow>,
+    /// One or two rows per line on the Monitor page.
+    monitor_columns: u8,
     data: Vec<WebDataRow>,
     state_rows: Vec<WebStateRow>,
     state_window_s: f64,
@@ -6265,10 +6275,8 @@ struct WebMonitorRow {
     has_value: bool,
     unit: String,
     digits: usize,
-    rule_on: bool,
-    rising: bool,
-    threshold: f64,
-    color: usize,
+    cuts: Vec<f64>,
+    colors: Vec<usize>,
 }
 
 #[derive(Clone, Default, Serialize)]
@@ -7468,10 +7476,8 @@ fn build_state(app: &App, series: &VecDeque<WebSeriesPoint>, fps: f64) -> WebSta
                 has_value,
                 unit,
                 digits: row.digits,
-                rule_on: row.rule_on,
-                rising: row.rising,
-                threshold: row.threshold,
-                color: row.color,
+                cuts: row.cuts.clone(),
+                colors: row.colors.clone(),
             }
         })
         .collect();
@@ -7964,6 +7970,7 @@ fn build_state(app: &App, series: &VecDeque<WebSeriesPoint>, fps: f64) -> WebSta
         },
         sysvars,
         monitor,
+        monitor_columns: app.monitor_view.columns,
         data,
         state_rows,
         state_window_s,
@@ -8564,23 +8571,37 @@ mod tests {
             "monitor rows carry the frame path"
         );
         assert_eq!(state.monitor[0].digits, 1, "core default");
+        app.set_monitor_columns(2);
+        let state = build_state(&app, &VecDeque::new(), 0.0);
+        assert_eq!(state.monitor_columns, 2);
 
         edit_monitor_row(
             &mut app,
-            &key,
+            &series_key(&key),
             Some(2),
-            Some(true),
-            Some(false),
-            Some(87.5),
-            Some(3),
-        );
+            Some(vec![87.5]),
+            Some(vec![3, 5]),
+        )
+        .unwrap();
         let state = build_state(&app, &VecDeque::new(), 0.0);
         let row = &state.monitor[0];
         assert_eq!(row.digits, 2);
-        assert!(row.rule_on);
-        assert!(!row.rising);
-        assert_eq!(row.threshold, 87.5);
-        assert_eq!(row.color, 3);
+        assert_eq!(row.cuts, vec![87.5]);
+        assert_eq!(row.colors, vec![3, 5]);
+
+        assert!(
+            edit_monitor_row(
+                &mut app,
+                &series_key(&key),
+                None,
+                Some(vec![10.0, 5.0]),
+                None,
+            )
+            .is_err(),
+            "descending cuts are rejected"
+        );
+        let state = build_state(&app, &VecDeque::new(), 0.0);
+        assert_eq!(state.monitor[0].cuts, vec![87.5], "a failed edit is atomic");
 
         app.set_win_signal(crate::workspace::PopupTarget::Monitor, key, false);
         app.settle();

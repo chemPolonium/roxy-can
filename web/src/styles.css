@@ -3491,7 +3491,9 @@ body.row-resizing {
     .description-remove
   ):not(.picker-message-toggle):not(.picker-frame-action):not(
     .picker-name
-  ):not(.grouped-select-option),
+  ):not(.grouped-select-option):not(.monitor-swatch):not(
+    .monitor-style-button
+  ):not(.monitor-band-remove),
 .modal-backdrop > :not(.palette) select,
 .modal-backdrop
   > :not(.palette)
@@ -6624,6 +6626,73 @@ button.danger:hover:not(:disabled) {
   flex: 1;
 }
 
+.monitor-style-row {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.monitor-style-button {
+  min-width: 26px;
+  height: 20px;
+  padding: 0 5px;
+}
+
+.monitor-band-edit {
+  display: grid;
+  grid-template-columns: 132px 104px 1fr 22px;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 0;
+}
+
+.monitor-band-cut {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  color: var(--muted);
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.monitor-band-cut input {
+  width: 74px;
+  padding: 1px 4px;
+  font-size: 10px;
+}
+
+.monitor-band-edit .monitor-swatches {
+  justify-self: end;
+}
+
+.monitor-band-remove {
+  width: 20px;
+  height: 20px;
+  padding: 0;
+}
+
+.monitor-swatches {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 2px;
+}
+
+.monitor-swatch {
+  width: 14px;
+  height: 14px;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 50%;
+}
+
+.monitor-swatch.on {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
 /* Data: value/raw/min-avg-max plus a database-scaled bar. Cards instead of
    a wide table so the right column stays readable at 1024 px. */
 .data-list {
@@ -7047,11 +7116,10 @@ button.danger:hover:not(:disabled) {
   flex-direction: column;
   min-width: 0;
   min-height: 0;
-  container-type: inline-size;
 }
 
-/* Monitor: big live values with an optional coloring rule. Each row stacks
-   its value line over a compact rule line. */
+/* Monitor: big live values. Single column by default; the page header's
+   `1 col / 2 col` switch chooses the paired layout. */
 .monitor-list {
   display: flex;
   flex: 1 1 auto;
@@ -7062,15 +7130,14 @@ button.danger:hover:not(:disabled) {
   padding: 6px 10px;
 }
 
-/* Wide chart panes pair the cards so the value stays near its label
-   instead of sitting at the far edge of one very long row. */
-@container (min-width: 720px) {
-  .monitor-list {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    align-content: start;
-    align-items: start;
-  }
+.monitor-list.two-col {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-content: start;
+}
+
+.monitor-list.two-col .monitor-row {
+  min-width: 0;
 }
 
 .monitor-row {
@@ -7080,10 +7147,6 @@ button.danger:hover:not(:disabled) {
   border: 1px solid #202a36;
   border-left: 3px solid #4c9dff;
   border-radius: 4px;
-}
-
-.monitor-row.hot {
-  background: #15202c;
 }
 
 .monitor-main {
@@ -7124,53 +7187,6 @@ button.danger:hover:not(:disabled) {
   font-size: 10px;
   font-style: normal;
   font-weight: 400;
-}
-
-.monitor-rule {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  margin-top: 3px;
-}
-
-.monitor-rule .mini {
-  padding: 0 5px;
-  color: var(--muted);
-  font-size: 9.5px;
-  line-height: 16px;
-}
-
-.monitor-rule .mini.on {
-  background: #142334;
-  border-color: #2d5c88;
-  color: #cfe6ff;
-}
-
-.monitor-rule-toggle {
-  flex: 0 0 auto;
-  align-self: center;
-  padding: 0 4px;
-  color: var(--muted);
-  font-size: 9px;
-  line-height: 15px;
-}
-
-.monitor-rule-toggle.on {
-  color: var(--accent);
-}
-
-.monitor-threshold {
-  width: 64px;
-  padding: 0 4px;
-  font-size: 10px;
-}
-
-.monitor-color {
-  width: 16px;
-  height: 16px;
-  padding: 0;
-  border: 1px solid rgb(255 255 255 / 25%);
-  border-radius: 3px;
 }
 
 /* Node scripts: a compact list, the CodeMirror editor and the runtime log. */

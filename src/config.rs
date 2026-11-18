@@ -303,17 +303,51 @@ pub struct MonitorRowCfg {
     pub label: String,
     #[serde(default = "digits_default")]
     pub digits: usize,
+    /// Ascending value cuts; `colors` has one palette slot per band.
     #[serde(default)]
+    pub cuts: Vec<f64>,
+    #[serde(default)]
+    pub colors: Vec<usize>,
+    // Legacy single-threshold rule, read for old projects and rewritten as
+    // bands on the next save. New projects leave these at their defaults.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub rule_on: bool,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub rising: bool,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "is_zero_f64")]
     pub threshold: f64,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "is_zero_usize")]
     pub color: usize,
 }
 
+fn is_zero_f64(value: &f64) -> bool {
+    *value == 0.0
+}
+
+fn is_zero_usize(value: &usize) -> bool {
+    *value == 0
+}
+
+/// A project may predate the cut editor or have been hand-edited. Keep one
+/// palette slot per resulting band and drop non-finite/duplicate cuts.
+fn normalize_monitor_bands(cuts: &mut Vec<f64>, colors: &mut Vec<usize>) {
+    cuts.retain(|cut| cut.is_finite());
+    cuts.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    cuts.dedup_by(|a, b| *a == *b);
+    if colors.is_empty() {
+        colors.push(0);
+    }
+    colors.truncate(cuts.len() + 1);
+    while colors.len() < cuts.len() + 1 {
+        colors.push(*colors.last().unwrap_or(&0));
+    }
+}
+
 fn digits_default() -> usize {
+    1
+}
+
+fn one_u8_default() -> u8 {
     1
 }
 
@@ -600,6 +634,9 @@ pub struct ProjectSettings {
     /// open/close stays session state).
     #[serde(default)]
     pub monitor_rows: Vec<MonitorRowCfg>,
+    /// One or two rows per line on the Monitor page.
+    #[serde(default = "one_u8_default")]
+    pub monitor_columns: u8,
     #[serde(default)]
     pub state_trackers: Vec<StateCfg>,
     #[serde(default)]
@@ -789,6 +826,7 @@ impl Default for ProjectSettings {
             graphics: Vec::new(),
             data_windows: Vec::new(),
             monitor_rows: Vec::new(),
+            monitor_columns: 1,
             state_trackers: Vec::new(),
             nodes: Vec::new(),
             blocks: Vec::new(),
@@ -915,13 +953,16 @@ impl ProjectSettings {
                         signal: r.key.name().to_string(),
                         label: r.label.clone(),
                         digits: r.digits,
-                        rule_on: r.rule_on,
-                        rising: r.rising,
-                        threshold: r.threshold,
-                        color: r.color,
+                        cuts: r.cuts.clone(),
+                        colors: r.colors.clone(),
+                        rule_on: false,
+                        rising: false,
+                        threshold: 0.0,
+                        color: 0,
                     }
                 })
                 .collect(),
+            monitor_columns: app.monitor_view.columns.clamp(1, 2),
             state_trackers: app
                 .state_trackers
                 .iter()
@@ -1131,24 +1172,36 @@ impl ProjectSettings {
                 text_cache: Vec::new(),
             })
             .collect();
+        app.monitor_view.columns = self.monitor_columns.clamp(1, 2);
         if !self.monitor_rows.is_empty() {
             app.monitor_view.rows = self
                 .monitor_rows
                 .into_iter()
-                .map(|m| crate::app::MonitorRow {
-                    key: SignalSlot {
+                .map(|m| {
+                    let key = SignalSlot {
                         fr_slot: m.fr_slot,
                         eth_frame: m.eth_frame.as_deref(),
                         derived: m.derived.as_deref(),
                         signal: &m.signal,
                     }
-                    .key(&maps, m.ch, m.id, m.ext),
-                    label: m.label,
-                    digits: m.digits,
-                    rule_on: m.rule_on,
-                    rising: m.rising,
-                    threshold: m.threshold,
-                    color: m.color,
+                    .key(&maps, m.ch, m.id, m.ext);
+                    // Old projects carry one threshold and one color; turn
+                    // that into a cut so the new editor owns the setting.
+                    let (mut cuts, mut colors) = if !m.cuts.is_empty() {
+                        (m.cuts, m.colors)
+                    } else if m.rule_on {
+                        (vec![m.threshold], vec![m.color, m.color])
+                    } else {
+                        (Vec::new(), vec![m.color])
+                    };
+                    normalize_monitor_bands(&mut cuts, &mut colors);
+                    crate::app::MonitorRow {
+                        key,
+                        label: m.label,
+                        digits: m.digits,
+                        cuts,
+                        colors,
+                    }
                 })
                 .collect();
         }
@@ -1601,7 +1654,7 @@ mod tests {
     }
 
     /// The Monitor window's rows persist with the project: the watched
-    /// keys, labels, digits, and coloring rules all round-trip.
+    /// keys, labels, digits, bands and column count all round-trip.
     #[test]
     fn monitor_rows_round_trip_with_the_project() {
         let mut app = App::headless();
@@ -1609,10 +1662,9 @@ mod tests {
         app.set_win_signal(crate::workspace::PopupTarget::Monitor, key, true);
         assert_eq!(app.monitor_view.rows.len(), 1, "the row was added");
         app.monitor_view.rows[0].digits = 2;
-        app.monitor_view.rows[0].rule_on = true;
-        app.monitor_view.rows[0].rising = false;
-        app.monitor_view.rows[0].threshold = 87.5;
-        app.monitor_view.rows[0].color = 3;
+        app.monitor_view.rows[0].cuts = vec![10.0, 87.5];
+        app.monitor_view.rows[0].colors = vec![1, 3, 5];
+        app.monitor_view.columns = 2;
 
         let json = serde_json::to_string(&ProjectV2::from_app(&app, None)).unwrap();
         let mut restored = App::headless();
@@ -1635,9 +1687,35 @@ mod tests {
         );
         assert_eq!(r.key.name(), "EngineStatus");
         assert_eq!(
-            (r.digits, r.rule_on, r.rising, r.threshold, r.color),
-            (2, true, false, 87.5, 3)
+            (r.digits, r.cuts.clone(), r.colors.clone()),
+            (2, vec![10.0, 87.5], vec![1, 3, 5])
         );
+        assert_eq!(restored.monitor_view.columns, 2);
+    }
+
+    /// Projects written before the cut editor carry one `rule_on` threshold.
+    /// Loading turns it into a two-band cut instead of dropping the color.
+    #[test]
+    fn a_legacy_monitor_rule_loads_as_a_band() {
+        let mut app = App::headless();
+        let key = app.can_key(0, 0x100, false, "EngineStatus".to_string());
+        app.set_win_signal(crate::workspace::PopupTarget::Monitor, key, true);
+        let mut project = ProjectV2::from_app(&app, None);
+        let row = &mut project.settings.monitor_rows[0];
+        row.cuts.clear();
+        row.colors.clear();
+        row.rule_on = true;
+        row.rising = true;
+        row.threshold = 87.5;
+        row.color = 3;
+        let json = serde_json::to_string(&project).unwrap();
+        let mut restored = App::headless();
+        serde_json::from_str::<ProjectV2>(&json)
+            .unwrap()
+            .apply(&mut restored);
+        let row = &restored.monitor_view.rows[0];
+        assert_eq!(row.cuts, vec![87.5]);
+        assert_eq!(row.colors, vec![3, 3]);
     }
 
     /// Derived definitions and the observer rows that read them belong to

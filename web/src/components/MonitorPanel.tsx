@@ -1,78 +1,37 @@
-import { useEffect, useState } from "preact/hooks";
+import { useState } from "preact/hooks";
 import type { MonitorRow } from "../types";
 import { palette, type Theme } from "../theme";
-
-export interface MonitorPatch {
-  digits?: number;
-  ruleOn?: boolean;
-  rising?: boolean;
-  threshold?: number;
-  color?: number;
-}
 
 interface Props {
   rows: MonitorRow[];
   filtered?: boolean;
+  columns?: number;
   theme: Theme;
-  /// Row drag: the `sig:` key lands before slot `to`. Absent disables
-  /// dragging (the panel is also read-only in some callers).
+  /// Row drag: the `sig:` key lands before/after the target slot.
   onMoveRow?: (key: string, to: number) => void;
-  onEdit: (row: MonitorRow, patch: MonitorPatch) => void;
+  onConfigure: (row: MonitorRow) => void;
   onRemove: (row: MonitorRow) => void;
 }
 
-function ThresholdInput({
-  value,
-  onCommit,
-}: {
-  value: number;
-  onCommit: (value: number) => void;
-}) {
-  const [text, setText] = useState(String(value));
-  const [editing, setEditing] = useState(false);
-  useEffect(() => {
-    if (!editing) setText(String(value));
-  }, [value, editing]);
-  const commit = () => {
-    setEditing(false);
-    const parsed = Number(text);
-    if (Number.isFinite(parsed)) {
-      if (parsed !== value) onCommit(parsed);
-    } else {
-      setText(String(value));
-    }
-  };
-  return (
-    <input
-      class="monitor-threshold"
-      value={text}
-      inputMode="decimal"
-      title="Color threshold"
-      onFocus={() => setEditing(true)}
-      onInput={(event) => setText((event.target as HTMLInputElement).value)}
-      onBlur={commit}
-      onKeyDown={(event) => {
-        if (event.key === "Enter") (event.target as HTMLInputElement).blur();
-        if (event.key === "Escape") {
-          setText(String(value));
-          (event.target as HTMLInputElement).blur();
-        }
-      }}
-    />
-  );
+/// The band holding `value`: the number of cuts at or below it.
+export function monitorBand(value: number, cuts: number[]): number {
+  let index = 0;
+  while (index < cuts.length && value >= cuts[index]) index += 1;
+  return index;
 }
 
 export function MonitorPanel({
   rows,
   filtered = false,
+  columns = 1,
   theme,
   onMoveRow,
-  onEdit,
+  onConfigure,
   onRemove,
 }: Props) {
   const colors = palette(theme).monitors;
-  // Dragging reorders the full list, so it waits until the filter is
-  // clear; otherwise "before the hovered row" has no stable meaning.
+  // Reordering needs the unfiltered list; the hover index would otherwise
+  // not match the backend's slots.
   const sortable = !!onMoveRow && !filtered;
   const [dragKey, setDragKey] = useState<string | null>(null);
   const [drop, setDrop] = useState<{
@@ -122,19 +81,17 @@ export function MonitorPanel({
       </div>
     );
   }
+  const colorAt = (slot: number) => colors[Math.abs(slot) % colors.length];
   return (
     <div class="monitor-host">
-      <div class="monitor-list">
+      <div class={`monitor-list ${columns >= 2 ? "two-col" : ""}`}>
         {rows.map((row) => {
-          const color = colors[row.color % colors.length];
-          const hot =
-            row.hasValue &&
-            row.ruleOn &&
-            ((row.rising && row.value >= row.threshold) ||
-              (!row.rising && row.value <= row.threshold));
+          const base = colorAt(row.colors[0] ?? 0);
+          const band = row.cuts.length ? monitorBand(row.value, row.cuts) : 0;
+          const active = colorAt(row.colors[band] ?? row.colors[0] ?? 0);
           return (
             <div
-              class={`monitor-row ${hot ? "hot" : ""} ${
+              class={`monitor-row ${
                 drop?.key === row.key && dragKey !== row.key
                   ? drop.after
                     ? "drag-after"
@@ -142,13 +99,17 @@ export function MonitorPanel({
                   : ""
               } ${dragKey === row.key ? "dragging" : ""}`}
               key={`${row.kind}:${row.ch}:${row.id}:${row.ext}:${row.name}`}
-              style={{ borderLeftColor: color }}
+              style={{ borderLeftColor: base }}
               draggable={sortable}
               title={
                 sortable
-                  ? "Drag onto another row to reorder; the order is saved with the project"
-                  : undefined
+                  ? "Right-click for decimals, bands and colors · drag to reorder"
+                  : "Right-click for decimals, bands and colors"
               }
+              onContextMenu={(event) => {
+                event.preventDefault();
+                onConfigure(row);
+              }}
               onDragStart={(event) => {
                 if (!sortable) return;
                 // Dragging from inside a field stays a text selection;
@@ -188,10 +149,7 @@ export function MonitorPanel({
               }}
               onDrop={(event) => {
                 event.preventDefault();
-                dropOn(
-                  row,
-                  sideAt(event, event.currentTarget as HTMLElement),
-                );
+                dropOn(row, sideAt(event, event.currentTarget as HTMLElement));
               }}
               onDragEnd={() => {
                 setDragKey(null);
@@ -211,72 +169,24 @@ export function MonitorPanel({
                 </span>
                 <strong
                   class="monitor-value"
-                  style={{ color: hot ? color : undefined }}
+                  style={{
+                    color:
+                      row.hasValue && row.cuts.length ? active : undefined,
+                  }}
                 >
                   {row.hasValue ? row.value.toFixed(row.digits) : "—"}
                   {row.hasValue && row.unit && <em>{row.unit}</em>}
                 </strong>
-                {row.kind !== "derived" && (
-                  <button
-                    type="button"
-                    class={`mini monitor-rule-toggle ${
-                      row.ruleOn ? "on" : ""
-                    }`}
-                    aria-pressed={row.ruleOn}
-                    title={
-                      row.ruleOn
-                        ? "Color threshold on; click to turn off"
-                        : "Add a color threshold rule"
-                    }
-                    onClick={() => onEdit(row, { ruleOn: !row.ruleOn })}
-                  >
-                    rule
-                  </button>
-                )}
                 <button
                   type="button"
-                  class="mini"
+                  class="mini monitor-remove"
                   title="Remove this row"
+                  aria-label={`Remove ${row.label}`}
                   onClick={() => onRemove(row)}
                 >
                   ×
                 </button>
               </div>
-              {row.kind !== "derived" && row.ruleOn && (
-                <div class="monitor-rule">
-                  <ThresholdInput
-                    value={row.threshold}
-                    onCommit={(threshold) => onEdit(row, { threshold })}
-                  />
-                  <button
-                    type="button"
-                    class="mini"
-                    title="Flip the comparison direction"
-                    onClick={() => onEdit(row, { rising: !row.rising })}
-                  >
-                    {row.rising ? ">=" : "<="}
-                  </button>
-                  <button
-                    type="button"
-                    class="mini"
-                    title="Decimal places"
-                    onClick={() =>
-                      onEdit(row, { digits: (row.digits + 1) % 4 })
-                    }
-                  >
-                    {row.digits} dp
-                  </button>
-                  <button
-                    type="button"
-                    class="monitor-color"
-                    style={{ background: color }}
-                    title="Cycle the rule color"
-                    onClick={() =>
-                      onEdit(row, { color: (row.color + 1) % colors.length })
-                    }
-                  />
-                </div>
-              )}
             </div>
           );
         })}

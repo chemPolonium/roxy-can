@@ -88,6 +88,8 @@ export interface State {
   triggerLimits: TriggerLimits;
   sysvars: SysVar[];
   monitor: MonitorRow[];
+  /// One or two rows per line on the Monitor page.
+  monitorColumns: number;
   data: DataRow[];
   stateRows: StateRow[];
   stateWindowS: number;
@@ -379,10 +381,9 @@ export interface MonitorRow {
   hasValue: boolean;
   unit: string;
   digits: number;
-  ruleOn: boolean;
-  rising: boolean;
-  threshold: number;
-  color: number;
+  /// Ascending cuts; `colors` holds one palette slot per band.
+  cuts: number[];
+  colors: number[];
 }
 
 export interface DataRow {
@@ -921,18 +922,16 @@ export type Command =
       to: number;
     }
   | {
-      type: "edit_monitor";
-      kind: string;
-      ch: number;
-      id: number;
-      ext: boolean;
-      frame?: string;
-      name: string;
+      /// Edit one Monitor row by canonical key: decimals and optional bands.
+      type: "configure_monitor";
+      key: string;
       digits?: number;
-      rule_on?: boolean;
-      rising?: boolean;
-      threshold?: number;
-      color?: number;
+      cuts?: number[];
+      colors?: number[];
+    }
+  | {
+      type: "set_monitor_columns";
+      columns: number;
     }
   | {
       type: "add_data";

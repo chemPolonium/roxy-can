@@ -54,7 +54,7 @@ import { HelpModal } from "./components/HelpModal";
 import { TriggersModal } from "./components/TriggersModal";
 import { MessageTable } from "./components/MessageTable";
 import { MonitorPanel } from "./components/MonitorPanel";
-import type { MonitorPatch } from "./components/MonitorPanel";
+import { MonitorRowModal } from "./components/MonitorRowModal";
 import { PagePanel } from "./components/PagePanel";
 import { RateChart } from "./components/RateChart";
 import {
@@ -117,7 +117,7 @@ import {
   traceFilterActive,
 } from "./components/TraceFilterModal";
 import type { TraceFilter } from "./components/TraceFilterModal";
-import type { StateRow } from "./types";
+import type { MonitorRow, StateRow } from "./types";
 import {
   catalogSignalCommand,
   catalogSignalSpec,
@@ -519,6 +519,7 @@ export function App() {
   const [exportOpen, setExportOpen] = useState(false);
   const [exportKind, setExportKind] = useState("trace");
   const [stateRule, setStateRule] = useState<StateRow | null>(null);
+  const [monitorStyle, setMonitorStyle] = useState<MonitorRow | null>(null);
   const [catalog, setCatalog] = useState<Catalog | null>(null);
   const [catalogLoading, setCatalogLoading] = useState(false);
   const [catalogError, setCatalogError] = useState("");
@@ -1967,6 +1968,7 @@ export function App() {
     setHelpOpen(false);
     setTraceFilterOpen(false);
     setStateRule(null);
+    setMonitorStyle(null);
   };
 
   const openBuses = () => {
@@ -2004,37 +2006,6 @@ export function App() {
   const openHelp = () => {
     closeDialogs();
     setHelpOpen(true);
-  };
-
-  const editMonitor = (
-    row: {
-      kind: string;
-      ch: number;
-      id: number;
-      ext: boolean;
-      frame?: string;
-      name: string;
-    },
-    patch: MonitorPatch,
-  ) => {
-    if (row.kind === "derived") {
-      showToast("Derived rows are managed in the Derived dialog");
-      return;
-    }
-    void run({
-      type: "edit_monitor",
-      kind: row.kind,
-      ch: row.ch,
-      id: row.id,
-      ext: row.ext,
-      frame: row.frame,
-      name: row.name,
-      digits: patch.digits,
-      rule_on: patch.ruleOn,
-      rising: patch.rising,
-      threshold: patch.threshold,
-      color: patch.color,
-    });
   };
 
   const defineSysVar = (edit: SysVarEdit) => {
@@ -3706,6 +3677,24 @@ export function App() {
             />
             <button
               type="button"
+              class="mini"
+              title={
+                (state?.monitorColumns ?? 1) >= 2
+                  ? "Switch Monitor to one column"
+                  : "Switch Monitor to two columns"
+              }
+              aria-label="Monitor columns"
+              onClick={() =>
+                void run({
+                  type: "set_monitor_columns",
+                  columns: (state?.monitorColumns ?? 1) >= 2 ? 1 : 2,
+                })
+              }
+            >
+              {(state?.monitorColumns ?? 1) >= 2 ? "2 col" : "1 col"}
+            </button>
+            <button
+              type="button"
               class="mini icon-btn"
               title="Choose the signals to watch"
               aria-label="Add signals"
@@ -3729,11 +3718,12 @@ export function App() {
       <MonitorPanel
         rows={visibleMonitorRows}
         filtered={monitorQuery.trim() !== ""}
+        columns={state?.monitorColumns ?? 1}
         theme={theme}
         onMoveRow={(key, to) =>
           void run({ type: "move_monitor_row", key, to })
         }
-        onEdit={editMonitor}
+        onConfigure={setMonitorStyle}
         onRemove={(row) =>
           row.kind === "derived"
             ? removeDerived(row.frame)
@@ -5744,6 +5734,24 @@ export function App() {
           filter={traceFilter}
           onApply={setTraceFilter}
           onClose={() => setTraceFilterOpen(false)}
+        />
+      )}
+
+      {monitorStyle && (
+        <MonitorRowModal
+          row={monitorStyle}
+          theme={theme}
+          onApply={(digits, cuts, colors) => {
+            void run({
+              type: "configure_monitor",
+              key: monitorStyle.key,
+              digits,
+              cuts,
+              colors,
+            });
+            setMonitorStyle(null);
+          }}
+          onClose={() => setMonitorStyle(null)}
         />
       )}
 

@@ -148,25 +148,32 @@ fn direct_folder(path: &str) -> String {
         .unwrap_or_default()
 }
 
-/// One row of the Monitor window: a watched signal, its display name,
-/// the decimals shown, and an optional coloring rule (`rising` compares
-/// `value >= threshold`, otherwise `<=`; the palette `color` slots the
-/// row's text when the rule holds). The lightweight big-screen panel.
+/// One row of the Monitor window: a watched signal, its display name, the
+/// decimals shown, and optional value bands. Ascending `cuts` split the
+/// value axis; band `i` holds `cuts[i-1] <= v < cuts[i]` and takes
+/// `colors[i]` from the Monitor palette. No cuts means normal text.
 #[derive(Clone, Debug, PartialEq)]
 pub struct MonitorRow {
     pub key: crate::observe::SigKey,
     pub label: String,
     pub digits: usize,
-    pub rule_on: bool,
-    pub rising: bool,
-    pub threshold: f64,
-    pub color: usize,
+    pub cuts: Vec<f64>,
+    pub colors: Vec<usize>,
 }
 
-/// Rows watched by the Monitor panel; the web Monitor tab serializes them.
-#[derive(Default)]
+/// Rows watched by the Monitor panel plus its single/two-column preference.
 pub struct MonitorView {
     pub rows: Vec<MonitorRow>,
+    pub columns: u8,
+}
+
+impl Default for MonitorView {
+    fn default() -> Self {
+        Self {
+            rows: Vec::new(),
+            columns: 1,
+        }
+    }
 }
 
 impl Default for MonitorRow {
@@ -180,10 +187,8 @@ impl Default for MonitorRow {
             ),
             label: String::new(),
             digits: 1,
-            rule_on: false,
-            rising: true,
-            threshold: 0.0,
-            color: 0,
+            cuts: Vec::new(),
+            colors: vec![0],
         }
     }
 }

@@ -400,8 +400,6 @@
 [data-theme="light"] .gen-src-toggle.on,
 [data-theme="light"] .state-bands.on,
 [data-theme="light"] .spec-filters label.on,
-[data-theme="light"] .monitor-rule .mini.on,
-[data-theme="light"] .monitor-rule-toggle.on,
 [data-theme="light"] .script-item.on {
   border-color: #a9c8ea;
   background: #e3eefc;
@@ -587,10 +585,6 @@
 
 [data-theme="light"] .sv-error {
   color: #b45309;
-}
-
-[data-theme="light"] .monitor-color {
-  border-color: rgb(31 45 61 / 25%);
 }
 
 [data-theme="light"] .monitor-row {
