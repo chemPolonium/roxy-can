@@ -6656,8 +6656,13 @@ button.danger:hover:not(:disabled) {
   opacity: 0.5;
 }
 
-/* Row drag (Monitor/Data): the whole card is the handle. The top border
-   is the insertion point, not decoration. */
+/* Row drag (Monitor/Data): the whole card is the handle. The accent rule
+   sits in the gap at the insertion edge, matching the chart's lane marker. */
+.data-row,
+.monitor-row {
+  position: relative;
+}
+
 .data-row[draggable="true"],
 .monitor-row[draggable="true"] {
   cursor: grab;
@@ -6668,9 +6673,28 @@ button.danger:hover:not(:disabled) {
   opacity: 0.55;
 }
 
-.data-row.drag-over,
-.monitor-row.drag-over {
-  border-top: 2px solid var(--accent);
+.data-row.drag-before::before,
+.data-row.drag-after::after,
+.monitor-row.drag-before::before,
+.monitor-row.drag-after::after {
+  position: absolute;
+  right: -1px;
+  left: -1px;
+  z-index: 2;
+  height: 2px;
+  background: var(--accent);
+  content: "";
+  pointer-events: none;
+}
+
+.data-row.drag-before::before,
+.monitor-row.drag-before::before {
+  top: -4px;
+}
+
+.data-row.drag-after::after,
+.monitor-row.drag-after::after {
+  bottom: -4px;
 }
 
 .data-check {

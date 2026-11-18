@@ -6337,6 +6337,8 @@ struct WebStateRow {
     #[serde(skip_serializing_if = "Option::is_none")]
     frame: Option<String>,
     name: String,
+    /// Canonical `sig:` key, shared with the catalog and observer rows.
+    key: String,
     bus: String,
     current: String,
     bands: Vec<WebStateBand>,
@@ -7386,6 +7388,7 @@ fn build_state(app: &App, series: &VecDeque<WebSeriesPoint>, fps: f64) -> WebSta
                         ext,
                         frame,
                         name,
+                        key: series_key(&signal.key),
                         bus: signal_bus(app, &signal.key),
                         current,
                         bands,
@@ -8665,6 +8668,10 @@ mod tests {
         let state = build_state(&app, &VecDeque::new(), 0.0);
         assert_eq!(state.state_rows.len(), 1);
         assert_eq!(state.state_rows[0].name, "EngineSpeed");
+        assert_eq!(
+            state.state_rows[0].key, "sig:can:1:256:false:EngineSpeed",
+            "pickers match the catalog's canonical key"
+        );
         assert_eq!(state.state_rows[0].bus, "CAN1");
         assert_eq!(state.state_window_s, 20.0);
 

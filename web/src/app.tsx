@@ -315,21 +315,6 @@ function mapReferenceColumns(
   return byKey;
 }
 
-/// The backend's series/catalog key for an observer row. CAN ids start at 0,
-/// so FlexRay keys need the prefix to stay distinct.
-function rowKey(row: {
-  kind: string;
-  ch: number;
-  id: number;
-  frame?: string;
-  name: string;
-}): string {
-  if (row.kind === "fr") return `fr:${row.ch}:${row.id}:${row.name}`;
-  if (row.kind === "eth") return `eth:${row.ch}:${row.frame}:${row.name}`;
-  if (row.kind === "derived") return `derived:${row.frame}`;
-  return `${row.ch}:${row.id}:${row.name}`;
-}
-
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
 }
@@ -1360,7 +1345,7 @@ export function App() {
       const existing = new Set(
         target === "chart"
           ? chartSeries.map((signal) => signal.key)
-          : (state?.monitor ?? []).map(rowKey),
+          : (state?.monitor ?? []).map((row) => row.key),
       );
       const pending = message.signals.filter(
         (signal) => !existing.has(signal.key),
@@ -2692,7 +2677,9 @@ export function App() {
   }, [readSeries]);
   const selectedKeys = new Set(chartSeries.map((signal) => signal.key));
   const readKeys = new Set(readSeries.map((signal) => signal.key));
-  const monitorKeys = new Set((state?.monitor ?? []).map(rowKey));
+  // Observer rows already carry the canonical `sig:` key (the same spelling
+  // the catalog and commands use), so the pickers check the right box.
+  const monitorKeys = new Set((state?.monitor ?? []).map((row) => row.key));
   const exportRange = useMemo(() => {
     const labels = cursorLabels(chartCursors);
     const a = chartCursors[labels.indexOf("A")];
@@ -2704,8 +2691,8 @@ export function App() {
       ? { fromUs, toUs }
       : null;
   }, [chartCursors]);
-  const dataKeys = new Set((state?.data ?? []).map(rowKey));
-  const stateKeys = new Set((state?.stateRows ?? []).map(rowKey));
+  const dataKeys = new Set((state?.data ?? []).map((row) => row.key));
+  const stateKeys = new Set((state?.stateRows ?? []).map((row) => row.key));
   // Derived channels are ordinary core subscriptions now, so the chart
   // series and every observer row include them without synthesis here.
   const chartLatestS = useMemo(

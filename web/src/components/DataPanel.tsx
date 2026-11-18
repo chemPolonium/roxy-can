@@ -21,23 +21,39 @@ export function DataPanel({
   // not match the backend's slots.
   const sortable = !!onMoveRow && !filtered;
   const [dragKey, setDragKey] = useState<string | null>(null);
-  const [overKey, setOverKey] = useState<string | null>(null);
+  const [drop, setDrop] = useState<{
+    key: string;
+    after: boolean;
+  } | null>(null);
 
-  const dropOn = (target: DataRow) => {
+  const sideAt = (event: DragEvent, element: HTMLElement) => {
+    const rect = element.getBoundingClientRect();
+    return event.clientY >= rect.top + rect.height / 2;
+  };
+
+  const dropOn = (target: DataRow, after: boolean) => {
     if (!onMoveRow || !dragKey || dragKey === target.key) {
       setDragKey(null);
-      setOverKey(null);
+      setDrop(null);
       return;
     }
     const from = rows.findIndex((row) => row.key === dragKey);
     const over = rows.findIndex((row) => row.key === target.key);
     if (from >= 0 && over >= 0) {
-      // `to` is the post-removal index, so the row lands before the one
-      // it was dropped on in either direction.
-      onMoveRow(dragKey, from < over ? over - 1 : over);
+      // `to` is the index in the post-removal list. Before the target is
+      // `over - 1` when dragging down, after it is `over`; the other
+      // direction uses the target's own slot.
+      const to = after
+        ? from < over
+          ? over
+          : over + 1
+        : from < over
+          ? over - 1
+          : over;
+      onMoveRow(dragKey, Math.max(0, Math.min(rows.length - 1, to)));
     }
     setDragKey(null);
-    setOverKey(null);
+    setDrop(null);
   };
 
   if (rows.length === 0) {
@@ -57,7 +73,11 @@ export function DataPanel({
       {rows.map((row) => (
         <div
           class={`data-row ${row.visible ? "" : "hidden"} ${
-            overKey === row.key && dragKey !== row.key ? "drag-over" : ""
+            drop?.key === row.key && dragKey !== row.key
+              ? drop.after
+                ? "drag-after"
+                : "drag-before"
+              : ""
           } ${dragKey === row.key ? "dragging" : ""}`}
           key={`${row.kind}:${row.ch}:${row.id}:${row.ext}:${row.name}`}
           draggable={sortable}
@@ -87,18 +107,29 @@ export function DataPanel({
             if (event.dataTransfer) {
               event.dataTransfer.dropEffect = "move";
             }
-            setOverKey(row.key);
+            const after = sideAt(event, event.currentTarget as HTMLElement);
+            setDrop((old) =>
+              old?.key === row.key && old.after === after
+                ? old
+                : { key: row.key, after },
+            );
           }}
-          onDragLeave={() => {
-            if (overKey === row.key) setOverKey(null);
+          onDragLeave={(event) => {
+            const next = event.relatedTarget as Node | null;
+            if (
+              drop?.key === row.key &&
+              (!next || !(event.currentTarget as HTMLElement).contains(next))
+            ) {
+              setDrop(null);
+            }
           }}
           onDrop={(event) => {
             event.preventDefault();
-            dropOn(row);
+            dropOn(row, sideAt(event, event.currentTarget as HTMLElement));
           }}
           onDragEnd={() => {
             setDragKey(null);
-            setOverKey(null);
+            setDrop(null);
           }}
         >
           {row.kind === "derived" ? (

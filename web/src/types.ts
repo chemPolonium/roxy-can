@@ -442,6 +442,8 @@ export interface StateRow {
   ext: boolean;
   frame?: string;
   name: string;
+  /// Canonical `sig:` key, matching the catalog's selected signal keys.
+  key: string;
   bus: string;
   current: string;
   bands: StateBand[];
