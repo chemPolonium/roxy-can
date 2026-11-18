@@ -5083,6 +5083,80 @@ fn signal_bus(app: &App, key: &SigKey) -> String {
     }
 }
 
+/// `Frame / PDU / Signal`, skipping a PDU whose name repeats the frame (DBC
+/// imports name them the same). Rows can then tell apart same-named ARXML
+/// signals that live in different frames or PDUs.
+fn signal_path(app: &App, key: &SigKey) -> Option<String> {
+    let bus = app.key_bus(key)?;
+    match key {
+        SigKey::Can {
+            cluster,
+            id,
+            ext,
+            name,
+        } => {
+            let comm = app.model_comms.get(bus as usize)?.as_ref()?;
+            let frame = comm
+                .frame_by_can_id(*cluster, *id)
+                .into_iter()
+                .find(|frame| {
+                    matches!(
+                        frame.address,
+                        crate::model::FrameAddress::Can {
+                            extended,
+                            ..
+                        } if extended == *ext
+                    )
+                })?;
+            let signal = comm.signal_by_name(frame, name).into_iter().next()?;
+            Some(model_signal_path(comm, frame, signal))
+        }
+        SigKey::Fr {
+            cluster,
+            slot,
+            name,
+        } => {
+            let comm = &app.fr_models.get(&bus)?.comm;
+            for frame in comm.frame_by_slot(*cluster, *slot) {
+                if let Some(signal) = comm.signal_by_name(frame, name).into_iter().next() {
+                    return Some(model_signal_path(comm, frame, signal));
+                }
+            }
+            None
+        }
+        SigKey::Eth {
+            cluster,
+            frame,
+            name,
+        } => {
+            let comm = &app.eth_models.get(&bus)?.comm;
+            let frame = comm.frame_by_name(*cluster, frame)?;
+            let signal = comm.signal_by_name(frame, name).into_iter().next()?;
+            Some(model_signal_path(comm, frame, signal))
+        }
+        SigKey::Derived { .. } => None,
+    }
+}
+
+fn model_signal_path(
+    comm: &crate::model::Comm,
+    frame: &crate::model::Frame,
+    signal: &crate::model::Signal,
+) -> String {
+    let mut parts = Vec::with_capacity(3);
+    if !frame.name.is_empty() {
+        parts.push(frame.name.clone());
+    }
+    if let Some(pdu) = comm.pdus.get(&signal.pdu)
+        && !pdu.name.is_empty()
+        && pdu.name != frame.name
+    {
+        parts.push(pdu.name.clone());
+    }
+    parts.push(signal.name.clone());
+    parts.join(" / ")
+}
+
 fn signal_meta(signal: &SelectedSignal) -> SignalSeries {
     SignalSeries {
         key: series_key(&signal.key),
@@ -6152,6 +6226,9 @@ struct WebMonitorRow {
     name: String,
     label: String,
     bus: String,
+    /// `Frame / PDU / Signal` from the loaded model; empty for derived rows.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    path: String,
     value: f64,
     has_value: bool,
     unit: String,
@@ -6173,6 +6250,9 @@ struct WebDataRow {
     frame: Option<String>,
     name: String,
     bus: String,
+    /// `Frame / PDU / Signal` from the loaded model; empty for derived rows.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    path: String,
     value: String,
     unit: String,
     raw: String,
@@ -7202,6 +7282,7 @@ fn build_state(app: &App, series: &VecDeque<WebSeriesPoint>, fps: f64) -> WebSta
                         frame,
                         name,
                         bus: signal_bus(app, &signal.key),
+                        path: signal_path(app, &signal.key).unwrap_or_default(),
                         value,
                         unit,
                         raw,
@@ -7343,6 +7424,7 @@ fn build_state(app: &App, series: &VecDeque<WebSeriesPoint>, fps: f64) -> WebSta
                 name: row.key.name().to_string(),
                 label: row.label.clone(),
                 bus: signal_bus(app, &row.key),
+                path: signal_path(app, &row.key).unwrap_or_default(),
                 value,
                 has_value,
                 unit,
@@ -8355,6 +8437,10 @@ mod tests {
         assert_eq!(state.monitor.len(), 1);
         assert_eq!(state.monitor[0].name, "EngineSpeed");
         assert_eq!(state.monitor[0].label, "EngineSpeed");
+        assert_eq!(
+            state.monitor[0].path, "EngineStatus / EngineSpeed",
+            "monitor rows carry the frame path"
+        );
         assert_eq!(state.monitor[0].digits, 1, "core default");
 
         edit_monitor_row(
@@ -8393,6 +8479,7 @@ mod tests {
         assert_eq!(state.data.len(), 1);
         let row = &state.data[0];
         assert_eq!(row.name, "EngineSpeed");
+        assert_eq!(row.path, "EngineStatus / EngineSpeed");
         assert!(row.visible);
         assert!((0.0..=1.0).contains(&row.frac));
 

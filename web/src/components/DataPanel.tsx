@@ -2,16 +2,26 @@ import type { DataRow } from "../types";
 
 interface Props {
   rows: DataRow[];
+  filtered?: boolean;
   onVisible: (row: DataRow, visible: boolean) => void;
   onRemove: (row: DataRow) => void;
 }
 
-export function DataPanel({ rows, onVisible, onRemove }: Props) {
+export function DataPanel({
+  rows,
+  filtered = false,
+  onVisible,
+  onRemove,
+}: Props) {
   if (rows.length === 0) {
     return (
       <div class="empty">
-        <strong>No signals yet</strong>
-        <span>Add a signal to watch live, raw and scaled values.</span>
+        <strong>{filtered ? "No matching signals" : "No signals yet"}</strong>
+        <span>
+          {filtered
+            ? "Try a different signal, frame, PDU, bus or unit."
+            : "Add a signal to watch live, raw and scaled values."}
+        </span>
       </div>
     );
   }
@@ -35,9 +45,15 @@ export function DataPanel({ rows, onVisible, onRemove }: Props) {
               />
             </label>
           )}
-          <div class="data-name" title={`${row.bus} · ${row.name}`}>
+          <div
+            class="data-name"
+            title={`${row.bus} · ${row.path || row.name}`}
+          >
             <strong>{row.name}</strong>
-            <small>{row.bus}</small>
+            <small>
+              {row.bus}
+              {row.path ? ` · ${row.path}` : ""}
+            </small>
           </div>
           <div class="data-value" title={row.value}>
             {row.value}

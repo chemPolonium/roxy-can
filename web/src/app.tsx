@@ -23,6 +23,7 @@ import {
   uploadFile,
 } from "./api";
 import { triggerDownload } from "./download";
+import { filterSignalRows } from "./signalRows";
 import {
   buildTriggerFile,
   parseTriggerFile,
@@ -483,6 +484,8 @@ export function App() {
   const [traceFilterOpen, setTraceFilterOpen] = useState(false);
   const [panelQuery, setPanelQuery] = useState("");
   const [messageQuery, setMessageQuery] = useState("");
+  const [monitorQuery, setMonitorQuery] = useState("");
+  const [dataQuery, setDataQuery] = useState("");
   const [writeKind, setWriteKind] = useState("all");
   const [writeQuery, setWriteQuery] = useState("");
   const [savedView] = useState(loadView);
@@ -1883,11 +1886,19 @@ export function App() {
         void run({ type: "pause", on: !state?.tracePaused });
       } else if (event.key === "F2") {
         event.preventDefault();
-        document
-          .querySelector<HTMLInputElement>(
+        // The focused page's filter wins; fall back to any visible panel so
+        // F2 still works before the workspace has been clicked.
+        const slot = document.querySelector(
+          `.dock-slot[data-slot="${focusedSlot}"]`,
+        );
+        const input =
+          slot?.querySelector<HTMLInputElement>(
+            ".panel-head input[type='search'], .trace-panel input[type='search']",
+          ) ??
+          document.querySelector<HTMLInputElement>(
             ".trace-panel input[type='search'], .panel-head input[type='search']",
-          )
-          ?.focus();
+          );
+        input?.focus();
       } else if (mod && event.shiftKey && key === "s") {
         event.preventDefault();
         void saveProjectAs();
@@ -1918,7 +1929,14 @@ export function App() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [state?.measuring, state?.projectPath, state?.tracePaused, shellMode, dock]);
+  }, [
+    state?.measuring,
+    state?.projectPath,
+    state?.tracePaused,
+    shellMode,
+    dock,
+    focusedSlot,
+  ]);
 
   const openDataPicker = () => {    setSessionOpen(false);
     setScriptsOpen(false);
@@ -2696,6 +2714,14 @@ export function App() {
   );
   const monitorRows = state?.monitor ?? [];
   const dataRows = state?.data ?? [];
+  const visibleMonitorRows = useMemo(
+    () => filterSignalRows(monitorRows, monitorQuery),
+    [monitorRows, monitorQuery],
+  );
+  const visibleDataRows = useMemo(
+    () => filterSignalRows(dataRows, dataQuery),
+    [dataRows, dataQuery],
+  );
   const stateRows = state?.stateRows ?? [];
   const chartCenterS =
     signalView.endS !== null
@@ -3659,8 +3685,23 @@ export function App() {
   const renderMonitorPanel = (slot: number) => (
     <>
       {slotHeader(slot, "monitor", {
+        meta: monitorQuery.trim()
+          ? `${visibleMonitorRows.length} / ${monitorRows.length}`
+          : undefined,
         actions: (
           <>
+            <input
+              class="panel-filter"
+              type="search"
+              value={monitorQuery}
+              placeholder="Filter signals…"
+              title="Filter by signal, frame, PDU, bus or unit"
+              aria-label="Filter monitor signals"
+              onInput={(event) =>
+                setMonitorQuery((event.target as HTMLInputElement).value)
+              }
+              onKeyDown={filterEscape(() => setMonitorQuery(""))}
+            />
             <button
               type="button"
               class="mini icon-btn"
@@ -3684,7 +3725,8 @@ export function App() {
         ),
       })}
       <MonitorPanel
-        rows={monitorRows}
+        rows={visibleMonitorRows}
+        filtered={monitorQuery.trim() !== ""}
         theme={theme}
         onEdit={editMonitor}
         onRemove={(row) =>
@@ -3707,8 +3749,23 @@ export function App() {
   const renderDataPanel = (slot: number) => (
     <>
       {slotHeader(slot, "data", {
+        meta: dataQuery.trim()
+          ? `${visibleDataRows.length} / ${dataRows.length}`
+          : undefined,
         actions: (
           <>
+            <input
+              class="panel-filter"
+              type="search"
+              value={dataQuery}
+              placeholder="Filter signals…"
+              title="Filter by signal, frame, PDU, bus or unit"
+              aria-label="Filter data signals"
+              onInput={(event) =>
+                setDataQuery((event.target as HTMLInputElement).value)
+              }
+              onKeyDown={filterEscape(() => setDataQuery(""))}
+            />
             <button
               type="button"
               class="mini icon-btn"
@@ -3732,7 +3789,8 @@ export function App() {
         ),
       })}
       <DataPanel
-        rows={dataRows}
+        rows={visibleDataRows}
+        filtered={dataQuery.trim() !== ""}
         onVisible={(row, visible) =>
           row.kind === "derived"
             ? showToast("Derived rows are always visible")

@@ -371,6 +371,8 @@ export interface MonitorRow {
   name: string;
   label: string;
   bus: string;
+  /// `Frame / PDU / Signal` from the loaded model; absent for derived rows.
+  path?: string;
   value: number;
   hasValue: boolean;
   unit: string;
@@ -389,6 +391,8 @@ export interface DataRow {
   frame?: string;
   name: string;
   bus: string;
+  /// `Frame / PDU / Signal` from the loaded model; absent for derived rows.
+  path?: string;
   value: string;
   unit: string;
   raw: string;

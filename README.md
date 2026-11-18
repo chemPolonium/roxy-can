@@ -25,7 +25,7 @@ Spec / SOME/IP / Write 都是单实例页面，可放进任意槽位。入口与
 - **动态总线**：数量不固定，在 Buses 窗口增删、改名，每条总线单独加载 DBC；删除总线时观测器、过滤器与生成器条目自动跟着重映射。
 - **DBC 解码**：复用报文只解当前那一组；值表显示枚举文本；浮点信号按位模式解码并带类型标记。
 - **帧模型**：经典 CAN、CAN FD（变长载荷至 64 字节、BRS / ESI）、错误帧、远程帧。Trace 的 Flags 列统一给帧类型，错误行与远程行有底色。
-- **观测面板与布局**：Trace、Messages、Messages stats、Rate、Signals、Monitor、Data、State、Bus load、Spec、SOME/IP、Write 都是单实例页面，用页眉菜单放进 Focus / Split / Main + side / Quad 的任意槽位；选一个已在别处的面板会交换两个槽位，Move to 直接移动当前页。Trace/Messages 有独立过滤与选择；Data/Signals 可跨总线勾选信号，Signals 还支持 **Read**（只订阅、不画 lane，游标处读数），信号列表按帧收起，帧头 **All / None** 可批量增删可见信号，曲线一次加入超过 8 条会先确认；Messages 行可展开查看解码信号（按需解码），长帧可先过滤并只渲染前 50 条。
+- **观测面板与布局**：Trace、Messages、Messages stats、Rate、Signals、Monitor、Data、State、Bus load、Spec、SOME/IP、Write 都是单实例页面，用页眉菜单放进 Focus / Split / Main + side / Quad 的任意槽位；选一个已在别处的面板会交换两个槽位，Move to 直接移动当前页。Trace/Messages 有独立过滤与选择；Monitor/Data 页眉可按信号、帧、PDU 或总线过滤；Data/Signals 可跨总线勾选信号，Signals 还支持 **Read**（只订阅、不画 lane，游标处读数），信号列表按帧收起，帧头 **All / None** 可批量增删可见信号，曲线一次加入超过 8 条会先确认；Messages 行可展开查看解码信号（按需解码），长帧可先过滤并只渲染前 50 条。
 - **Panel 操作页**：顶栏 Standard / Panel 切换；多页面标签栏，每页独立画幅与控件；固定画布默认 1280×720、始终显示 8px 网格，Edit 下可新建/复制/重命名/删除页面并改画幅尺寸，用 **+ Add** 菜单添加 Button / Value / Bar / Gauge / Lamp / Toggle / Setpoint 控件，拖动/缩放吸附网格；Button 的 **On click** 二选一——**Send message**（发一条 CAN / FlexRay / Ethernet / SOME/IP 报文；已知帧可按物理值编码；SOME/IP 按 service/method 字段列表填值）或 **Script action**（`on panel_action("…")`，可带数值参数），Value 只读显示信号/派生/SysVar 并可按升序上限给数字分段染色，Bar / Gauge 按 min/max 填充并复用同一套色段，Lamp 在源值达到阈值时点亮（颜色可选），Toggle 写 SysVar 0/1，Setpoint 写 SysVar 或 DBC 信号并按所属后端的量程夹取；页面以 `.rxpanel` 文档存进工程文件，打开工程时自动合并回 Panel；也可单独 **Export** / **Import**（严格校验）。**Fullscreen** 覆盖应用外壳但保持浏览器窗口、画布居中不缩放。
 - **Trace**：虚拟滚动（几十万行的过滤结果照样流畅），payload 字节搜索、信号值条件（`Name>10`）、精确地址（`id:1AB` / `slot:13`）、时间范围、列头排序、右键"Filter this ID"、行游标 A/B 与 Δt 读数、点一行选中后用 ↑/↓ 走行、Ctrl+C 复制；窄槽位自动隐藏低优先列。
 - **总线负载与规格监视**：按总线给线上一帧占时加权的负载与帧率（1 s 滚动窗）、60 s 负载曲线、错误帧计数；Specification 把实测流量与数据库声明逐条对账——Unknown / Dlc / Cycle / Missing 四类判定，容差与宽限可调，可导出 CSV。
@@ -41,7 +41,7 @@ Spec / SOME/IP / Write 都是单实例页面，可放进任意槽位。入口与
 - **仿真节点**：类 CAPL 的小语言编译执行，`on start` / `on message` / `on fr slot` / `on timer` / `on errorFrame` 事件驱动，读写 DBC 信号、收发帧、随机与波形内建；`send` 超过 8 字节自动 FD，`send_fd(id, buffer[, brs])` 可强制 8 字节 FD 并可选 BRS。每个回调有指令预算，有缺陷的脚本不会卡住总线，出错节点自动停止运行。可绑定到 DBC 节点，绑定后能否发送由该节点的角色决定。编辑器三栏：处理器大纲、静态收发事实表、函数与报文速插；源码区基于 CodeMirror 6，带行号、语法高亮、搜索/替换、括号匹配、代码折叠和撤销/重做。语言参考见 [docs/script_language.md](docs/script_language.md)，可运行示例见 `examples/`。
 - **派生信号**：脚本 `emit_value("名", 表达式)` 一行发布，像数据库信号一样进 Signals / Data / State。
 - **系统变量**：CANoe 式的命名空间变量（初值 / 界限 / 单位 / 备注），专用窗口管理，脚本读写，同时发布为可观测流；每次测量开始复位为初值。
-- **Monitor 监控面板**：轻量纯文本行，一行一个信号；阈值规则默认收起，点行内 **rule** 展开阈值/方向/小数位/颜色，超过阈值直接变色。
+- **Monitor 监控面板**：轻量纯文本行，一行一个信号；阈值规则默认收起，点行内 **rule** 展开阈值/方向/小数位/颜色，超过阈值直接变色。页眉搜索按信号/帧/PDU/总线过滤，行下副行显示 `Frame / PDU / Signal` 路径（DBC 的 PDU 与帧同名时省略 PDU）。
 - **State Tracker**：对订阅信号的历史做状态分段——枚举标签、二进制方波、会话稳定配色，支持自定义区间与固定颜色，短区段按最短显示时长合并，区段表可导出 CSV。
 - **Write 窗口**：整系统一条滚动输出——节点 `print`、装配层检查与告警、节点停止的错误、命令事件分色带时间戳；可按类别过滤、导出文本。
 - **录制与回放**：读写 Vector ASC 与 BLF（经典 / FD / 错误 / 远程帧、FlexRay 收帧与 Ethernet 对象），有以太网帧时另写同名 `.eth.pcap`（ASC/BLF 自身都已含 Ethernet，sidecar 是给 Wireshark/回放用的），也可选 PCAP 格式只录 Ethernet；自家录的文件放回去是同一批帧；`--convert` 纯流式转码。播放器式控制——倍速增减、**Fast**（一次读到末尾）、按步长单步、播放指定时长或到指定时间后自动暂停（都只向前）；按时间戳顺序调度，不做进度条随机跳转。别人的日志只带通道编号，**Setup → Replay…** 里的 **Channel map** 把那些编号指到本工程的各路（CAN、FlexRay、以太网各一组，随工程保存）。录制支持按 id 过滤（CAN 写 hex、FlexRay 写 `FR0:13`）。

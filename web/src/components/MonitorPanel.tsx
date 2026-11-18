@@ -12,6 +12,7 @@ export interface MonitorPatch {
 
 interface Props {
   rows: MonitorRow[];
+  filtered?: boolean;
   theme: Theme;
   onEdit: (row: MonitorRow, patch: MonitorPatch) => void;
   onRemove: (row: MonitorRow) => void;
@@ -58,13 +59,23 @@ function ThresholdInput({
   );
 }
 
-export function MonitorPanel({ rows, theme, onEdit, onRemove }: Props) {
+export function MonitorPanel({
+  rows,
+  filtered = false,
+  theme,
+  onEdit,
+  onRemove,
+}: Props) {
   const colors = palette(theme).monitors;
   if (rows.length === 0) {
     return (
       <div class="empty">
-        <strong>No signals yet</strong>
-        <span>Add a signal to watch its live value.</span>
+        <strong>{filtered ? "No matching signals" : "No signals yet"}</strong>
+        <span>
+          {filtered
+            ? "Try a different signal, frame, PDU, bus or unit."
+            : "Add a signal to watch its live value."}
+        </span>
       </div>
     );
   }
@@ -85,10 +96,14 @@ export function MonitorPanel({ rows, theme, onEdit, onRemove }: Props) {
               style={{ borderLeftColor: color }}
             >
               <div class="monitor-main">
-                <span class="monitor-label">
+                <span
+                  class="monitor-label"
+                  title={`${row.bus} · ${row.path || row.name}`}
+                >
                   {row.label}
                   <small>
-                    {row.bus} · {row.name}
+                    {row.bus}
+                    {row.path ? ` · ${row.path}` : ` · ${row.name}`}
                   </small>
                 </span>
                 <strong
