@@ -3747,10 +3747,7 @@ body.row-resizing {
 }
 
 .picker-message {
-  margin-bottom: 4px;
-  /* Frames are separated by their header rule and the gap, not by a box
-     outline; the extra right/bottom edge read as a drop shadow in light
-     theme. */
+  margin-bottom: 6px;
   border: 0;
   border-radius: 0;
   overflow: hidden;
@@ -3762,12 +3759,19 @@ body.row-resizing {
   gap: 8px;
   padding: 0 8px 0 0;
   border: 0;
-  background: #0e131a;
-  color: #aab7c7;
+  background: #151c25;
+  color: #c2d2e2;
 }
 
 .picker-message-head:hover {
-  background: #16202b;
+  background: #1b2531;
+}
+
+.picker-message-head .picker-message-title {
+  overflow: hidden;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .picker-message-toggle {
@@ -3796,13 +3800,14 @@ body.row-resizing {
 .picker-message-actions {
   display: flex;
   flex: 0 0 auto;
-  gap: 2px;
+  gap: 5px;
 }
 
 .picker-frame-action {
   height: 18px;
-  padding: 0 5px;
-  border: 0;
+  padding: 0 6px;
+  border: 1px solid var(--line);
+  border-radius: 2px;
   background: transparent;
   color: var(--muted);
   font-size: 9.5px;
@@ -3810,10 +3815,9 @@ body.row-resizing {
 }
 
 .picker-frame-action:hover:not(:disabled) {
-  border: 0;
-  background: transparent;
+  border-color: var(--accent);
+  background: var(--accent-soft);
   color: var(--accent);
-  text-decoration: underline;
 }
 
 .picker-message-title {
@@ -3884,16 +3888,33 @@ body.row-resizing {
 }
 
 .picker-signal {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 3px 8px;
+  padding: 3px 8px 3px 30px;
   color: #aebccd;
   font-size: 11px;
 }
 
+/* A tree guide, not a box: signals hang under their frame name instead of
+   starting at the same left edge as the frame header. */
+.picker-signal::before {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 16px;
+  width: 1px;
+  background: var(--line-soft);
+  content: "";
+}
+
 .picker-signal:hover {
   background: #16202b;
+}
+
+.picker-signal:hover::before {
+  background: var(--line);
 }
 
 .picker-signal.on {
@@ -3950,17 +3971,18 @@ body.row-resizing {
   display: inline-flex;
   flex: 0 0 auto;
   height: 20px;
-  overflow: visible;
-  border: 0;
-  border-radius: 0;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 2px;
+  background: transparent;
 }
 
 .picker-modes button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  height: 20px;
-  padding: 0 5px;
+  height: 100%;
+  padding: 0 7px;
   border: 0;
   border-radius: 0;
   background: transparent;
@@ -3970,18 +3992,17 @@ body.row-resizing {
 }
 
 .picker-modes button + button {
-  border-left: 0;
+  border-left: 1px solid var(--line);
 }
 
 .picker-modes button:hover:not(:disabled):not(.on) {
-  background: transparent;
-  color: inherit;
-  text-decoration: underline;
+  background: rgb(255 255 255 / 6%);
+  color: #d9e3ef;
 }
 
 .picker-modes button.on {
-  background: transparent;
-  color: var(--accent);
+  background: rgb(76 157 255 / 24%);
+  color: #cfe7ff;
   font-weight: 600;
 }
 
