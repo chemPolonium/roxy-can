@@ -4676,46 +4676,42 @@ export function App() {
             </div>
           </div>
         </div>
-        <div class="actions">
-          <div class="view-switch" role="group" aria-label="Workspace">
-            <button
-              type="button"
-              class={shellMode !== "panel" ? "on" : ""}
-              onClick={showStandard}
-            >
-              Standard
-            </button>
-            <button
-              type="button"
-              class={shellMode === "panel" ? "on" : ""}
-              onClick={showPanelPage}
-            >
-              Panel
-            </button>
-          </div>
-          <MenuButton
-            className="top-menu layout-menu"
-            menuClass="app-menu-top layout-panel"
-            menuLabel="Layout"
-            disabled={shellMode === "panel"}
-            title={
-              shellMode === "panel"
-                ? "Switch to Standard to change the page layout"
-                : "Choose a page layout; each page then picks its own panel"
-            }
-            ariaLabel="Layout"
-            label={
-              <>
-                <span class="layout-glyph" aria-hidden="true">
-                  ▦
-                </span>
-                <span class="layout-menu-label">Layout</span>
-                <span class="top-menu-caret" aria-hidden="true">
-                  ▾
-                </span>
-              </>
-            }
+        <div class="view-switch" role="group" aria-label="Workspace">
+          <button
+            type="button"
+            class={shellMode !== "panel" ? "on" : ""}
+            onClick={showStandard}
           >
+            Standard
+          </button>
+          <button
+            type="button"
+            class={shellMode === "panel" ? "on" : ""}
+            onClick={showPanelPage}
+          >
+            Panel
+          </button>
+        </div>
+        <div class="actions">
+          {shellMode !== "panel" && (
+            <MenuButton
+              className="top-menu layout-menu"
+              menuClass="app-menu-top layout-panel"
+              menuLabel="Layout"
+              title="Choose a page layout; each page then picks its own panel"
+              ariaLabel="Layout"
+              label={
+                <>
+                  <span class="layout-glyph" aria-hidden="true">
+                    ▦
+                  </span>
+                  <span class="layout-menu-label">Layout</span>
+                  <span class="top-menu-caret" aria-hidden="true">
+                    ▾
+                  </span>
+                </>
+              }
+            >
             {(close) => (
               <>
                 <div class="app-menu-group">Presets</div>
@@ -4769,6 +4765,7 @@ export function App() {
               </>
             )}
           </MenuButton>
+          )}
           <button
             type="button"
             class="buses-button"

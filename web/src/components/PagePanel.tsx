@@ -2510,9 +2510,6 @@ export function PagePanel({
       />
       <div class={`panel-head ${editing ? "editing" : ""}`}>
         <div class="panel-title">Panel</div>
-        <span class="meta">
-          {page.width * PAGE_GRID}×{page.height * PAGE_GRID} · {PAGE_GRID}px grid
-        </span>
         <div class="page-tabs">
           <div
             class="page-tab-list"
@@ -2598,6 +2595,9 @@ export function PagePanel({
             </div>
           )}
         </div>
+        <span class="meta">
+          {page.width * PAGE_GRID}×{page.height * PAGE_GRID} · {PAGE_GRID}px grid
+        </span>
         <div class="panel-tools">
           {editing && (
             <>
@@ -2792,11 +2792,17 @@ export function PagePanel({
         </div>
         {editing && (
           <aside class="page-inspector">
+            <div class="page-inspector-head">
+              <span class="page-inspector-title">Properties</span>
+              <span class="meta">
+                {selectedWidget
+                  ? panelWidgetSpec(selectedWidget.kind).label
+                  : "Panel"}
+              </span>
+            </div>
+            <div class="page-inspector-body">
             {selectedWidget ? (
               <>
-                <div class="page-inspector-title">
-                  {panelWidgetSpec(selectedWidget.kind).label}
-                </div>
             {panelWidgetSpec(selectedWidget.kind).fields.map((spec) =>
               inspectorField(selectedWidget, spec.key),
             )}
@@ -2820,7 +2826,6 @@ export function PagePanel({
               </>
             ) : (
               <>
-                <div class="page-inspector-title">Panel</div>
                 <label>
                   Width (px)
                   <input
@@ -2879,6 +2884,7 @@ export function PagePanel({
                 </div>
               </>
             )}
+            </div>
           </aside>
         )}
       </div>
