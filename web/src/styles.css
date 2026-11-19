@@ -405,6 +405,23 @@ select:disabled {
   color: #cfe7ff;
 }
 
+.view-switch .view-add {
+  width: 24px;
+  padding: 0;
+  color: var(--muted);
+  font-size: 15px;
+}
+
+.view-switch .view-add:hover:not(:disabled) {
+  background: rgb(255 255 255 / 6%);
+  color: var(--text, #d9e3ef);
+}
+
+.topbar-edit {
+  height: 26px;
+  padding: 0 10px;
+}
+
 .buses-button {
   display: inline-flex;
   align-items: center;

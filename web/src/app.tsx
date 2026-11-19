@@ -141,6 +141,7 @@ import {
 } from "./traceLayout";
 import {
   activePanelPage,
+  addPanelPage,
   addPanelPageFromFile,
   defaultPanelBook,
   exportPanelFile,
@@ -486,6 +487,7 @@ export function App() {
     savedView.panelBook ?? defaultPanelBook(),
   );
   const activePage = activePanelPage(panelBook);
+  const [panelEditing, setPanelEditing] = useState(false);
   // Panel pages only enter the project on Save, so their edits are dirty even
   // when the core's project flag is still clean.
   const [panelDirty, setPanelDirty] = useState(false);
@@ -1846,6 +1848,7 @@ export function App() {
       if (event.altKey && event.shiftKey && key === "p") {
         event.preventDefault();
         setShellMode((old) => (old === "panel" ? "standard" : "panel"));
+        setPanelEditing(false);
         setMaximizedSlot(null);
         return;
       }
@@ -4169,12 +4172,22 @@ export function App() {
 
   const showStandard = () => {
     setShellMode("standard");
+    setPanelEditing(false);
     setMaximizedSlot(null);
   };
 
   const showPanelPage = (id: string) => {
     updatePanelBook(selectPanelPage(panelBook, id));
     setShellMode("panel");
+    setMaximizedSlot(null);
+    setExplorerOpen(false);
+  };
+
+  const newPanelPage = () => {
+    const added = addPanelPage(panelBook);
+    updatePanelBook(added.book);
+    setShellMode("panel");
+    setPanelEditing(true);
     setMaximizedSlot(null);
     setExplorerOpen(false);
   };
@@ -4701,9 +4714,33 @@ export function App() {
               {entry.name}
             </button>
           ))}
+          <button
+            type="button"
+            class="view-add"
+            style={{ padding: "0" }}
+            title="New Panel page"
+            aria-label="New Panel page"
+            onClick={newPanelPage}
+          >
+            +
+          </button>
         </div>
         <div class="actions">
-          {shellMode !== "panel" && (
+          {shellMode === "panel" ? (
+            <button
+              type="button"
+              class={`mini topbar-edit ${panelEditing ? "on" : ""}`}
+              aria-pressed={panelEditing}
+              title={
+                panelEditing
+                  ? "Finish editing and run the Panel"
+                  : "Edit the Panel: move controls and change properties"
+              }
+              onClick={() => setPanelEditing((old) => !old)}
+            >
+              {panelEditing ? "Done" : "Edit"}
+            </button>
+          ) : (
             <MenuButton
               className="top-menu layout-menu"
               menuClass="app-menu-top layout-panel"
@@ -5276,6 +5313,8 @@ export function App() {
             actionNames={pageActionNames}
             view={pageView}
             actionContext={pageActionContext}
+            editing={panelEditing}
+            onEditing={setPanelEditing}
             onBook={updatePanelBook}
             onRun={runPanelAction}
             onToggle={togglePageSysVar}

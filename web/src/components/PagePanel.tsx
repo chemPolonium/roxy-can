@@ -9,7 +9,6 @@ import {
   PANEL_MAX_BANDS,
   PANEL_WIDGET_KINDS,
   activePanelPage,
-  addPanelPage,
   addPanelPageFromFile,
   addPanelWidget,
   duplicatePanelPage,
@@ -1629,6 +1628,8 @@ export function PagePanel({
   actionNames,
   view,
   actionContext,
+  editing,
+  onEditing,
   onBook,
   onRun,
   onToggle,
@@ -1644,6 +1645,8 @@ export function PagePanel({
   actionNames: string[];
   view: PanelView;
   actionContext: PanelActionContext;
+  editing: boolean;
+  onEditing: (on: boolean) => void;
   onBook: (book: PanelBook) => void;
   onRun: (widget: PanelButton) => void;
   onToggle: (widget: PanelToggle, on: boolean) => void;
@@ -1653,7 +1656,6 @@ export function PagePanel({
 }) {
   const page = activePanelPage(book);
   const onPage = (next: PanelPage) => onBook(updatePanelPage(book, next));
-  const [editing, setEditing] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
   const [selected, setSelected] = useState<string | null>(null);
   const [renaming, setRenaming] = useState<{ id: string; name: string } | null>(
@@ -1763,12 +1765,12 @@ export function PagePanel({
       if (selected) {
         setSelected(null);
       } else {
-        setEditing(false);
+        onEditing(false);
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [editing, selected]);
+  }, [editing, selected, onEditing]);
 
   useEffect(() => {
     if (!fullscreen || editing) return;
@@ -1978,12 +1980,6 @@ export function PagePanel({
     setHistory(EMPTY_HISTORY);
     setClipboard(null);
     setRenaming(null);
-  };
-
-  const newPage = () => {
-    const added = addPanelPage(book);
-    clearPageUi();
-    onBook(added.book);
   };
 
   const openPageMenu = () => {
@@ -2666,13 +2662,6 @@ export function PagePanel({
           )}
           <button
             type="button"
-            class={`mini ${editing ? "on" : ""}`}
-            onClick={() => setEditing((old) => !old)}
-          >
-            {editing ? "Done" : "Edit"}
-          </button>
-          <button
-            type="button"
             class={`mini ${fullscreen ? "on" : ""}`}
             title={fullscreen ? "Exit web fullscreen" : "Fill the browser window"}
             onClick={() => setFullscreen((old) => !old)}
@@ -3001,17 +2990,6 @@ export function PagePanel({
           )}
           {menu.kind === "page" && (
             <>
-              <button
-                type="button"
-                role="menuitem"
-                onClick={() => {
-                  setMenu(null);
-                  newPage();
-                }}
-              >
-                New page
-              </button>
-              <div class="page-menu-sep" role="separator" />
               <button
                 type="button"
                 role="menuitem"
