@@ -1118,6 +1118,22 @@ export function removePanelPage(book: PanelBook, id: string): PanelBook {
   return { ...book, activeId, pages };
 }
 
+/// Reorders a page without changing which page is active.
+export function movePanelPage(
+  book: PanelBook,
+  id: string,
+  to: number,
+): PanelBook {
+  const from = book.pages.findIndex((page) => page.id === id);
+  if (from < 0) return book;
+  const target = Math.max(0, Math.min(book.pages.length - 1, to));
+  if (from === target) return book;
+  const pages = [...book.pages];
+  const [page] = pages.splice(from, 1);
+  pages.splice(target, 0, page);
+  return { ...book, pages };
+}
+
 function widgetPatch(
   value: Record<string, unknown>,
   kind: PanelWidgetKind,

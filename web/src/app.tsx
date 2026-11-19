@@ -148,6 +148,7 @@ import {
   exportPanelFile,
   importPanelFile,
   mergeProjectPanels,
+  movePanelPage,
   panelFileName,
   panelSetpointTarget,
   parsePanelBook,
@@ -497,6 +498,7 @@ export function App() {
     x: number;
     y: number;
   } | null>(null);
+  const [pageMenuMode, setPageMenuMode] = useState<"menu" | "move">("menu");
   const [pageRename, setPageRename] = useState<{
     id: string;
     name: string;
@@ -1012,7 +1014,7 @@ export function App() {
       window.removeEventListener("keydown", escape);
       window.removeEventListener("scroll", scroll, true);
     };
-  }, [pageMenu]);
+  }, [pageMenu, pageMenuMode]);
 
   useEffect(() => {
     if (maximizedSlot === null) return;
@@ -4246,10 +4248,11 @@ export function App() {
     event.preventDefault();
     if (shellMode !== "panel" || activePage.id !== id) showPanelPage(id);
     setPageConfirmDelete(null);
+    setPageMenuMode("menu");
     setPageMenu({
       id,
-      x: Math.max(8, Math.min(event.clientX, window.innerWidth - 190)),
-      y: Math.max(8, Math.min(event.clientY, window.innerHeight - 220)),
+      x: Math.max(8, Math.min(event.clientX, window.innerWidth - 230)),
+      y: Math.max(8, Math.min(event.clientY, window.innerHeight - 260)),
     });
   };
 
@@ -5212,56 +5215,102 @@ export function App() {
           style={{ top: `${pageMenu.y}px`, left: `${pageMenu.x}px` }}
           onPointerDown={(event) => event.stopPropagation()}
         >
-          <button
-            type="button"
-            role="menuitem"
-            onClick={() => {
-              const page = panelBook.pages.find(
-                (entry) => entry.id === pageMenu.id,
-              );
-              setPageMenu(null);
-              if (!page) return;
-              setPageRename({ id: page.id, name: page.name });
-            }}
-          >
-            Rename page
-          </button>
-          <button
-            type="button"
-            role="menuitem"
-            onClick={() => duplicatePage(pageMenu.id)}
-          >
-            Duplicate page
-          </button>
-          <button
-            type="button"
-            role="menuitem"
-            onClick={() => {
-              setPageMenu(null);
-              pageImportInput.current?.click();
-            }}
-          >
-            Import page…
-          </button>
-          <button
-            type="button"
-            role="menuitem"
-            onClick={() => exportPage(pageMenu.id)}
-          >
-            Export page
-          </button>
-          <div class="page-menu-sep" role="separator" />
-          <button
-            type="button"
-            role="menuitem"
-            class={pageConfirmDelete === pageMenu.id ? "danger" : undefined}
-            disabled={panelBook.pages.length <= 1}
-            onClick={() => deletePage(pageMenu.id)}
-          >
-            {pageConfirmDelete === pageMenu.id
-              ? "Delete page and controls?"
-              : "Delete page"}
-          </button>
+          {pageMenuMode === "move" ? (
+            <>
+              <div class="app-menu-group">Move To</div>
+              {panelBook.pages.map((entry, index) => {
+                const current = entry.id === pageMenu.id;
+                return (
+                  <button
+                    key={entry.id}
+                    type="button"
+                    role="menuitem"
+                    class="page-move-option"
+                    disabled={current}
+                    title={entry.name}
+                    onClick={() => {
+                      updatePanelBook(
+                        movePanelPage(panelBook, pageMenu.id, index),
+                      );
+                      setPageMenu(null);
+                    }}
+                  >
+                    {index + 1}. {entry.name}
+                    {current ? " (current)" : ""}
+                  </button>
+                );
+              })}
+              <div class="page-menu-sep" role="separator" />
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => setPageMenuMode("menu")}
+              >
+                ‹ Back
+              </button>
+            </>
+          ) : (
+            <>
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  const page = panelBook.pages.find(
+                    (entry) => entry.id === pageMenu.id,
+                  );
+                  setPageMenu(null);
+                  if (!page) return;
+                  setPageRename({ id: page.id, name: page.name });
+                }}
+              >
+                Rename page
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => duplicatePage(pageMenu.id)}
+              >
+                Duplicate page
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                disabled={panelBook.pages.length <= 1}
+                onClick={() => setPageMenuMode("move")}
+              >
+                Move To
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  setPageMenu(null);
+                  pageImportInput.current?.click();
+                }}
+              >
+                Import page…
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => exportPage(pageMenu.id)}
+              >
+                Export page
+              </button>
+              <div class="page-menu-sep" role="separator" />
+              <button
+                type="button"
+                role="menuitem"
+                class={pageConfirmDelete === pageMenu.id ? "danger" : undefined}
+                disabled={panelBook.pages.length <= 1}
+                onClick={() => deletePage(pageMenu.id)}
+              >
+                {pageConfirmDelete === pageMenu.id
+                  ? "Delete page and controls?"
+                  : "Delete page"}
+              </button>
+            </>
+          )}
         </div>
       )}
 

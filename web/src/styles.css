@@ -1439,7 +1439,16 @@ body.col-resizing {
 }
 
 .page-tab-menu {
-  min-width: 170px;
+  min-width: 190px;
+  max-width: 240px;
+  max-height: 60vh;
+  overflow-y: auto;
+}
+
+.page-move-option {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .page-suggest {

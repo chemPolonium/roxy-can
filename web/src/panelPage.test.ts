@@ -15,6 +15,7 @@ import {
   exportPanelFile,
   formatPanelValue,
   importPanelFile,
+  movePanelPage,
   movePanelWidget,
   mergeProjectPanels,
   panelFileName,
@@ -553,6 +554,21 @@ describe("panel page", () => {
     const removed = removePanelPage(renamed, book.pages[0].id);
     expect(removed.pages).toHaveLength(2);
     expect(removePanelPage(defaultPanelBook(), "page1").pages).toHaveLength(1);
+  });
+
+  it("reorders pages without changing the active page", () => {
+    const first = addPanelPage(defaultPanelBook());
+    const second = addPanelPage(first.book);
+    const moved = movePanelPage(second.book, first.id, 2);
+    expect(moved.pages.map((page) => page.id)).toEqual([
+      "page1",
+      second.id,
+      first.id,
+    ]);
+    expect(moved.activeId).toBe(second.id);
+    expect(movePanelPage(moved, second.id, 99).pages.at(-1)?.id).toBe(
+      second.id,
+    );
   });
 
   it("lets a value card shrink to its compact floor", () => {
