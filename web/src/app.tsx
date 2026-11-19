@@ -121,14 +121,7 @@ import {
   type LayoutId,
   type PanelId,
 } from "./dockLayout";
-import { traceQueryPredicate } from "./traceFilter";
-import {
-  EMPTY_TRACE_FILTER,
-  TraceFilterModal,
-  parseIds,
-  traceFilterActive,
-} from "./components/TraceFilterModal";
-import type { TraceFilter } from "./components/TraceFilterModal";
+import { traceQueryPredicate, matchesTraceFilter, TRACE_FILTER_SPECS } from "./traceFilter";
 import type { MonitorRow, StateRow } from "./types";
 import {
   catalogSignalCommand,
@@ -477,16 +470,7 @@ export function App() {
   const [busy, setBusy] = useState(false);
   const [query, setQuery] = useState("");
   const [bus, setBus] = useState<string>("all");
-  const [traceFilter, setTraceFilter] = useState<TraceFilter>(EMPTY_TRACE_FILTER);
-  const traceFilterCount =
-    Number(traceFilter.dir !== "all") +
-    Number(traceFilter.dbcOnly) +
-    Number(traceFilter.payload.trim() !== "") +
-    Number(traceFilter.from.trim() !== "") +
-    Number(traceFilter.to.trim() !== "") +
-    Number(traceFilter.idInclude.trim() !== "") +
-    Number(traceFilter.idExclude.trim() !== "");
-  const [traceFilterOpen, setTraceFilterOpen] = useState(false);
+  const [traceFilter, setTraceFilter] = useState<FilterNode>(emptyFilterGroup);
   const [panelQuery, setPanelQuery] = useState("");
   const [messageQuery, setMessageQuery] = useState("");
   const [monitorQuery, setMonitorQuery] = useState("");
@@ -2045,7 +2029,6 @@ export function App() {
     setSysvarsOpen(false);
     setExportOpen(false);
     setHelpOpen(false);
-    setTraceFilterOpen(false);
     setStateRule(null);
     setMonitorStyle(null);
   };
@@ -2525,26 +2508,16 @@ export function App() {
   }, [state?.stats, panelQuery]);
 
   const tracePredicate = useMemo(() => traceQueryPredicate(query), [query]);
-  const visibleRows = useMemo(() => {
-    const payload = traceFilter.payload.trim().toUpperCase().replace(/\s+/g, "");
-    const from = traceFilter.from.trim() === "" ? null : Number(traceFilter.from) * 1e6;
-    const to = traceFilter.to.trim() === "" ? null : Number(traceFilter.to) * 1e6;
-    const include = parseIds(traceFilter.idInclude);
-    const exclude = parseIds(traceFilter.idExclude);
-    return traceRows.filter((frame) => {
-      if (bus !== "all" && frame.busName !== bus) return false;
-      if (traceFilter.dir !== "all" && frame.dir !== traceFilter.dir) return false;
-      if (traceFilter.dbcOnly && !frame.name) return false;
-      if (include && !include.has(frame.id)) return false;
-      if (exclude?.has(frame.id)) return false;
-      if (payload && !frame.data.toUpperCase().replace(/\s+/g, "").includes(payload)) {
-        return false;
-      }
-      if (from != null && frame.tUs < from) return false;
-      if (to != null && frame.tUs > to) return false;
-      return tracePredicate(frame);
-    });
-  }, [traceRows, tracePredicate, bus, traceFilter]);
+  const visibleRows = useMemo(
+    () =>
+      traceRows.filter(
+        (frame) =>
+          (bus === "all" || frame.busName === bus) &&
+          matchesTraceFilter(traceFilter, frame) &&
+          tracePredicate(frame),
+      ),
+    [traceRows, tracePredicate, bus, traceFilter],
+  );
   const traceFilterKey = useMemo(
     () => JSON.stringify([query, bus, traceFilter]),
     [query, bus, traceFilter],
@@ -3325,20 +3298,6 @@ export function App() {
             </button>
             <button
               type="button"
-              class={`mini icon-btn filter-button ${traceFilterActive(traceFilter) ? "on" : ""}`}
-              onClick={() => setTraceFilterOpen(true)}
-              title={`Direction, DBC-only, payload and time filters${
-                traceFilterCount > 0 ? ` · ${traceFilterCount} active` : ""
-              }`}
-              aria-label="Trace filters"
-            >
-              <UiIcon name="funnel" />
-              {traceFilterCount > 0 && (
-                <span class="mini-count">{traceFilterCount}</span>
-              )}
-            </button>
-            <button
-              type="button"
               class={`mini icon-btn ${clearArmed ? "danger" : ""}`}
               disabled={!canControl || traceRows.length === 0}
               title={
@@ -3375,15 +3334,14 @@ export function App() {
                 </option>
               ))}
             </select>
-            <input
-              type="search"
-              value={query}
+            <FilterBar
+              query={query}
+              onQuery={setQuery}
+              filter={traceFilter}
+              onFilter={setTraceFilter}
+              fields={TRACE_FILTER_SPECS}
+              label="Filter trace"
               placeholder="Filter id, name, data…"
-              title={
-                "Space-separated, all must match. Fields: id:0x100, bus:CAN1, dir:tx, name:RPM, data:A00F, addr, kind. Prefix - excludes (-tx, -id:0x100). Quotes keep spaces."
-              }
-              onInput={(e) => setQuery((e.target as HTMLInputElement).value)}
-              onKeyDown={filterEscape(() => setQuery(""))}
             />
             <button
               type="button"
@@ -6063,14 +6021,6 @@ export function App() {
             setExportOpen(false);
           }}
           onClose={() => setExportOpen(false)}
-        />
-      )}
-
-      {traceFilterOpen && (
-        <TraceFilterModal
-          filter={traceFilter}
-          onApply={setTraceFilter}
-          onClose={() => setTraceFilterOpen(false)}
         />
       )}
 

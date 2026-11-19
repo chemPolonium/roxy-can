@@ -1,4 +1,44 @@
 import type { Frame } from "./types";
+import { matchesFilter, type FilterFieldSpec, type FilterNode } from "./filterTree";
+
+export const TRACE_FILTER_SPECS: FilterFieldSpec[] = [
+  { key: "direction", label: "Direction (Rx/Tx)" },
+  { key: "name", label: "Name" },
+  { key: "id", label: "ID" },
+  { key: "data", label: "Data" },
+  { key: "kind", label: "Kind" },
+  { key: "decoded", label: "Decoded (yes/no)" },
+  { key: "time", label: "Time (s)", numeric: true },
+];
+
+function traceField(frame: Frame, field: string): string {
+  switch (field) {
+    case "direction":
+      return frame.dir;
+    case "name":
+      return frame.name;
+    case "id":
+      return frame.addr;
+    case "data":
+      return frame.data;
+    case "kind":
+      return frame.kind;
+    case "decoded":
+      return frame.name ? "yes" : "no";
+    case "time":
+      return String(frame.tUs / 1e6);
+    default:
+      return "";
+  }
+}
+
+/// Shared filter tree adapter for one Trace row.
+export function matchesTraceFilter(
+  filter: FilterNode | null,
+  frame: Frame,
+): boolean {
+  return matchesFilter(filter, (field) => traceField(frame, field));
+}
 
 /// One parsed Trace filter token. `field` is null for a bare substring; a
 /// leading `-` negates the whole token (`-tx`, `-id:0x100`).

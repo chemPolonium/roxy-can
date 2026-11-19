@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from "preact/hooks";
 import { UiIcon } from "./icons";
 import {
+  FILTER_NUMBER_OPS,
   FILTER_OP_LABELS,
+  FILTER_TEXT_OPS,
   emptyFilterGroup,
   filterRuleCount,
   newFilterGroup,
@@ -36,18 +38,27 @@ function RuleEditor({
   onChange: (next: FilterRule) => void;
   onRemove: () => void;
 }) {
+  const spec = fields.find((field) => field.key === rule.field);
+  const ops = spec?.numeric ? FILTER_NUMBER_OPS : FILTER_TEXT_OPS;
   return (
     <div class="filter-rule-row">
       <select
         class="filter-field"
         aria-label="Filter field"
         value={rule.field}
-        onChange={(event) =>
+        onChange={(event) => {
+          const next = event.target as HTMLSelectElement;
+          const nextSpec = fields.find((field) => field.key === next.value);
+          const allowed = nextSpec?.numeric
+            ? FILTER_NUMBER_OPS
+            : FILTER_TEXT_OPS;
           onChange({
             ...rule,
-            field: (event.target as HTMLSelectElement).value,
-          })
-        }
+            field: next.value,
+            op: allowed.includes(rule.op) ? rule.op : allowed[0],
+            numeric: nextSpec?.numeric || undefined,
+          });
+        }}
       >
         {fields.map((field) => (
           <option key={field.key} value={field.key}>
@@ -67,16 +78,18 @@ function RuleEditor({
           })
         }
       >
-        {Object.entries(FILTER_OP_LABELS).map(([op, label]) => (
+        {ops.map((op) => (
           <option key={op} value={op}>
-            {label}
+            {FILTER_OP_LABELS[op]}
           </option>
         ))}
       </select>
       <input
         class="filter-value"
+        type={spec?.numeric ? "number" : "text"}
+        step={spec?.numeric ? "any" : undefined}
         value={rule.value}
-        placeholder="value"
+        placeholder={spec?.numeric ? "number" : "value"}
         spellcheck={false}
         onInput={(event) =>
           onChange({
@@ -155,7 +168,13 @@ function GroupEditor({
           onClick={() =>
             onChange({
               ...group,
-              children: [...group.children, newFilterRule(fields[0]?.key ?? "")],
+              children: [
+                ...group.children,
+                newFilterRule(
+                  fields[0]?.key ?? "",
+                  fields[0]?.numeric ?? false,
+                ),
+              ],
             })
           }
         >

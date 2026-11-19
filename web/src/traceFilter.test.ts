@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { Frame } from "./types";
-import { parseTraceQuery, traceQueryPredicate } from "./traceFilter";
+import {
+  matchesTraceFilter,
+  parseTraceQuery,
+  traceQueryPredicate,
+} from "./traceFilter";
+import { emptyFilterGroup, newFilterRule } from "./filterTree";
 
 const frame = (patch: Partial<Frame> = {}): Frame => ({
   kind: "can",
@@ -73,5 +78,25 @@ describe("trace filter syntax", () => {
     expect(match("foo:bar", frame({ data: "66 6F 6F 3A 62 61 72" }))).toBe(
       false,
     );
+  });
+});
+
+describe("trace advanced filter", () => {
+  it("filters direction, decoding, ID, data and time", () => {
+    const filter = emptyFilterGroup();
+    filter.children = [
+      { ...newFilterRule("direction"), field: "direction", op: "equals", value: "Rx" },
+      { ...newFilterRule("decoded"), field: "decoded", op: "equals", value: "yes" },
+      { ...newFilterRule("id"), field: "id", op: "equals", value: "0x100" },
+      { ...newFilterRule("data"), field: "data", op: "contains", value: "A0 0F" },
+      { ...newFilterRule("time", true), field: "time", op: "gte", value: "0.5" },
+      { ...newFilterRule("time", true), field: "time", op: "lte", value: "2" },
+    ];
+    expect(matchesTraceFilter(filter, frame())).toBe(true);
+    expect(
+      matchesTraceFilter(filter, frame({ tUs: 3_000_000 })),
+    ).toBe(false);
+    expect(matchesTraceFilter(filter, frame({ dir: "Tx" }))).toBe(false);
+    expect(matchesTraceFilter(filter, frame({ name: "" }))).toBe(false);
   });
 });

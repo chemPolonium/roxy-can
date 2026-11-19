@@ -295,7 +295,6 @@
 [data-theme="light"] .export-modal,
 [data-theme="light"] .session-modal,
 [data-theme="light"] .picker-modal,
-[data-theme="light"] .filter-modal,
 [data-theme="light"] .buses-modal,
 [data-theme="light"] .generator-modal,
 [data-theme="light"] .trigger-modal,
@@ -406,7 +405,6 @@
   color: #1557a8;
 }
 
-[data-theme="light"] .filter-body .filter-check,
 [data-theme="light"] .bus-attached,
 [data-theme="light"] .gen-active,
 [data-theme="light"] .gen-cycle,
