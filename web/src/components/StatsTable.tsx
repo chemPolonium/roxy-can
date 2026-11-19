@@ -153,12 +153,12 @@ export function StatsTable({
     return (
       <div class="empty">
         <strong>
-          {filtered ? "No matching statistics" : "No traffic statistics"}
+          {filtered ? "No matching statistics" : "No statistics yet"}
         </strong>
         <span>
           {filtered
-            ? "Try a different bus or message name."
-            : "Counts, cycle times and jitter appear once frames arrive."}
+            ? "Adjust or clear the bus or message filter."
+            : "Start a measurement or open a log to collect counts, cycle times and jitter."}
         </span>
       </div>
     );

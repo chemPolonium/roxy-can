@@ -481,6 +481,7 @@ export function SignalChart({
   hasReadout = false,
   readRange = null,
   readCount = 0,
+  filtered = false,
   yModes,
   onYMode,
   ranges,
@@ -512,6 +513,8 @@ export function SignalChart({
   hasReadout?: boolean;
   readRange?: { first: number; last: number } | null;
   readCount?: number;
+  /// True when a quick search or advanced filter hides every lane.
+  filtered?: boolean;
   /// Value-axis policy per signal; missing entries are Auto. Overlay stays
   /// normalized.
   yModes?: Record<string, ChartYMode>;
@@ -781,11 +784,17 @@ export function SignalChart({
         ctx.fillStyle = colors.signalEmpty;
         ctx.font = "11px 'Segoe UI', sans-serif";
         ctx.textAlign = "center";
-        ctx.fillText("No signals subscribed", width / 2, height / 2 - 2);
+        ctx.fillText(
+          filtered ? "No lanes match the filter" : "No signals subscribed",
+          width / 2,
+          height / 2 - 2,
+        );
         ctx.fillStyle = colors.signalHint;
         ctx.font = "9px 'Segoe UI', sans-serif";
         ctx.fillText(
-          "Open a project or add signals with + Signals above",
+          filtered
+            ? "Clear or adjust the quick search and funnel filter"
+            : "Open a project or add signals with + Signals above",
           width / 2,
           height / 2 + 14,
         );

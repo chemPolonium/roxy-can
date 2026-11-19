@@ -103,7 +103,12 @@ function TraceRow({
     .filter(Boolean)
     .join(" ");
   return (
-    <tr class={classes} onClick={onSelect} onContextMenu={onMenu}>
+    <tr
+      class={classes}
+      title="Click to select · right-click for cursors and analysis"
+      onClick={onSelect}
+      onContextMenu={onMenu}
+    >
       {visible.map((id) => {
         switch (id) {
           case "time":
@@ -172,6 +177,7 @@ export function TraceTable({
   title,
   tools,
   empty,
+  filtered = false,
   onQuery,
   onChartCursor,
   onSetChartCursor,
@@ -197,6 +203,8 @@ export function TraceTable({
   tools?: ComponentChildren;
   /// Replaces the plain "No frames yet" state, e.g. with workspace actions.
   empty?: ComponentChildren;
+  /// Distinguishes an empty bus from a filter that hid every frame.
+  filtered?: boolean;
   onQuery?: (text: string) => void;
   onChartCursor?: (tUs: number) => void;
   onSetChartCursor?: (slot: "A" | "B", tUs: number) => void;
@@ -531,8 +539,12 @@ export function TraceTable({
         {head}
         {empty ?? (
           <div class="empty">
-            <strong>No frames yet</strong>
-            <span>Start the simulation or clear the filter.</span>
+            <strong>{filtered ? "No matching frames" : "No frames yet"}</strong>
+            <span>
+              {filtered
+                ? "Adjust or clear the filter to see more frames."
+                : "Start a measurement or open a log to see traffic."}
+            </span>
           </div>
         )}
       </>

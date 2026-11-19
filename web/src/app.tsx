@@ -560,7 +560,12 @@ export function App() {
     name: string;
   } | null>(null);
   const [pageConfirmDelete, setPageConfirmDelete] = useState<string | null>(null);
+  const [pageOverflow, setPageOverflow] = useState({
+    left: false,
+    right: false,
+  });
   const pageMenuRef = useRef<HTMLDivElement>(null);
+  const pageSwitchRef = useRef<HTMLDivElement>(null);
   const pageImportInput = useRef<HTMLInputElement>(null);
   // Panel pages only enter the project on Save, so their edits are dirty even
   // when the core's project flag is still clean.
@@ -578,8 +583,7 @@ export function App() {
   const [localRecentProjects, setLocalRecentProjects] = useState<string[]>(
     loadLocalRecentProjects,
   );
-  const [clearArmed, setClearArmed] = useState(false);
-  const [messageClearArmed, setMessageClearArmed] = useState(false);
+  const [armedClear, setArmedClear] = useState<string | null>(null);
   const [allMessagesExpanded, setAllMessagesExpanded] = useState(false);
   const [replayStepMs, setReplayStepMs] = useState(100);
   const [replayForS, setReplayForS] = useState(5);
@@ -954,16 +958,10 @@ export function App() {
   }, [state?.projectPath]);
 
   useEffect(() => {
-    if (!clearArmed) return;
-    const timer = window.setTimeout(() => setClearArmed(false), 3000);
+    if (!armedClear) return;
+    const timer = window.setTimeout(() => setArmedClear(null), 3000);
     return () => window.clearTimeout(timer);
-  }, [clearArmed]);
-
-  useEffect(() => {
-    if (!messageClearArmed) return;
-    const timer = window.setTimeout(() => setMessageClearArmed(false), 3000);
-    return () => window.clearTimeout(timer);
-  }, [messageClearArmed]);
+  }, [armedClear]);
 
   // Transport changes deserve a message even though the status line keeps
   // showing the bus state rather than the command result.
@@ -1073,6 +1071,54 @@ export function App() {
       ?.querySelector<HTMLButtonElement>("button:not(:disabled)")
       ?.focus();
   }, [runModeOpen]);
+
+  const syncPageOverflow = () => {
+    const el = pageSwitchRef.current;
+    if (!el) {
+      setPageOverflow({ left: false, right: false });
+      return;
+    }
+    const left = el.scrollLeft > 1;
+    const right = el.scrollLeft + el.clientWidth < el.scrollWidth - 1;
+    setPageOverflow((old) =>
+      old.left === left && old.right === right ? old : { left, right },
+    );
+  };
+
+  useEffect(() => {
+    const el = pageSwitchRef.current;
+    if (!el) return;
+    syncPageOverflow();
+    const onScroll = () => syncPageOverflow();
+    el.addEventListener("scroll", onScroll, { passive: true });
+    const observer = new ResizeObserver(syncPageOverflow);
+    observer.observe(el);
+    window.addEventListener("resize", syncPageOverflow);
+    return () => {
+      el.removeEventListener("scroll", onScroll);
+      observer.disconnect();
+      window.removeEventListener("resize", syncPageOverflow);
+    };
+  }, []);
+
+  useEffect(() => {
+    const el = pageSwitchRef.current;
+    if (!el) return;
+    if (shellMode === "panel") {
+      const active = el.querySelector<HTMLElement>(
+        `[data-page-id="${activePage.id}"]`,
+      );
+      if (active) {
+        const target =
+          active.offsetLeft - (el.clientWidth - active.offsetWidth) / 2;
+        el.scrollTo({ left: Math.max(0, target), behavior: "smooth" });
+      }
+    } else {
+      el.scrollTo({ left: 0, behavior: "smooth" });
+    }
+    const frame = window.requestAnimationFrame(syncPageOverflow);
+    return () => window.cancelAnimationFrame(frame);
+  }, [activePage.id, panelBook.pages.length, pageRename, shellMode]);
 
   useEffect(() => {
     if (!pageMenu) return;
@@ -1342,6 +1388,17 @@ export function App() {
   };
 
   const clearChartCursors = () => setChartCursors([]);
+
+  /// One armed state for every trash-can action: first click arms, second
+  /// click clears, and leaving it alone disarms after three seconds.
+  const armClear = (key: string, action: () => void) => {
+    if (armedClear !== key) {
+      setArmedClear(key);
+      return;
+    }
+    setArmedClear(null);
+    action();
+  };
 
   const saveDerived = (defs: DerivedDef[]) => {
     // Pin the editor's resolution; the core never guesses between same-named
@@ -3453,6 +3510,11 @@ export function App() {
         key={`${bus}:${traceEpoch}`}
         rows={visibleRows}
         filterKey={traceFilterKey}
+        filtered={Boolean(
+          query.trim() ||
+            bus !== "all" ||
+            filterActive(traceFilter),
+        )}
         columns={traceColumns}
         onColumnsChange={setTraceColumns}
         jump={traceJump}
@@ -3486,24 +3548,21 @@ export function App() {
             </button>
             <button
               type="button"
-              class={`mini icon-btn ${clearArmed ? "danger" : ""}`}
+              class={`mini icon-btn ${armedClear === "trace" ? "danger" : ""}`}
               disabled={!canControl || traceRows.length === 0}
               title={
-                clearArmed
+                armedClear === "trace"
                   ? "Click again to clear the visible trace"
                   : "Clear the visible trace; measurement keeps running"
               }
-              aria-label={clearArmed ? "Confirm clear trace" : "Clear trace"}
-              onClick={() => {
-                if (!clearArmed) {
-                  setClearArmed(true);
-                  return;
-                }
-                setClearArmed(false);
-                void run({ type: "clear_trace" });
-              }}
+              aria-label={
+                armedClear === "trace" ? "Confirm clear trace" : "Clear trace"
+              }
+              onClick={() =>
+                armClear("trace", () => void run({ type: "clear_trace" }))
+              }
             >
-              <UiIcon name={clearArmed ? "check" : "trash"} />
+              <UiIcon name={armedClear === "trace" ? "check" : "trash"} />
             </button>
             <ColumnsMenu
               columns={traceColumns}
@@ -3640,28 +3699,25 @@ export function App() {
             </button>
             <button
               type="button"
-              class={`mini icon-btn message-clear ${messageClearArmed ? "danger" : ""}`}
+              class={`mini icon-btn message-clear ${armedClear === "messages" ? "danger" : ""}`}
               disabled={mainMessages.length === 0}
               title={
-                messageClearArmed
+                armedClear === "messages"
                   ? "Click again to reset message counters"
                   : "Reset message counters; Trace data is kept"
               }
               aria-label={
-                messageClearArmed
+                armedClear === "messages"
                   ? "Confirm reset message counters"
                   : "Reset message counters"
               }
-              onClick={() => {
-                if (!messageClearArmed) {
-                  setMessageClearArmed(true);
-                  return;
-                }
-                setMessageClearArmed(false);
-                void run({ type: "clear_messages" });
-              }}
+              onClick={() =>
+                armClear("messages", () =>
+                  void run({ type: "clear_messages" }),
+                )
+              }
             >
-              <UiIcon name={messageClearArmed ? "check" : "trash"} />
+              <UiIcon name={armedClear === "messages" ? "check" : "trash"} />
             </button>
             <button
               type="button"
@@ -3785,12 +3841,22 @@ export function App() {
               {chartCursors.length > 0 && (
                 <button
                   type="button"
-                  class="mini icon-btn"
-                  title="Remove all time cursors"
-                  aria-label="Clear cursors"
-                  onClick={clearChartCursors}
+                  class={`mini icon-btn ${armedClear === "cursors" ? "danger" : ""}`}
+                  title={
+                    armedClear === "cursors"
+                      ? "Click again to remove all time cursors"
+                      : "Remove all time cursors"
+                  }
+                  aria-label={
+                    armedClear === "cursors"
+                      ? "Confirm clear cursors"
+                      : "Clear cursors"
+                  }
+                  onClick={() => armClear("cursors", clearChartCursors)}
                 >
-                  <UiIcon name="trash" />
+                  <UiIcon
+                    name={armedClear === "cursors" ? "check" : "trash"}
+                  />
                 </button>
               )}
               <button
@@ -3881,6 +3947,7 @@ export function App() {
             hasReadout={visibleReadSeries.length > 0}
             readRange={readRange}
             readCount={visibleReadSeries.length}
+            filtered={filtered}
             showCursorTools={false}
             exportRef={chartExportRef}
           />
@@ -3953,13 +4020,23 @@ export function App() {
             </button>
             <button
               type="button"
-              class="mini icon-btn"
+              class={`mini icon-btn ${armedClear === "monitor" ? "danger" : ""}`}
               disabled={!(state?.monitor.length ?? 0)}
-              title="Clear watched signals"
-              aria-label="Clear watched signals"
-              onClick={() => void run({ type: "clear_monitor" })}
+              title={
+                armedClear === "monitor"
+                  ? "Click again to clear all watched signals"
+                  : "Clear watched signals"
+              }
+              aria-label={
+                armedClear === "monitor"
+                  ? "Confirm clear watched signals"
+                  : "Clear watched signals"
+              }
+              onClick={() =>
+                armClear("monitor", () => void run({ type: "clear_monitor" }))
+              }
             >
-              <UiIcon name="trash" />
+              <UiIcon name={armedClear === "monitor" ? "check" : "trash"} />
             </button>
           </>
         ),
@@ -4022,13 +4099,23 @@ export function App() {
             </button>
             <button
               type="button"
-              class="mini icon-btn"
+              class={`mini icon-btn ${armedClear === "data" ? "danger" : ""}`}
               disabled={!(state?.data.length ?? 0)}
-              title="Clear tracked signals"
-              aria-label="Clear tracked signals"
-              onClick={() => void run({ type: "clear_data" })}
+              title={
+                armedClear === "data"
+                  ? "Click again to clear all tracked signals"
+                  : "Clear tracked signals"
+              }
+              aria-label={
+                armedClear === "data"
+                  ? "Confirm clear tracked signals"
+                  : "Clear tracked signals"
+              }
+              onClick={() =>
+                armClear("data", () => void run({ type: "clear_data" }))
+              }
             >
-              <UiIcon name="trash" />
+              <UiIcon name={armedClear === "data" ? "check" : "trash"} />
             </button>
           </>
         ),
@@ -4100,13 +4187,23 @@ export function App() {
             </button>
             <button
               type="button"
-              class="mini icon-btn"
+              class={`mini icon-btn ${armedClear === "state" ? "danger" : ""}`}
               disabled={!(state?.stateRows.length ?? 0)}
-              title="Clear state bands"
-              aria-label="Clear state bands"
-              onClick={() => void run({ type: "clear_state" })}
+              title={
+                armedClear === "state"
+                  ? "Click again to clear all state bands"
+                  : "Clear state bands"
+              }
+              aria-label={
+                armedClear === "state"
+                  ? "Confirm clear state bands"
+                  : "Clear state bands"
+              }
+              onClick={() =>
+                armClear("state", () => void run({ type: "clear_state" }))
+              }
             >
-              <UiIcon name="trash" />
+              <UiIcon name={armedClear === "state" ? "check" : "trash"} />
             </button>
           </>
         ),
@@ -5024,7 +5121,29 @@ export function App() {
             </div>
           </div>
         </div>
-        <div class="view-switch" role="group" aria-label="Workspace and panel pages">
+        <div class="view-switch-shell">
+          {pageOverflow.left && (
+            <button
+              type="button"
+              class="page-scroll"
+              title="Scroll Panel pages left"
+              aria-label="Scroll Panel pages left"
+              onClick={() =>
+                pageSwitchRef.current?.scrollBy({
+                  left: -120,
+                  behavior: "smooth",
+                })
+              }
+            >
+              ‹
+            </button>
+          )}
+          <div
+            ref={pageSwitchRef}
+            class="view-switch"
+            role="group"
+            aria-label="Workspace and panel pages"
+          >
           <button
             type="button"
             class={shellMode !== "panel" ? "on" : ""}
@@ -5063,6 +5182,7 @@ export function App() {
               <button
                 key={entry.id}
                 type="button"
+                data-page-id={entry.id}
                 class={
                   shellMode === "panel" && entry.id === activePage.id ? "on" : ""
                 }
@@ -5084,6 +5204,23 @@ export function App() {
           >
             +
           </button>
+          </div>
+          {pageOverflow.right && (
+            <button
+              type="button"
+              class="page-scroll"
+              title="Scroll Panel pages right"
+              aria-label="Scroll Panel pages right"
+              onClick={() =>
+                pageSwitchRef.current?.scrollBy({
+                  left: 120,
+                  behavior: "smooth",
+                })
+              }
+            >
+              ›
+            </button>
+          )}
         </div>
         <div class="actions">
           {shellMode === "panel" ? (

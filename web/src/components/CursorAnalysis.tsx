@@ -119,7 +119,10 @@ export function CursorAnalysis({
       </div>
       <div class="cursor-analysis-body">
         {series.length === 0 && (
-          <div class="cursor-analysis-empty">No signals selected</div>
+          <div class="cursor-analysis-empty">
+            <strong>No signals selected</strong>
+            <span>Add or Read a signal from the Signals picker.</span>
+          </div>
         )}
         {series.map((signal) => {
           const last = signal.points[signal.points.length - 1];

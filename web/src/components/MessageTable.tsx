@@ -133,11 +133,13 @@ export function MessageTable({
     if (empty && !filtered) return <>{empty}</>;
     return (
       <div class="empty">
-        <strong>{filtered ? "No matching messages" : "No messages seen"}</strong>
+        <strong>
+          {filtered ? "No matching messages" : "No messages yet"}
+        </strong>
         <span>
           {filtered
-            ? "Try a different bus, name or id."
-            : "Traffic will appear here once the bus runs."}
+            ? "Adjust or clear the bus, name or id filter."
+            : "Start a measurement or open a log to see traffic."}
         </span>
       </div>
     );
@@ -303,6 +305,13 @@ export function MessageTable({
               <Fragment key={message.key}>
                 <tr
                   class={`message-row ${expandable ? "expandable" : ""}`}
+                  title={
+                    expandable
+                      ? open
+                        ? "Click to hide decoded signals"
+                        : "Click to show decoded signals"
+                      : "No decoded signals for this message"
+                  }
                   onClick={() => toggle(message)}
                 >
                   {showBus && <td>{message.busName}</td>}

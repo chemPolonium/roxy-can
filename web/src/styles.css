@@ -364,6 +364,14 @@ select:disabled {
   min-width: 34px;
 }
 
+.view-switch-shell {
+  display: flex;
+  flex: 0 1 auto;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+}
+
 .view-switch {
   display: flex;
   flex: 0 0 auto;
@@ -377,11 +385,30 @@ select:disabled {
   scrollbar-width: none;
 }
 
+.page-scroll {
+  flex: 0 0 auto;
+  width: 18px;
+  min-width: 18px;
+  height: 24px;
+  padding: 0;
+  border: 1px solid var(--line);
+  background: #0c1117;
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 18px;
+}
+
+.page-scroll:hover:not(:disabled) {
+  background: #151d27;
+  color: #d9e3ef;
+}
+
 .view-switch::-webkit-scrollbar {
   height: 0;
 }
 
 .view-switch button {
+  flex: 0 0 auto;
   max-width: 110px;
   padding: 2px 9px;
   overflow: hidden;
@@ -406,6 +433,7 @@ select:disabled {
 }
 
 .view-switch .view-add {
+  flex: 0 0 auto;
   width: 24px;
   padding: 0;
   color: var(--muted);
@@ -3333,6 +3361,17 @@ body.row-resizing {
   padding: 8px;
   color: var(--muted);
   font-size: 10px;
+}
+
+.cursor-analysis-empty strong,
+.cursor-analysis-empty span {
+  display: block;
+}
+
+.cursor-analysis-empty strong {
+  margin-bottom: 2px;
+  color: var(--text, #d9e3ef);
+  font-weight: 600;
 }
 
 .cursor-analysis-row {

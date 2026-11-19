@@ -801,6 +801,17 @@
   background: #ffffff;
 }
 
+[data-theme="light"] .page-scroll {
+  border-color: #d4dbe4;
+  background: #ffffff;
+  color: #526174;
+}
+
+[data-theme="light"] .page-scroll:hover:not(:disabled) {
+  background: #eef3f9;
+  color: #1f2937;
+}
+
 [data-theme="light"] .view-switch button {
   color: #526174;
 }
