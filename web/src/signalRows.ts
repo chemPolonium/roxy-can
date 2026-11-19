@@ -1,3 +1,8 @@
+import {
+  matchesSignalFilter,
+  type SignalFilterNode,
+} from "./signalFilter";
+
 export interface SignalRowFilter {
   name: string;
   bus: string;
@@ -8,17 +13,21 @@ export interface SignalRowFilter {
 }
 
 /// Monitor and Data share one filter: every visible identity field counts,
-/// including the ARXML frame/PDU path.
+/// including the ARXML frame/PDU path; the advanced tree is ANDed on top.
 export function filterSignalRows<T extends SignalRowFilter>(
   rows: T[],
   query: string,
+  filter?: SignalFilterNode,
 ): T[] {
   const needle = query.trim().toLowerCase();
-  if (!needle) return rows;
-  return rows.filter((row) =>
-    [row.name, row.label, row.bus, row.unit, row.frame, row.path].some((text) =>
-      text?.toLowerCase().includes(needle),
-    ),
+  if (!needle && !filter) return rows;
+  return rows.filter(
+    (row) =>
+      (!needle ||
+        [row.name, row.label, row.bus, row.unit, row.frame, row.path].some(
+          (text) => text?.toLowerCase().includes(needle),
+        )) &&
+      (!filter || matchesSignalFilter(filter, row)),
   );
 }
 

@@ -25,6 +25,12 @@ import {
 import { triggerDownload } from "./download";
 import { filterSignalRows } from "./signalRows";
 import {
+  emptySignalFilter,
+  signalFilterActive,
+  type SignalFilterNode,
+} from "./signalFilter";
+import { SignalFilterBar } from "./components/SignalFilterBar";
+import {
   buildTriggerFile,
   parseTriggerFile,
   resolveTriggerFile,
@@ -479,6 +485,12 @@ export function App() {
   const [messageQuery, setMessageQuery] = useState("");
   const [monitorQuery, setMonitorQuery] = useState("");
   const [dataQuery, setDataQuery] = useState("");
+  const [monitorFilter, setMonitorFilter] = useState<SignalFilterNode>(
+    emptySignalFilter,
+  );
+  const [dataFilter, setDataFilter] = useState<SignalFilterNode>(
+    emptySignalFilter,
+  );
   const [writeKind, setWriteKind] = useState("all");
   const [writeQuery, setWriteQuery] = useState("");
   const [savedView] = useState(loadView);
@@ -2735,12 +2747,12 @@ export function App() {
   const monitorRows = state?.monitor ?? [];
   const dataRows = state?.data ?? [];
   const visibleMonitorRows = useMemo(
-    () => filterSignalRows(monitorRows, monitorQuery),
-    [monitorRows, monitorQuery],
+    () => filterSignalRows(monitorRows, monitorQuery, monitorFilter),
+    [monitorRows, monitorQuery, monitorFilter],
   );
   const visibleDataRows = useMemo(
-    () => filterSignalRows(dataRows, dataQuery),
-    [dataRows, dataQuery],
+    () => filterSignalRows(dataRows, dataQuery, dataFilter),
+    [dataRows, dataQuery, dataFilter],
   );
   const stateRows = state?.stateRows ?? [];
   const chartCenterS =
@@ -3716,22 +3728,19 @@ export function App() {
   const renderMonitorPanel = (slot: number) => (
     <>
       {slotHeader(slot, "monitor", {
-        meta: monitorQuery.trim()
-          ? `${visibleMonitorRows.length} / ${monitorRows.length}`
-          : undefined,
+        meta:
+          monitorQuery.trim() || signalFilterActive(monitorFilter)
+            ? `${visibleMonitorRows.length} / ${monitorRows.length}`
+            : undefined,
         actions: (
           <>
-            <input
-              class="panel-filter"
-              type="search"
-              value={monitorQuery}
+            <SignalFilterBar
+              query={monitorQuery}
+              onQuery={setMonitorQuery}
+              filter={monitorFilter}
+              onFilter={setMonitorFilter}
+              label="Filter monitor signals"
               placeholder="Filter signals…"
-              title="Filter by signal, frame, PDU, bus or unit"
-              aria-label="Filter monitor signals"
-              onInput={(event) =>
-                setMonitorQuery((event.target as HTMLInputElement).value)
-              }
-              onKeyDown={filterEscape(() => setMonitorQuery(""))}
             />
             <button
               type="button"
@@ -3802,22 +3811,19 @@ export function App() {
   const renderDataPanel = (slot: number) => (
     <>
       {slotHeader(slot, "data", {
-        meta: dataQuery.trim()
-          ? `${visibleDataRows.length} / ${dataRows.length}`
-          : undefined,
+        meta:
+          dataQuery.trim() || signalFilterActive(dataFilter)
+            ? `${visibleDataRows.length} / ${dataRows.length}`
+            : undefined,
         actions: (
           <>
-            <input
-              class="panel-filter"
-              type="search"
-              value={dataQuery}
+            <SignalFilterBar
+              query={dataQuery}
+              onQuery={setDataQuery}
+              filter={dataFilter}
+              onFilter={setDataFilter}
+              label="Filter data signals"
               placeholder="Filter signals…"
-              title="Filter by signal, frame, PDU, bus or unit"
-              aria-label="Filter data signals"
-              onInput={(event) =>
-                setDataQuery((event.target as HTMLInputElement).value)
-              }
-              onKeyDown={filterEscape(() => setDataQuery(""))}
             />
             <button
               type="button"

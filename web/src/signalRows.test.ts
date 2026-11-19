@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { filterSignalRows, rowPathWithoutName } from "./signalRows";
+import { emptySignalFilter, newSignalRule } from "./signalFilter";
 
 const ROWS = [
   {
@@ -48,5 +49,15 @@ describe("signal row filtering", () => {
     );
     expect(rowPathWithoutName("A / PDU_A / Speed", "Speed")).toBe("A / PDU_A");
     expect(rowPathWithoutName("Other / Frame", "Speed")).toBe("Other / Frame");
+  });
+
+  it("ands the quick query with the advanced filter", () => {
+    const filter = emptySignalFilter();
+    filter.children = [
+      { ...newSignalRule(), field: "bus", op: "equals", value: "CAN1" },
+    ];
+    expect(filterSignalRows(ROWS, "", filter)).toHaveLength(2);
+    expect(filterSignalRows(ROWS, "throttle", filter)).toHaveLength(1);
+    expect(filterSignalRows(ROWS, "speed", filter)).toHaveLength(1);
   });
 });
