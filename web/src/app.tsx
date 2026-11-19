@@ -140,6 +140,7 @@ import {
   saveTraceColumns,
 } from "./traceLayout";
 import {
+  activePanelPage,
   addPanelPageFromFile,
   defaultPanelBook,
   exportPanelFile,
@@ -148,6 +149,7 @@ import {
   panelSetpointTarget,
   parsePanelBook,
   parsePanelHex,
+  selectPanelPage,
   type PanelBook,
   type PanelButton,
   type PanelFrameSend,
@@ -483,6 +485,7 @@ export function App() {
   const [panelBook, setPanelBook] = useState<PanelBook>(
     savedView.panelBook ?? defaultPanelBook(),
   );
+  const activePage = activePanelPage(panelBook);
   // Panel pages only enter the project on Save, so their edits are dirty even
   // when the core's project flag is still clean.
   const [panelDirty, setPanelDirty] = useState(false);
@@ -4169,7 +4172,8 @@ export function App() {
     setMaximizedSlot(null);
   };
 
-  const showPanelPage = () => {
+  const showPanelPage = (id: string) => {
+    updatePanelBook(selectPanelPage(panelBook, id));
     setShellMode("panel");
     setMaximizedSlot(null);
     setExplorerOpen(false);
@@ -4676,7 +4680,7 @@ export function App() {
             </div>
           </div>
         </div>
-        <div class="view-switch" role="group" aria-label="Workspace">
+        <div class="view-switch" role="group" aria-label="Workspace and panel pages">
           <button
             type="button"
             class={shellMode !== "panel" ? "on" : ""}
@@ -4684,13 +4688,19 @@ export function App() {
           >
             Standard
           </button>
-          <button
-            type="button"
-            class={shellMode === "panel" ? "on" : ""}
-            onClick={showPanelPage}
-          >
-            Panel
-          </button>
+          {panelBook.pages.map((entry) => (
+            <button
+              key={entry.id}
+              type="button"
+              class={
+                shellMode === "panel" && entry.id === activePage.id ? "on" : ""
+              }
+              title={entry.name}
+              onClick={() => showPanelPage(entry.id)}
+            >
+              {entry.name}
+            </button>
+          ))}
         </div>
         <div class="actions">
           {shellMode !== "panel" && (

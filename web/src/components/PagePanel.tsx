@@ -1667,6 +1667,7 @@ export function PagePanel({
   const [sizeH, setSizeH] = useState(String(page.height * PAGE_GRID));
   const [addOpen, setAddOpen] = useState(false);
   const addTrigger = useRef<HTMLButtonElement>(null);
+  const pageMenuTrigger = useRef<HTMLButtonElement>(null);
   const addMenu = useRef<HTMLDivElement>(null);
   const [menu, setMenu] = useState<PageMenu | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
@@ -1692,6 +1693,8 @@ export function PagePanel({
     setClipboard(null);
     setSelected(null);
     setRenaming(null);
+    setMenu(null);
+    setAddOpen(false);
     setPageNotice("");
   }, [revision, page.id]);
 
@@ -1977,41 +1980,60 @@ export function PagePanel({
     setRenaming(null);
   };
 
-  const switchPage = (id: string) => {
-    if (drag || id === page.id) return;
-    clearPageUi();
-    onBook(selectPanelPage(book, id));
-  };
-
   const newPage = () => {
     const added = addPanelPage(book);
     clearPageUi();
     onBook(added.book);
   };
 
-  /// Arrow keys move between page tabs; Home/End jump to the ends. The
-  /// rename input keeps its own key handling.
-  const movePageTab = (event: KeyboardEvent) => {
-    if ((event.target as HTMLElement).tagName === "INPUT") return;
-    if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
-    const index = book.pages.findIndex((entry) => entry.id === page.id);
-    if (index < 0 || book.pages.length < 2) return;
-    const last = book.pages.length - 1;
-    const next =
-      event.key === "Home"
-        ? 0
-        : event.key === "End"
-          ? last
-          : (index + (event.key === "ArrowRight" ? 1 : -1) + book.pages.length) %
-            book.pages.length;
-    const target = book.pages[next];
-    if (!target) return;
-    event.preventDefault();
-    if (target.id !== page.id) switchPage(target.id);
-    requestAnimationFrame(() => {
-      document.querySelectorAll<HTMLElement>(".page-tab")[next]?.focus();
+  const openPageMenu = () => {
+    const rect = pageMenuTrigger.current?.getBoundingClientRect();
+    setMenu({
+      kind: "page",
+      id: page.id,
+      x: Math.max(8, rect?.left ?? 8),
+      y: (rect?.bottom ?? 40) + 4,
     });
   };
+
+  // ←/→ walk the Panel pages even though the tabs now live in the top
+  // switch. Typing, menus and dialogs keep their own key handling.
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) {
+        return;
+      }
+      const tag = (event.target as HTMLElement).tagName;
+      if (
+        tag === "INPUT" ||
+        tag === "TEXTAREA" ||
+        tag === "SELECT" ||
+        document.querySelector(".modal-backdrop, .trace-menu, .app-menu")
+      ) {
+        return;
+      }
+      const index = book.pages.findIndex((entry) => entry.id === page.id);
+      if (index < 0 || book.pages.length < 2) return;
+      const last = book.pages.length - 1;
+      const next =
+        event.key === "Home"
+          ? 0
+          : event.key === "End"
+            ? last
+            : (index + (event.key === "ArrowRight" ? 1 : -1) + book.pages.length) %
+              book.pages.length;
+      const target = book.pages[next];
+      if (!target) return;
+      event.preventDefault();
+      setSelected(null);
+      setHistory(EMPTY_HISTORY);
+      setClipboard(null);
+      setRenaming(null);
+      onBook(selectPanelPage(book, target.id));
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [book, page.id, onBook]);
 
   const copyPageById = (id: string) => {
     const copy = duplicatePanelPage(book, id);
@@ -2509,91 +2531,46 @@ export function PagePanel({
         }}
       />
       <div class={`panel-head ${editing ? "editing" : ""}`}>
-        <div class={`page-tabs ${book.pages.length === 1 ? "single" : ""}`}>
-          <div
-            class="page-tab-list"
-            role="tablist"
-            aria-label="Panel pages"
-            onKeyDown={movePageTab}
+        {editing && (
+          <button
+            ref={pageMenuTrigger}
+            type="button"
+            class="mini icon-mini page-menu-button"
+            title="Page actions"
+            aria-label="Page actions"
+            aria-haspopup="menu"
+            aria-expanded={menu?.kind === "page"}
+            onClick={openPageMenu}
           >
-            {book.pages.map((entry) =>
-              renaming?.id === entry.id ? (
-                <input
-                  class="page-tab-rename"
-                  autoFocus
-                  value={renaming.name}
-                  maxLength={40}
-                  onInput={(event) =>
-                    setRenaming({
-                      id: entry.id,
-                      name: (event.target as HTMLInputElement).value,
-                    })
-                  }
-                  onBlur={commitRename}
-                  onKeyDown={(event) => {
-                    if (event.key === "Enter") {
-                      event.preventDefault();
-                      commitRename();
-                    } else if (event.key === "Escape") {
-                      event.preventDefault();
-                      event.stopPropagation();
-                      renameCanceled.current = true;
-                      setRenaming(null);
-                    }
-                  }}
-                />
-              ) : (
-                <button
-                  type="button"
-                  role="tab"
-                  aria-selected={entry.id === page.id}
-                  class={`page-tab ${entry.id === page.id ? "on" : ""}`}
-                  key={entry.id}
-                  title={
-                    editing
-                      ? "Double-click to rename · right-click for page actions"
-                      : entry.name
-                  }
-                  onClick={() => switchPage(entry.id)}
-                  onDblClick={() => {
-                    if (editing) {
-                      renameCanceled.current = false;
-                      setRenaming({ id: entry.id, name: entry.name });
-                    }
-                  }}
-                  onContextMenu={(event) => {
-                    if (!editing) return;
-                    event.preventDefault();
-                    if (entry.id !== page.id) switchPage(entry.id);
-                    const rect = event.currentTarget.getBoundingClientRect();
-                    setMenu({
-                      kind: "page",
-                      id: entry.id,
-                      // The keyboard context-menu key reports 0,0; anchor to
-                      // the tab so the menu still lands next to it.
-                      x: event.clientX || rect.left,
-                      y: event.clientY || rect.bottom + 4,
-                    });
-                  }}
-                >
-                  {entry.name}
-                </button>
-              ),
-            )}
-          </div>
-          {editing && (
-            <div class="page-tab-actions">
-              <button
-                type="button"
-                class="mini"
-                title="New page"
-                onClick={newPage}
-              >
-                +
-              </button>
-            </div>
-          )}
-        </div>
+            ⋯
+          </button>
+        )}
+        {renaming && (
+          <input
+            class="page-tab-rename"
+            autoFocus
+            value={renaming.name}
+            maxLength={40}
+            onInput={(event) =>
+              setRenaming({
+                id: renaming.id,
+                name: (event.target as HTMLInputElement).value,
+              })
+            }
+            onBlur={commitRename}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") {
+                event.preventDefault();
+                commitRename();
+              } else if (event.key === "Escape") {
+                event.preventDefault();
+                event.stopPropagation();
+                renameCanceled.current = true;
+                setRenaming(null);
+              }
+            }}
+          />
+        )}
         <span class="meta">
           {page.width * PAGE_GRID}×{page.height * PAGE_GRID} · {PAGE_GRID}px grid
         </span>
@@ -3024,6 +3001,17 @@ export function PagePanel({
           )}
           {menu.kind === "page" && (
             <>
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  setMenu(null);
+                  newPage();
+                }}
+              >
+                New page
+              </button>
+              <div class="page-menu-sep" role="separator" />
               <button
                 type="button"
                 role="menuitem"

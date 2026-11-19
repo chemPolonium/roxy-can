@@ -368,20 +368,31 @@ select:disabled {
   display: flex;
   flex: 0 0 auto;
   gap: 2px;
+  max-width: min(340px, 46vw);
   padding: 2px;
+  overflow-x: auto;
   border: 1px solid var(--line);
   border-radius: 4px;
   background: #0c1117;
+  scrollbar-width: none;
+}
+
+.view-switch::-webkit-scrollbar {
+  height: 0;
 }
 
 .view-switch button {
+  max-width: 110px;
   padding: 2px 9px;
+  overflow: hidden;
   border: 0;
   border-radius: 3px;
   background: transparent;
   color: var(--muted);
   font-size: 11px;
   line-height: 18px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .view-switch button:hover:not(:disabled):not(.on) {
@@ -1396,71 +1407,11 @@ body.col-resizing {
   background: #090e14;
 }
 
-.page-tabs {
-  display: flex;
-  flex: 0 1 auto;
-  align-items: center;
-  justify-content: flex-start;
-  gap: 6px;
-  min-width: 0;
-  overflow: hidden;
-}
-
-.page-tab-list {
-  display: flex;
-  flex: 0 1 auto;
-  gap: 2px;
-  min-width: 0;
-  max-width: 100%;
-  overflow-x: auto;
-  scrollbar-width: none;
-}
-
-.page-tab-list::-webkit-scrollbar {
-  width: 0;
-  height: 0;
-}
-
-.page-tab {
+.page-menu-button {
   flex: 0 0 auto;
-  padding: 3px 9px;
-  border: 0;
-  border-radius: 3px;
-  background: transparent;
-  color: var(--muted);
-  font-size: 11px;
-  white-space: nowrap;
-}
-
-.page-tab:hover:not(:disabled):not(.on) {
-  background: rgb(255 255 255 / 6%);
-  color: #d9e3ef;
-}
-
-.page-tab.on {
-  background: var(--accent-soft);
-  color: #cfe7ff;
-}
-
-/* A one-page book needs no tab chrome: the page name is the header title.
-   Real tabs only appear once there is something to switch between. */
-.page-tabs.single .page-tab {
-  padding-right: 0;
-  padding-left: 0;
-  border-radius: 0;
-  background: transparent;
-  color: inherit;
-  font-weight: 600;
-}
-
-.page-tabs.single .page-tab.on {
-  background: transparent;
-  color: inherit;
-}
-
-.page-tabs.single .page-tab:hover:not(:disabled) {
-  background: transparent;
-  color: var(--accent);
+  width: 24px;
+  padding: 0;
+  font-size: 14px;
 }
 
 .page-tab-rename {
@@ -1468,12 +1419,6 @@ body.col-resizing {
   height: 22px;
   padding: 0 6px;
   font-size: 11px;
-}
-
-.page-tab-actions {
-  display: flex;
-  flex: 0 0 auto;
-  gap: 4px;
 }
 
 .page-suggest {

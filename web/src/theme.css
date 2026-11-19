@@ -821,20 +821,6 @@
   background: #edf1f6;
 }
 
-[data-theme="light"] .page-tab {
-  color: #526174;
-}
-
-[data-theme="light"] .page-tab:hover:not(:disabled):not(.on) {
-  background: rgb(15 23 42 / 5%);
-  color: #1f2937;
-}
-
-[data-theme="light"] .page-tab.on {
-  background: #e3eefc;
-  color: #1557a8;
-}
-
 [data-theme="light"] .page-canvas {
   --page-grid-minor: rgb(15 23 42 / 6%);
   --page-grid-major: rgb(15 23 42 / 12%);

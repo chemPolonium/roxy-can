@@ -17,7 +17,7 @@
 ## 功能
 
 界面是固定的 Web 外壳：Standard 工作区提供 **Focus / Split / Main + side / Quad**
-四种布局，每个槽位用页眉菜单选面板或移动；顶栏 **Standard / Panel** 切换操作页。
+四种布局，每个槽位用页眉菜单选面板或移动；顶栏 **Standard / 页名** 切换工作区与 Panel 页。
 Trace / Messages / Rate / Signals / Monitor / Data / State / Messages stats / Bus load /
 Spec / SOME/IP / Write 都是单实例页面，可放进任意槽位。入口与操作见
 [docs/usage.md](docs/usage.md)。下文的“窗口”指 core 的观测模型，Web 用对应页面呈现。
@@ -26,7 +26,7 @@ Spec / SOME/IP / Write 都是单实例页面，可放进任意槽位。入口与
 - **DBC 解码**：复用报文只解当前那一组；值表显示枚举文本；浮点信号按位模式解码并带类型标记。
 - **帧模型**：经典 CAN、CAN FD（变长载荷至 64 字节、BRS / ESI）、错误帧、远程帧。Trace 的 Flags 列统一给帧类型，错误行与远程行有底色。
 - **观测面板与布局**：Trace、Messages、Messages stats、Rate、Signals、Monitor、Data、State、Bus load、Spec、SOME/IP、Write 都是单实例页面，用页眉菜单放进 Focus / Split / Main + side / Quad 的任意槽位；选一个已在别处的面板会交换两个槽位，Move to 直接移动当前页。Trace/Messages 有独立过滤与选择；Monitor/Data 页眉可按信号、帧、PDU 或总线过滤，行可拖动排序（行序随工程保存）；Data/Signals 可跨总线勾选信号，Signals 还支持 **Read**（只订阅、不画 lane，游标处读数），信号列表按帧收起，帧头 **All / None** 可批量增删可见信号，曲线一次加入超过 8 条会先确认，页眉相机图标把当前图表导出为带游标注的 PNG；Messages 行可展开查看解码信号（按需解码），长帧可先过滤并只渲染前 50 条。
-- **Panel 操作页**：顶栏 Standard / Panel 切换；多页面标签栏，每页独立画幅与控件；固定画布默认 1280×720、始终显示 8px 网格，Edit 下可新建/复制/重命名/删除页面并改画幅尺寸，用 **+ Add** 菜单添加 Button / Value / Bar / Gauge / Lamp / Toggle / Setpoint 控件，拖动/缩放吸附网格；Button 的 **On click** 二选一——**Send message**（发一条 CAN / FlexRay / Ethernet / SOME/IP 报文；已知帧可按物理值编码；SOME/IP 按 service/method 字段列表填值）或 **Script action**（`on panel_action("…")`，可带数值参数），Value 只读显示信号/派生/SysVar 并可按升序上限给数字分段染色，Bar / Gauge 按 min/max 填充并复用同一套色段，Lamp 在源值达到阈值时点亮（颜色可选），Toggle 写 SysVar 0/1，Setpoint 写 SysVar 或 DBC 信号并按所属后端的量程夹取；页面以 `.rxpanel` 文档存进工程文件，打开工程时自动合并回 Panel；也可单独 **Export** / **Import**（严格校验）。**Fullscreen** 覆盖应用外壳但保持浏览器窗口、画布居中不缩放。
+- **Panel 操作页**：顶栏 **Standard / 页名** 同时做模式和页面切换（Standard 后每个 Panel 页一项，两页就是三个标签）；每页独立画幅与控件；固定画布默认 1280×720、始终显示 8px 网格，Edit 下页眉 **⋯** 菜单新建/复制/重命名/删除页面并改画幅尺寸，用 **+ Add** 菜单添加 Button / Value / Bar / Gauge / Lamp / Toggle / Setpoint 控件，拖动/缩放吸附网格；Button 的 **On click** 二选一——**Send message**（发一条 CAN / FlexRay / Ethernet / SOME/IP 报文；已知帧可按物理值编码；SOME/IP 按 service/method 字段列表填值）或 **Script action**（`on panel_action("…")`，可带数值参数），Value 只读显示信号/派生/SysVar 并可按升序上限给数字分段染色，Bar / Gauge 按 min/max 填充并复用同一套色段，Lamp 在源值达到阈值时点亮（颜色可选），Toggle 写 SysVar 0/1，Setpoint 写 SysVar 或 DBC 信号并按所属后端的量程夹取；页面以 `.rxpanel` 文档存进工程文件，打开工程时自动合并回 Panel；也可单独 **Export** / **Import**（严格校验）。**Fullscreen** 覆盖应用外壳但保持浏览器窗口、画布居中不缩放。
 - **Trace**：虚拟滚动（几十万行的过滤结果照样流畅），payload 字节搜索、信号值条件（`Name>10`）、精确地址（`id:1AB` / `slot:13`）、时间范围、列头排序、右键"Filter this ID"、行游标 A/B 与 Δt 读数、点一行选中后用 ↑/↓ 走行、Ctrl+C 复制；窄槽位自动隐藏低优先列。
 - **总线负载与规格监视**：按总线给线上一帧占时加权的负载与帧率（1 s 滚动窗）、60 s 负载曲线、错误帧计数；Specification 把实测流量与数据库声明逐条对账——Unknown / Dlc / Cycle / Missing 四类判定，容差与宽限可调，可导出 CSV。
 - **Interactive Generator（节点中心）**：DBC 报文按声明周期发送，按信号拖物理值或直接改 hex；每个信号可添加 Ramp / Sine / Step / Random / Triangle / Counter 激励。条目在 **Setup → Generator…** 里按总线编辑，行上标出所属 DBC 节点；新建默认不发送，发不发逐条由你决定，信号激励用可搜索列表添加。
