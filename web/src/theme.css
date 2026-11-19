@@ -126,8 +126,7 @@
   color: #1557a8;
 }
 
-[data-theme="light"] .replay-pos,
-[data-theme="light"] .status-text strong {
+[data-theme="light"] .replay-pos {
   color: #334155;
 }
 
@@ -261,7 +260,6 @@
 }
 
 [data-theme="light"] .badge,
-[data-theme="light"] .gen-badge,
 [data-theme="light"] .trig-action {
   border-color: #a9c8ea;
   color: #1557a8;
@@ -451,7 +449,6 @@
   color: #1f2937;
 }
 
-[data-theme="light"] .bus-rates,
 [data-theme="light"] .gen-node {
   color: #5d6a7a;
 }
@@ -593,20 +590,6 @@
   background: #eef2f7;
 }
 
-[data-theme="light"] .script-complete {
-  background: #ffffff;
-  border-color: #cdd8e4;
-  box-shadow: 0 8px 22px rgb(15 31 51 / 18%);
-}
-
-[data-theme="light"] .script-complete-item {
-  color: #243244;
-}
-
-[data-theme="light"] .script-complete-item.on {
-  background: #e3eefc;
-}
-
 [data-theme="light"] .script-signature {
   background: #ffffff;
   border-color: #cdd8e4;
@@ -616,16 +599,6 @@
 
 [data-theme="light"] .script-signature .on {
   color: #1f2937;
-}
-
-[data-theme="light"] .script-find {
-  background: #f7f9fb;
-  border-color: #d5dce5;
-}
-
-[data-theme="light"] .script-issue-line {
-  background: rgb(194 56 56 / 8%);
-  border-bottom-color: rgb(194 56 56 / 45%);
 }
 
 [data-theme="light"] .script-issue {
@@ -657,68 +630,6 @@
 
 [data-theme="light"] .script-empty.bad {
   color: #b42318;
-}
-
-[data-theme="light"] .script-highlight,
-[data-theme="light"] .script-textarea,
-[data-theme="light"] .script-textarea.composing {
-  border-color: #d4dbe4;
-}
-
-[data-theme="light"] .script-highlight,
-[data-theme="light"] .script-textarea.composing,
-[data-theme="light"] .script-log {
-  background: #f5f7fa;
-}
-
-[data-theme="light"] .script-highlight,
-[data-theme="light"] .script-textarea.composing {
-  color: #26313f;
-}
-
-[data-theme="light"] .script-textarea {
-  caret-color: #1f2937;
-}
-
-[data-theme="light"] .script-textarea::placeholder {
-  color: #8a95a5;
-}
-
-[data-theme="light"] .tok-comment {
-  color: #7a8796;
-}
-
-[data-theme="light"] .tok-string,
-[data-theme="light"] .gen-block-row em {
-  color: #1f7a52;
-}
-
-[data-theme="light"] .tok-number {
-  color: #9a5b00;
-}
-
-[data-theme="light"] .script-gutter {
-  background: #eef2f7;
-  border-color: #d4dbe4;
-  color: #8a95a5;
-}
-
-[data-theme="light"] .script-gutter .bp {
-  background: #d64545;
-}
-
-[data-theme="light"] .script-gutter .cur {
-  background: rgb(154 107 0 / 12%);
-}
-
-[data-theme="light"] .script-debug-line {
-  background: rgb(154 107 0 / 10%);
-  border-bottom-color: rgb(154 107 0 / 40%);
-}
-
-[data-theme="light"] .script-debug-bar {
-  background: #f5f7fa;
-  border-color: #d4dbe4;
 }
 
 [data-theme="light"] .script-debug-bar.on {
@@ -786,14 +697,6 @@
 
 [data-theme="light"] .script-test:hover {
   background: rgb(15 23 42 / 5%);
-}
-
-[data-theme="light"] .tok-keyword {
-  color: #1f5fbf;
-}
-
-[data-theme="light"] .tok-fn {
-  color: #7b3fbf;
 }
 
 [data-theme="light"] .view-switch {

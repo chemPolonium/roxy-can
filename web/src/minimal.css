@@ -258,14 +258,12 @@ select {
 :root .gen-body,
 :root .trig-body,
 :root .scripts-body,
-:root .sysvars-body,
 :root .state-rule-body,
 :root .event-body,
 :root .session-body {
   padding: 8px 10px;
 }
 
-:root .someip-panel,
 :root .spec-panel,
 :root .page-panel {
   min-width: 0;
