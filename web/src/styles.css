@@ -2435,6 +2435,50 @@ body.col-resizing {
   overflow: auto;
 }
 
+.filter-saved-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding-bottom: 7px;
+  margin-bottom: 7px;
+  border-bottom: 1px solid var(--line);
+}
+
+.filter-saved {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 22px;
+  padding: 1px 4px;
+  font-size: 10px;
+}
+
+.filter-saved-row .mini {
+  height: 22px;
+  padding: 0 5px;
+  font-size: 9.5px;
+}
+
+.filter-save-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-bottom: 6px;
+}
+
+.filter-save-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 22px;
+  padding: 1px 4px;
+  font-size: 10px;
+}
+
+.filter-save-error {
+  margin-bottom: 5px;
+  color: var(--error);
+  font-size: 10px;
+}
+
 .filter-popover-actions {
   display: flex;
   flex: 0 0 auto;

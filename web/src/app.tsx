@@ -31,6 +31,10 @@ import {
 } from "./signalFilter";
 import { emptyFilterGroup, filterActive, normalizeFilter } from "./filterTree";
 import type { FilterGroup, FilterNode } from "./filterTree";
+import {
+  normalizeFilterLibrary,
+  type SavedFilter,
+} from "./filterLibrary";
 import { FilterBar } from "./components/FilterBar";
 import {
   MESSAGE_FILTER_SPECS,
@@ -213,6 +217,7 @@ interface SavedView {
   cursors: ChartCursor[];
   panelBook?: PanelBook;
   filters?: ViewFilters;
+  filterLibrary?: SavedFilter[];
 }
 
 interface SavedWorkspace extends Partial<SavedView>, LegacyView {
@@ -290,6 +295,8 @@ function normalizeView(
     message: normalizeFilter(rawFilters.message, MESSAGE_FILTER_SPECS),
     trace: normalizeFilter(rawFilters.trace, TRACE_FILTER_SPECS),
   };
+  const hasLibrary = Array.isArray(raw.filterLibrary);
+  const filterLibrary = normalizeFilterLibrary(raw.filterLibrary);
   return {
     shellMode,
     dock: docking,
@@ -300,6 +307,7 @@ function normalizeView(
     cursors,
     panelBook: parsePanelBook(raw.panelBook) ?? defaultPanelBook(),
     ...(hasFilters ? { filters } : {}),
+    ...(hasLibrary ? { filterLibrary } : {}),
   };
 }
 
@@ -506,6 +514,9 @@ export function App() {
   const [messageFilter, setMessageFilter] = useState<FilterNode>(
     () => savedView.filters?.message ?? emptyFilterGroup(),
   );
+  const [filterLibrary, setFilterLibrary] = useState<SavedFilter[]>(
+    () => savedView.filterLibrary ?? [],
+  );
   const [writeKind, setWriteKind] = useState("all");
   const [writeQuery, setWriteQuery] = useState("");
   const [shellMode, setShellMode] = useState<ShellMode>(
@@ -682,6 +693,7 @@ export function App() {
       setMonitorFilter(emptySignalFilter());
       setDataFilter(emptySignalFilter());
       setMessageFilter(emptyFilterGroup());
+      setFilterLibrary([]);
       chartCursorSeq.current = 1;
       return;
     }
@@ -704,6 +716,7 @@ export function App() {
       setDataFilter(view.filters.data);
       setMessageFilter(view.filters.message);
     }
+    if (view.filterLibrary) setFilterLibrary(view.filterLibrary);
     const columns = parseTraceColumns(saved.traceColumns);
     if (columns) setTraceColumns(columns);
     setMessageColumns(saved.messageColumns);
@@ -841,6 +854,7 @@ export function App() {
             message: messageFilter,
             trace: traceFilter,
           },
+          filterLibrary,
         },
       }).catch(() => {});
     }, 350);
@@ -860,6 +874,7 @@ export function App() {
     dataFilter,
     messageFilter,
     traceFilter,
+    filterLibrary,
     state?.workspaceRev,
   ]);
 
@@ -1099,6 +1114,7 @@ export function App() {
             message: messageFilter,
             trace: traceFilter,
           },
+          filterLibrary,
         }),
       );
     } catch {
@@ -1117,6 +1133,7 @@ export function App() {
     dataFilter,
     messageFilter,
     traceFilter,
+    filterLibrary,
   ]);
 
   useEffect(() => {
@@ -1656,6 +1673,7 @@ export function App() {
           message: messageFilter,
           trace: traceFilter,
         },
+        filterLibrary,
       },
     });
 
@@ -3399,6 +3417,9 @@ export function App() {
               fields={TRACE_FILTER_SPECS}
               label="Filter trace"
               placeholder="Filter id, name, data…"
+              scope="trace"
+              savedFilters={filterLibrary}
+              onSavedFilters={setFilterLibrary}
             />
             <button
               type="button"
@@ -3477,6 +3498,9 @@ export function App() {
               fields={MESSAGE_FILTER_SPECS}
               label="Filter messages"
               placeholder="Filter messages…"
+              scope="message"
+              savedFilters={filterLibrary}
+              onSavedFilters={setFilterLibrary}
             />
             <button
               type="button"
@@ -3766,6 +3790,9 @@ export function App() {
               fields={SIGNAL_FILTER_SPECS}
               label="Filter monitor signals"
               placeholder="Filter signals…"
+              scope="signal"
+              savedFilters={filterLibrary}
+              onSavedFilters={setFilterLibrary}
             />
             <button
               type="button"
@@ -3850,6 +3877,9 @@ export function App() {
               fields={SIGNAL_FILTER_SPECS}
               label="Filter data signals"
               placeholder="Filter signals…"
+              scope="signal"
+              savedFilters={filterLibrary}
+              onSavedFilters={setFilterLibrary}
             />
             <button
               type="button"

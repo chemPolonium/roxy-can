@@ -225,6 +225,13 @@ roxy-can -h                               完整帮助
 - 页眉搜索框按信号名、帧、PDU、总线或单位过滤（F2 聚焦、Esc 清空），过滤时显示匹配数；旁边的漏斗打开同一套高级 filter（AND/OR/NOT、字段 contains/equals 与否定），和搜索框叠加，条件随工程保存；第二行显示 `总线 · Frame / PDU`（信号名已在标题），无描述时退回总线。
 - 行与 Monitor 一样可拖动排序（拖到目标行的上半/下半，插到它前面/后面），行序随工程保存；单行 `x` 删除。
 
+## 过滤器
+
+- Trace / Messages / Monitor / Data 页眉搜索框旁的 **漏斗** 共用同一套 filter：AND / OR 组、NOT、最多三层嵌套；空条件忽略，搜索框和高级 filter 叠加。
+- 字段按面板族区分：Signal 族（Signal/Label/Bus/Frame/PDU/Unit）、Message 族（Name/ID/Kind/Data）、Trace 族（Direction/Name/ID/Data/Kind/Decoded/Time）。操作符为 contains / does not contain / equals / is not；数值字段（如 Trace 的 Time）另有 `=`、`≥`、`≤`、`>`、`<`。
+- **Saved filters**：弹层顶部的下拉列出同族已保存 filter，选中即载入草稿；**Save as…** 起名保存，选中后 **Save** 更新，**Delete** 删除。命名 filter 只作为模板，载入后仍需 **Apply** 才作用到当前面板。
+- 各面板当前高级 filter 与命名 filter 库都随工程保存，并在 `localStorage` 留一份；快速搜索框仍是会话状态。
+
 ## 系统变量
 
 - **Setup → Variables…**：CANoe 式命名空间变量。表里列 namespace、name、实时值（行内可改）、Init、Min、Max、单位/备注。定义随工程保存。

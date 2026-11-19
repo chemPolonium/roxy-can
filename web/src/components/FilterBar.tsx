@@ -14,6 +14,12 @@ import {
   type FilterNode,
   type FilterRule,
 } from "../filterTree";
+import {
+  cloneFilter,
+  savedFilterId,
+  type FilterScope,
+  type SavedFilter,
+} from "../filterLibrary";
 
 interface Props {
   query: string;
@@ -23,6 +29,9 @@ interface Props {
   fields: FilterFieldSpec[];
   label: string;
   placeholder: string;
+  scope: FilterScope;
+  savedFilters: SavedFilter[];
+  onSavedFilters: (filters: SavedFilter[]) => void;
 }
 
 const MAX_GROUP_DEPTH = 3;
@@ -246,13 +255,22 @@ export function FilterBar({
   fields,
   label,
   placeholder,
+  scope,
+  savedFilters,
+  onSavedFilters,
 }: Props) {
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState<FilterNode>(filter);
   const [pos, setPos] = useState({ x: 8, y: 8 });
+  const [selectedId, setSelectedId] = useState("");
+  const [saveOpen, setSaveOpen] = useState(false);
+  const [saveName, setSaveName] = useState("");
+  const [saveError, setSaveError] = useState("");
   const trigger = useRef<HTMLButtonElement>(null);
   const popover = useRef<HTMLDivElement>(null);
   const active = filterRuleCount(filter);
+  const scoped = savedFilters.filter((entry) => entry.scope === scope);
+  const draftCount = filterRuleCount(draft);
 
   useEffect(() => {
     if (!open) return;
@@ -296,6 +314,11 @@ export function FilterBar({
       Math.min((rect?.bottom ?? 40) + 4, window.innerHeight - 368),
     );
     setDraft(filter);
+    setSaveOpen(false);
+    setSaveError("");
+    if (selectedId && !scoped.some((entry) => entry.id === selectedId)) {
+      setSelectedId("");
+    }
     setPos({ x: left, y: top });
     setOpen(true);
   };
@@ -303,6 +326,74 @@ export function FilterBar({
   const apply = () => {
     onFilter(pruneFilter(draft) ?? emptyFilterGroup());
     setOpen(false);
+  };
+
+  const loadSaved = (id: string) => {
+    setSelectedId(id);
+    setSaveError("");
+    const entry = scoped.find((candidate) => candidate.id === id);
+    if (entry) setDraft(cloneFilter(entry.filter));
+  };
+
+  const updateSaved = () => {
+    const entry = scoped.find((candidate) => candidate.id === selectedId);
+    const pruned = pruneFilter(draft);
+    if (!entry || !pruned || pruned.kind !== "group") return;
+    onSavedFilters(
+      savedFilters.map((candidate) =>
+        candidate.id === entry.id
+          ? { ...candidate, filter: cloneFilter(pruned) }
+          : candidate,
+      ),
+    );
+  };
+
+  const beginSave = () => {
+    if (!draftCount) return;
+    if (selectedId && scoped.some((entry) => entry.id === selectedId)) {
+      updateSaved();
+      return;
+    }
+    setSaveError("");
+    setSaveName("");
+    setSaveOpen(true);
+  };
+
+  const saveAsNew = () => {
+    const name = saveName.trim().slice(0, 40);
+    if (!name) {
+      setSaveError("Give this filter a name");
+      return;
+    }
+    if (
+      scoped.some(
+        (entry) => entry.name.toLowerCase() === name.toLowerCase(),
+      )
+    ) {
+      setSaveError("That name is already used");
+      return;
+    }
+    const pruned = pruneFilter(draft);
+    if (!pruned || pruned.kind !== "group") {
+      setSaveError("Add at least one condition first");
+      return;
+    }
+    const entry: SavedFilter = {
+      id: savedFilterId(),
+      name,
+      scope,
+      filter: cloneFilter(pruned),
+    };
+    onSavedFilters([...savedFilters, entry]);
+    setSelectedId(entry.id);
+    setSaveOpen(false);
+    setSaveError("");
+  };
+
+  const deleteSaved = () => {
+    if (!selectedId) return;
+    onSavedFilters(savedFilters.filter((entry) => entry.id !== selectedId));
+    setSelectedId("");
   };
 
   return (
@@ -361,6 +452,81 @@ export function FilterBar({
             </button>
           </header>
           <div class="filter-popover-body">
+            <div class="filter-saved-row">
+              <select
+                class="filter-saved"
+                aria-label="Saved filters"
+                value={selectedId}
+                onChange={(event) =>
+                  loadSaved((event.target as HTMLSelectElement).value)
+                }
+              >
+                <option value="">Saved filters…</option>
+                {scoped.map((entry) => (
+                  <option key={entry.id} value={entry.id}>
+                    {entry.name}
+                  </option>
+                ))}
+              </select>
+              <button
+                type="button"
+                class="mini"
+                disabled={draftCount === 0}
+                title={
+                  draftCount === 0
+                    ? "Add at least one condition first"
+                    : selectedId
+                      ? "Update this saved filter"
+                      : "Save this filter under a name"
+                }
+                onClick={beginSave}
+              >
+                {selectedId ? "Save" : "Save as…"}
+              </button>
+              <button
+                type="button"
+                class="mini"
+                disabled={!selectedId}
+                title="Delete the selected saved filter"
+                onClick={deleteSaved}
+              >
+                Delete
+              </button>
+            </div>
+            {saveOpen && (
+              <div class="filter-save-row">
+                <input
+                  class="filter-save-name"
+                  autoFocus
+                  value={saveName}
+                  maxLength={40}
+                  placeholder="Filter name"
+                  onInput={(event) =>
+                    setSaveName((event.target as HTMLInputElement).value)
+                  }
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") {
+                      event.preventDefault();
+                      saveAsNew();
+                    } else if (event.key === "Escape") {
+                      event.preventDefault();
+                      setSaveOpen(false);
+                    }
+                  }}
+                />
+                <button type="button" class="mini" onClick={saveAsNew}>
+                  Save
+                </button>
+                <button
+                  type="button"
+                  class="mini"
+                  onClick={() => setSaveOpen(false)}
+                >
+                  Cancel
+                </button>
+              </div>
+            )}
+            {saveError && <div class="filter-save-error">{saveError}</div>}
             <GroupEditor
               group={draft as FilterGroup}
               fields={fields}
