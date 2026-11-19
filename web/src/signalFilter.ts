@@ -1,6 +1,16 @@
-/// One filter grammar for the signal-row panels (Monitor / Data today,
-/// Trace and Messages can adopt the same node shape later). The AST is
-/// deliberately small: AND/OR groups, NOT, and a text rule per row field.
+import {
+  FILTER_OP_LABELS,
+  filterActive,
+  filterRuleCount,
+  matchesFilter,
+  newFilterRule,
+  pruneFilter,
+  type FilterFieldSpec,
+  type FilterGroup,
+  type FilterNode,
+  type FilterOp,
+  type FilterRule,
+} from "./filterTree";
 
 export const SIGNAL_FILTER_FIELDS = [
   "signal",
@@ -12,19 +22,13 @@ export const SIGNAL_FILTER_FIELDS = [
 ] as const;
 
 export type SignalFilterField = (typeof SIGNAL_FILTER_FIELDS)[number];
-export type SignalFilterOp = "contains" | "notContains" | "equals" | "notEquals";
+export type SignalFilterOp = FilterOp;
 
-export interface SignalFilterRule {
-  kind: "rule";
+export interface SignalFilterRule extends FilterRule {
   field: SignalFilterField;
-  op: SignalFilterOp;
-  value: string;
 }
 
-export interface SignalFilterGroup {
-  kind: "group";
-  op: "and" | "or";
-  negate?: boolean;
+export interface SignalFilterGroup extends FilterGroup {
   children: SignalFilterNode[];
 }
 
@@ -48,19 +52,18 @@ export const SIGNAL_FILTER_FIELD_LABELS: Record<SignalFilterField, string> = {
   unit: "Unit",
 };
 
-export const SIGNAL_FILTER_OP_LABELS: Record<SignalFilterOp, string> = {
-  contains: "contains",
-  notContains: "does not contain",
-  equals: "equals",
-  notEquals: "is not",
-};
+export const SIGNAL_FILTER_SPECS: FilterFieldSpec[] = SIGNAL_FILTER_FIELDS.map(
+  (field) => ({ key: field, label: SIGNAL_FILTER_FIELD_LABELS[field] }),
+);
+
+export { FILTER_OP_LABELS };
 
 export function emptySignalFilter(): SignalFilterGroup {
   return { kind: "group", op: "and", children: [] };
 }
 
 export function newSignalRule(): SignalFilterRule {
-  return { kind: "rule", field: "signal", op: "contains", value: "" };
+  return { ...newFilterRule("signal"), field: "signal" };
 }
 
 export function newSignalGroup(): SignalFilterGroup {
@@ -84,58 +87,25 @@ function fieldValue(row: SignalFilterRow, field: SignalFilterField): string {
   }
 }
 
-function matchesRule(rule: SignalFilterRule, row: SignalFilterRow): boolean {
-  const needle = rule.value.trim().toLowerCase();
-  if (!needle) return true;
-  const value = fieldValue(row, rule.field).toLowerCase();
-  const hit = rule.op === "contains" || rule.op === "notContains"
-    ? value.includes(needle)
-    : value === needle;
-  return rule.op === "notContains" || rule.op === "notEquals" ? !hit : hit;
-}
-
-function matchesNode(node: SignalFilterNode, row: SignalFilterRow): boolean {
-  if (node.kind === "rule") return matchesRule(node, row);
-  const hit =
-    node.op === "and"
-      ? node.children.every((child) => matchesNode(child, row))
-      : node.children.some((child) => matchesNode(child, row));
-  return node.negate ? !hit : hit;
-}
-
-/// Drops conditions that are still blank, so an unfinished group does not
-/// hide every row. Null means "no advanced filter at all".
 export function pruneSignalFilter(
-  node: SignalFilterNode,
-): SignalFilterNode | null {
-  if (node.kind === "rule") {
-    return node.value.trim() ? node : null;
-  }
-  const children = node.children
-    .map(pruneSignalFilter)
-    .filter((child): child is SignalFilterNode => child !== null);
-  if (children.length === 0) return null;
-  return { ...node, children };
+  node: FilterNode,
+): FilterNode | null {
+  return pruneFilter(node);
 }
 
-export function signalFilterActive(node: SignalFilterNode): boolean {
-  return pruneSignalFilter(node) !== null;
+export function signalFilterActive(node: FilterNode): boolean {
+  return filterActive(node);
 }
 
-export function signalFilterRuleCount(node: SignalFilterNode): number {
-  const active = pruneSignalFilter(node);
-  if (!active) return 0;
-  const count = (entry: SignalFilterNode): number =>
-    entry.kind === "rule"
-      ? 1
-      : entry.children.reduce((sum, child) => sum + count(child), 0);
-  return count(active);
+export function signalFilterRuleCount(node: FilterNode): number {
+  return filterRuleCount(node);
 }
 
 export function matchesSignalFilter(
-  filter: SignalFilterNode | null,
+  filter: FilterNode | null,
   row: SignalFilterRow,
 ): boolean {
-  const active = filter ? pruneSignalFilter(filter) : null;
-  return active ? matchesNode(active, row) : true;
+  return matchesFilter(filter, (field) =>
+    fieldValue(row, field as SignalFilterField),
+  );
 }

@@ -1,24 +1,24 @@
 import { useEffect, useRef, useState } from "preact/hooks";
 import { UiIcon } from "./icons";
 import {
-  SIGNAL_FILTER_FIELD_LABELS,
-  SIGNAL_FILTER_FIELDS,
-  SIGNAL_FILTER_OP_LABELS,
-  emptySignalFilter,
-  newSignalGroup,
-  newSignalRule,
-  pruneSignalFilter,
-  signalFilterRuleCount,
-  type SignalFilterGroup,
-  type SignalFilterNode,
-  type SignalFilterRule,
-} from "../signalFilter";
+  FILTER_OP_LABELS,
+  emptyFilterGroup,
+  filterRuleCount,
+  newFilterGroup,
+  newFilterRule,
+  pruneFilter,
+  type FilterFieldSpec,
+  type FilterGroup,
+  type FilterNode,
+  type FilterRule,
+} from "../filterTree";
 
 interface Props {
   query: string;
   onQuery: (value: string) => void;
-  filter: SignalFilterNode;
-  onFilter: (filter: SignalFilterNode) => void;
+  filter: FilterNode;
+  onFilter: (filter: FilterNode) => void;
+  fields: FilterFieldSpec[];
   label: string;
   placeholder: string;
 }
@@ -27,11 +27,13 @@ const MAX_GROUP_DEPTH = 3;
 
 function RuleEditor({
   rule,
+  fields,
   onChange,
   onRemove,
 }: {
-  rule: SignalFilterRule;
-  onChange: (next: SignalFilterRule) => void;
+  rule: FilterRule;
+  fields: FilterFieldSpec[];
+  onChange: (next: FilterRule) => void;
   onRemove: () => void;
 }) {
   return (
@@ -43,14 +45,13 @@ function RuleEditor({
         onChange={(event) =>
           onChange({
             ...rule,
-            field: (event.target as HTMLSelectElement)
-              .value as SignalFilterRule["field"],
+            field: (event.target as HTMLSelectElement).value,
           })
         }
       >
-        {SIGNAL_FILTER_FIELDS.map((field) => (
-          <option key={field} value={field}>
-            {SIGNAL_FILTER_FIELD_LABELS[field]}
+        {fields.map((field) => (
+          <option key={field.key} value={field.key}>
+            {field.label}
           </option>
         ))}
       </select>
@@ -62,11 +63,11 @@ function RuleEditor({
           onChange({
             ...rule,
             op: (event.target as HTMLSelectElement)
-              .value as SignalFilterRule["op"],
+              .value as FilterRule["op"],
           })
         }
       >
-        {Object.entries(SIGNAL_FILTER_OP_LABELS).map(([op, label]) => (
+        {Object.entries(FILTER_OP_LABELS).map(([op, label]) => (
           <option key={op} value={op}>
             {label}
           </option>
@@ -99,16 +100,18 @@ function RuleEditor({
 
 function GroupEditor({
   group,
+  fields,
   depth,
   onChange,
   onRemove,
 }: {
-  group: SignalFilterGroup;
+  group: FilterGroup;
+  fields: FilterFieldSpec[];
   depth: number;
-  onChange: (next: SignalFilterGroup) => void;
+  onChange: (next: FilterGroup) => void;
   onRemove?: () => void;
 }) {
-  const setChild = (index: number, next: SignalFilterNode) =>
+  const setChild = (index: number, next: FilterNode) =>
     onChange({
       ...group,
       children: group.children.map((child, at) => (at === index ? next : child)),
@@ -150,7 +153,10 @@ function GroupEditor({
           type="button"
           class="mini"
           onClick={() =>
-            onChange({ ...group, children: [...group.children, newSignalRule()] })
+            onChange({
+              ...group,
+              children: [...group.children, newFilterRule(fields[0]?.key ?? "")],
+            })
           }
         >
           + Rule
@@ -165,7 +171,10 @@ function GroupEditor({
               : "Add a nested group"
           }
           onClick={() =>
-            onChange({ ...group, children: [...group.children, newSignalGroup()] })
+            onChange({
+              ...group,
+              children: [...group.children, newFilterGroup()],
+            })
           }
         >
           + Group
@@ -190,12 +199,14 @@ function GroupEditor({
           {child.kind === "rule" ? (
             <RuleEditor
               rule={child}
+              fields={fields}
               onChange={(next) => setChild(index, next)}
               onRemove={() => removeChild(index)}
             />
           ) : (
             <GroupEditor
               group={child}
+              fields={fields}
               depth={depth + 1}
               onChange={(next) => setChild(index, next)}
               onRemove={() => removeChild(index)}
@@ -208,20 +219,21 @@ function GroupEditor({
 }
 
 /// Header search + the shared AND/OR/NOT signal filter popover.
-export function SignalFilterBar({
+export function FilterBar({
   query,
   onQuery,
   filter,
   onFilter,
+  fields,
   label,
   placeholder,
 }: Props) {
   const [open, setOpen] = useState(false);
-  const [draft, setDraft] = useState<SignalFilterNode>(filter);
+  const [draft, setDraft] = useState<FilterNode>(filter);
   const [pos, setPos] = useState({ x: 8, y: 8 });
   const trigger = useRef<HTMLButtonElement>(null);
   const popover = useRef<HTMLDivElement>(null);
-  const active = signalFilterRuleCount(filter);
+  const active = filterRuleCount(filter);
 
   useEffect(() => {
     if (!open) return;
@@ -270,7 +282,7 @@ export function SignalFilterBar({
   };
 
   const apply = () => {
-    onFilter(pruneSignalFilter(draft) ?? emptySignalFilter());
+    onFilter(pruneFilter(draft) ?? emptyFilterGroup());
     setOpen(false);
   };
 
@@ -313,12 +325,12 @@ export function SignalFilterBar({
           ref={popover}
           class="filter-popover"
           role="dialog"
-          aria-label="Signal filter"
+          aria-label="Advanced filter"
           style={{ left: `${pos.x}px`, top: `${pos.y}px` }}
           onPointerDown={(event) => event.stopPropagation()}
         >
           <header class="filter-popover-head">
-            <strong>Signal filter</strong>
+            <strong>Filter</strong>
             <span class="meta">blank conditions are ignored</span>
             <button
               type="button"
@@ -331,16 +343,14 @@ export function SignalFilterBar({
           </header>
           <div class="filter-popover-body">
             <GroupEditor
-              group={draft as SignalFilterGroup}
+              group={draft as FilterGroup}
+              fields={fields}
               depth={0}
               onChange={setDraft}
             />
           </div>
           <footer class="filter-popover-actions">
-            <button
-              type="button"
-              onClick={() => setDraft(emptySignalFilter())}
-            >
+            <button type="button" onClick={() => setDraft(emptyFilterGroup())}>
               Clear
             </button>
             <span class="spacer" />
@@ -356,3 +366,4 @@ export function SignalFilterBar({
     </div>
   );
 }
+

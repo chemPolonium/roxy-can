@@ -1,7 +1,5 @@
-import {
-  matchesSignalFilter,
-  type SignalFilterNode,
-} from "./signalFilter";
+import { matchesSignalFilter } from "./signalFilter";
+import type { FilterNode } from "./filterTree";
 
 export interface SignalRowFilter {
   name: string;
@@ -17,7 +15,7 @@ export interface SignalRowFilter {
 export function filterSignalRows<T extends SignalRowFilter>(
   rows: T[],
   query: string,
-  filter?: SignalFilterNode,
+  filter?: FilterNode,
 ): T[] {
   const needle = query.trim().toLowerCase();
   if (!needle && !filter) return rows;

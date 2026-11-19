@@ -25,11 +25,17 @@ import {
 import { triggerDownload } from "./download";
 import { filterSignalRows } from "./signalRows";
 import {
+  SIGNAL_FILTER_SPECS,
   emptySignalFilter,
   signalFilterActive,
-  type SignalFilterNode,
 } from "./signalFilter";
-import { SignalFilterBar } from "./components/SignalFilterBar";
+import type { FilterNode } from "./filterTree";
+import { emptyFilterGroup, filterActive } from "./filterTree";
+import { FilterBar } from "./components/FilterBar";
+import {
+  MESSAGE_FILTER_SPECS,
+  matchesMessageFilter,
+} from "./messageFilter";
 import {
   buildTriggerFile,
   parseTriggerFile,
@@ -485,11 +491,14 @@ export function App() {
   const [messageQuery, setMessageQuery] = useState("");
   const [monitorQuery, setMonitorQuery] = useState("");
   const [dataQuery, setDataQuery] = useState("");
-  const [monitorFilter, setMonitorFilter] = useState<SignalFilterNode>(
+  const [monitorFilter, setMonitorFilter] = useState<FilterNode>(
     emptySignalFilter,
   );
-  const [dataFilter, setDataFilter] = useState<SignalFilterNode>(
+  const [dataFilter, setDataFilter] = useState<FilterNode>(
     emptySignalFilter,
+  );
+  const [messageFilter, setMessageFilter] = useState<FilterNode>(
+    emptyFilterGroup,
   );
   const [writeKind, setWriteKind] = useState("all");
   const [writeQuery, setWriteQuery] = useState("");
@@ -2485,14 +2494,15 @@ export function App() {
         ? rows
         : rows.filter((row) => row.busName === selected);
     const needle = messageQuery.trim().toLowerCase();
-    if (!needle) return visible;
     return visible.filter(
       (row) =>
-        row.name.toLowerCase().includes(needle) ||
-        row.addr.toLowerCase().includes(needle) ||
-        row.busName.toLowerCase().includes(needle),
+        matchesMessageFilter(messageFilter, row) &&
+        (!needle ||
+          row.name.toLowerCase().includes(needle) ||
+          row.addr.toLowerCase().includes(needle) ||
+          row.busName.toLowerCase().includes(needle)),
     );
-  }, [state?.messages, messageQuery, bus]);
+  }, [state?.messages, messageQuery, messageFilter, bus]);
 
   const writeRows = useMemo(() => {
     const rows = state?.write ?? [];
@@ -3444,15 +3454,14 @@ export function App() {
                 </option>
               ))}
             </select>
-            <input
-              class="panel-filter"
-              type="search"
-              value={messageQuery}
-              placeholder="Filter bus, name or id…"
-              onInput={(event) =>
-                setMessageQuery((event.target as HTMLInputElement).value)
-              }
-              onKeyDown={filterEscape(() => setMessageQuery(""))}
+            <FilterBar
+              query={messageQuery}
+              onQuery={setMessageQuery}
+              filter={messageFilter}
+              onFilter={setMessageFilter}
+              fields={MESSAGE_FILTER_SPECS}
+              label="Filter messages"
+              placeholder="Filter messages…"
             />
             <button
               type="button"
@@ -3537,7 +3546,7 @@ export function App() {
       <MessageTable
         key={state?.log ?? state?.projectPath ?? "untitled"}
         rows={mainMessages}
-        filtered={messageQuery.trim() !== ""}
+        filtered={messageQuery.trim() !== "" || filterActive(messageFilter)}
         columnWidths={messageColumns}
         onColumnWidthsChange={setMessageColumns}
         empty={state && state.buses.length === 0 ? emptyWorkspace : undefined}
@@ -3734,11 +3743,12 @@ export function App() {
             : undefined,
         actions: (
           <>
-            <SignalFilterBar
+            <FilterBar
               query={monitorQuery}
               onQuery={setMonitorQuery}
               filter={monitorFilter}
               onFilter={setMonitorFilter}
+              fields={SIGNAL_FILTER_SPECS}
               label="Filter monitor signals"
               placeholder="Filter signals…"
             />
@@ -3784,7 +3794,7 @@ export function App() {
       })}
       <MonitorPanel
         rows={visibleMonitorRows}
-        filtered={monitorQuery.trim() !== ""}
+        filtered={monitorQuery.trim() !== "" || filterActive(monitorFilter)}
         columns={state?.monitorColumns ?? 1}
         theme={theme}
         onMoveRow={(key, to) =>
@@ -3817,11 +3827,12 @@ export function App() {
             : undefined,
         actions: (
           <>
-            <SignalFilterBar
+            <FilterBar
               query={dataQuery}
               onQuery={setDataQuery}
               filter={dataFilter}
               onFilter={setDataFilter}
+              fields={SIGNAL_FILTER_SPECS}
               label="Filter data signals"
               placeholder="Filter signals…"
             />
@@ -3849,7 +3860,7 @@ export function App() {
       })}
       <DataPanel
         rows={visibleDataRows}
-        filtered={dataQuery.trim() !== ""}
+        filtered={dataQuery.trim() !== "" || filterActive(dataFilter)}
         onMoveRow={(key, to) => void run({ type: "move_data_row", key, to })}
         onVisible={(row, visible) =>
           row.kind === "derived"
