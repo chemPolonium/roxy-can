@@ -27,6 +27,7 @@ import { filterSignalRows } from "./signalRows";
 import {
   SIGNAL_FILTER_SPECS,
   emptySignalFilter,
+  matchesSignalFilter,
   signalFilterActive,
 } from "./signalFilter";
 import { emptyFilterGroup, filterActive, normalizeFilter } from "./filterTree";
@@ -205,6 +206,8 @@ interface ViewFilters {
   data: FilterGroup;
   message: FilterGroup;
   trace: FilterGroup;
+  signals: FilterGroup;
+  state: FilterGroup;
 }
 
 interface SavedView {
@@ -294,6 +297,8 @@ function normalizeView(
     data: normalizeFilter(rawFilters.data, SIGNAL_FILTER_SPECS),
     message: normalizeFilter(rawFilters.message, MESSAGE_FILTER_SPECS),
     trace: normalizeFilter(rawFilters.trace, TRACE_FILTER_SPECS),
+    signals: normalizeFilter(rawFilters.signals, SIGNAL_FILTER_SPECS),
+    state: normalizeFilter(rawFilters.state, SIGNAL_FILTER_SPECS),
   };
   const hasLibrary = Array.isArray(raw.filterLibrary);
   const filterLibrary = normalizeFilterLibrary(raw.filterLibrary);
@@ -505,11 +510,19 @@ export function App() {
   const [messageQuery, setMessageQuery] = useState("");
   const [monitorQuery, setMonitorQuery] = useState("");
   const [dataQuery, setDataQuery] = useState("");
+  const [signalsQuery, setSignalsQuery] = useState("");
+  const [stateQuery, setStateQuery] = useState("");
   const [monitorFilter, setMonitorFilter] = useState<FilterNode>(
     () => savedView.filters?.monitor ?? emptySignalFilter(),
   );
   const [dataFilter, setDataFilter] = useState<FilterNode>(
     () => savedView.filters?.data ?? emptySignalFilter(),
+  );
+  const [signalsFilter, setSignalsFilter] = useState<FilterNode>(
+    () => savedView.filters?.signals ?? emptySignalFilter(),
+  );
+  const [stateFilter, setStateFilter] = useState<FilterNode>(
+    () => savedView.filters?.state ?? emptySignalFilter(),
   );
   const [messageFilter, setMessageFilter] = useState<FilterNode>(
     () => savedView.filters?.message ?? emptyFilterGroup(),
@@ -692,6 +705,8 @@ export function App() {
       setTraceFilter(emptyFilterGroup());
       setMonitorFilter(emptySignalFilter());
       setDataFilter(emptySignalFilter());
+      setSignalsFilter(emptySignalFilter());
+      setStateFilter(emptySignalFilter());
       setMessageFilter(emptyFilterGroup());
       setFilterLibrary([]);
       chartCursorSeq.current = 1;
@@ -714,6 +729,8 @@ export function App() {
       setTraceFilter(view.filters.trace);
       setMonitorFilter(view.filters.monitor);
       setDataFilter(view.filters.data);
+      setSignalsFilter(view.filters.signals);
+      setStateFilter(view.filters.state);
       setMessageFilter(view.filters.message);
     }
     if (view.filterLibrary) setFilterLibrary(view.filterLibrary);
@@ -853,6 +870,8 @@ export function App() {
             data: dataFilter,
             message: messageFilter,
             trace: traceFilter,
+            signals: signalsFilter,
+            state: stateFilter,
           },
           filterLibrary,
         },
@@ -874,6 +893,8 @@ export function App() {
     dataFilter,
     messageFilter,
     traceFilter,
+    signalsFilter,
+    stateFilter,
     filterLibrary,
     state?.workspaceRev,
   ]);
@@ -1113,6 +1134,8 @@ export function App() {
             data: dataFilter,
             message: messageFilter,
             trace: traceFilter,
+            signals: signalsFilter,
+            state: stateFilter,
           },
           filterLibrary,
         }),
@@ -1133,6 +1156,8 @@ export function App() {
     dataFilter,
     messageFilter,
     traceFilter,
+    signalsFilter,
+    stateFilter,
     filterLibrary,
   ]);
 
@@ -1672,6 +1697,8 @@ export function App() {
           data: dataFilter,
           message: messageFilter,
           trace: traceFilter,
+          signals: signalsFilter,
+          state: stateFilter,
         },
         filterLibrary,
       },
@@ -2755,25 +2782,73 @@ export function App() {
     }
     return ranges;
   }, [catalog]);
+  const signalMeta = useMemo(() => {
+    const meta = new Map<
+      string,
+      { frame: string; path: string; unit: string }
+    >();
+    for (const channel of catalog?.channels ?? []) {
+      for (const message of channel.messages) {
+        for (const signal of message.signals) {
+          meta.set(signal.key, {
+            frame: message.frame ?? message.name,
+            path: `${message.name} / ${signal.name}`,
+            unit: signal.unit,
+          });
+        }
+      }
+    }
+    return meta;
+  }, [catalog]);
   const readSeries = useMemo(
     () => signals.filter((signal) => signal.read),
     [signals],
   );
+  const signalRows = (series: SignalSeries[]) => {
+    const needle = signalsQuery.trim().toLowerCase();
+    return series.filter((signal) => {
+      const meta = signalMeta.get(signal.key);
+      const row = {
+        name: signal.name,
+        bus: signal.bus,
+        unit: signal.unit || meta?.unit || "",
+        frame: meta?.frame,
+        path: meta?.path,
+      };
+      if (
+        needle &&
+        ![row.name, row.bus, row.unit, row.frame, row.path].some((text) =>
+          text?.toLowerCase().includes(needle),
+        )
+      ) {
+        return false;
+      }
+      return matchesSignalFilter(signalsFilter, row);
+    });
+  };
+  const visibleChartSeries = useMemo(
+    () => signalRows(chartSeries),
+    [chartSeries, signalsFilter, signalsQuery, signalMeta],
+  );
+  const visibleReadSeries = useMemo(
+    () => signalRows(readSeries),
+    [readSeries, signalsFilter, signalsQuery, signalMeta],
+  );
   const cursorSeries = useMemo(
-    () => [...chartSeries, ...readSeries],
-    [chartSeries, readSeries],
+    () => [...visibleChartSeries, ...visibleReadSeries],
+    [visibleChartSeries, visibleReadSeries],
   );
   const readRange = useMemo(() => {
     let first = Number.POSITIVE_INFINITY;
     let last = 0;
-    for (const signal of readSeries) {
+    for (const signal of visibleReadSeries) {
       const start = signal.points[0]?.[0];
       const end = signal.points[signal.points.length - 1]?.[0];
       if (typeof start === "number") first = Math.min(first, start);
       if (typeof end === "number") last = Math.max(last, end);
     }
     return Number.isFinite(first) && last > first ? { first, last } : null;
-  }, [readSeries]);
+  }, [visibleReadSeries]);
   const selectedKeys = new Set(chartSeries.map((signal) => signal.key));
   const readKeys = new Set(readSeries.map((signal) => signal.key));
   // Observer rows already carry the canonical `sig:` key (the same spelling
@@ -2813,6 +2888,30 @@ export function App() {
     [dataRows, dataQuery, dataFilter],
   );
   const stateRows = state?.stateRows ?? [];
+  const visibleStateRows = useMemo(() => {
+    const needle = stateQuery.trim().toLowerCase();
+    return stateRows.filter((row) => {
+      const meta = signalMeta.get(row.key);
+      const unit = meta?.unit;
+      const frame = row.frame ?? meta?.frame;
+      const path = meta?.path ?? frame;
+      if (
+        needle &&
+        ![row.name, row.bus, unit, frame, path].some((text) =>
+          text?.toLowerCase().includes(needle),
+        )
+      ) {
+        return false;
+      }
+      return matchesSignalFilter(stateFilter, {
+        name: row.name,
+        bus: row.bus,
+        unit,
+        frame,
+        path,
+      });
+    });
+  }, [stateRows, stateQuery, stateFilter, signalMeta]);
   const chartCenterS =
     signalView.endS !== null
       ? signalView.endS - signalView.windowS / 2
@@ -3633,6 +3732,8 @@ export function App() {
 
   const renderSignalsPanel = (slot: number) => {
     const labels = cursorLabels(chartCursors);
+    const filtered =
+      signalsQuery.trim() !== "" || signalFilterActive(signalsFilter);
     const cursorA =
       labels.indexOf("A") >= 0 ? chartCursors[labels.indexOf("A")] : undefined;
     const cursorB =
@@ -3640,8 +3741,23 @@ export function App() {
     return (
       <>
         {slotHeader(slot, "signals", {
+          meta: filtered
+            ? `${visibleChartSeries.length} / ${chartSeries.length} lanes`
+            : undefined,
           actions: (
             <>
+              <FilterBar
+                query={signalsQuery}
+                onQuery={setSignalsQuery}
+                filter={signalsFilter}
+                onFilter={setSignalsFilter}
+                fields={SIGNAL_FILTER_SPECS}
+                label="Filter chart signals"
+                placeholder="Filter signals…"
+                scope="signal"
+                savedFilters={filterLibrary}
+                onSavedFilters={setFilterLibrary}
+              />
               <button
                 type="button"
                 class="mini icon-btn"
@@ -3726,10 +3842,10 @@ export function App() {
         })}
         <div class="signal-stack">
           <SignalChart
-            series={chartSeries}
+            series={visibleChartSeries}
             markers={state?.markers ?? []}
             theme={theme}
-            onReorder={moveSignal}
+            onReorder={filtered ? () => {} : moveSignal}
             view={signalView}
             onView={(update) => setSignalView(update)}
             cursors={chartCursors}
@@ -3748,9 +3864,9 @@ export function App() {
             yModes={chartYModes}
             onYMode={setSignalYMode}
             ranges={signalRanges}
-            hasReadout={readSeries.length > 0}
+            hasReadout={visibleReadSeries.length > 0}
             readRange={readRange}
-            readCount={readSeries.length}
+            readCount={visibleReadSeries.length}
             showCursorTools={false}
             exportRef={chartExportRef}
           />
@@ -3941,8 +4057,24 @@ export function App() {
   const renderStatePanel = (slot: number) => (
     <>
       {slotHeader(slot, "state", {
+        meta:
+          stateQuery.trim() || signalFilterActive(stateFilter)
+            ? `${visibleStateRows.length} / ${stateRows.length}`
+            : undefined,
         actions: (
           <>
+            <FilterBar
+              query={stateQuery}
+              onQuery={setStateQuery}
+              filter={stateFilter}
+              onFilter={setStateFilter}
+              fields={SIGNAL_FILTER_SPECS}
+              label="Filter state signals"
+              placeholder="Filter signals…"
+              scope="signal"
+              savedFilters={filterLibrary}
+              onSavedFilters={setFilterLibrary}
+            />
             <button
               type="button"
               class="mini icon-btn"
@@ -3966,7 +4098,8 @@ export function App() {
         ),
       })}
       <StatePanel
-        rows={stateRows}
+        rows={visibleStateRows}
+        filtered={stateQuery.trim() !== "" || signalFilterActive(stateFilter)}
         windowS={state?.stateWindowS ?? 20}
         theme={theme}
         onWindow={(seconds) => void run({ type: "set_state_window", seconds })}

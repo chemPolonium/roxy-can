@@ -187,6 +187,7 @@ roxy-can -h                               完整帮助
 - **Maximize 读数**：Signals 页最大化时读数表变成左侧竖栏，信号名与 A/B/Δ 值同行紧挨，图表占右侧；未最大化仍保留图下方的读数表。
 - 游标记的是**时间**：平移、缩放、实时推进都让线跟着视图走，标的点不动；跑出视野的游标不画线，时刻仍留在读数里。没打上的那条印 `-`，没有样本的时刻也印 `-`——不把 0 当成一个读数显示。
 - **导出图片**（页眉相机图标）：把当前图表区按原分辨率存成 PNG——曲线、lane 名、游标与 Δt 读数、LIVE/HOLD 标记都在图里，写报告或提报障单直接贴；文件名带时间戳。
+- **过滤**：页眉 FilterBar 按 Signal / Label / Bus / Frame / PDU / Unit 过滤当前曲线 lane 和 Read 读数；只影响显示，不取消订阅。条件随工程保存，命名 filter 复用 Signal 族。
 - 曲线 A/B 游标位置与 Read 集合保存在 Web workspace 里，随工程保存恢复。
 
 ## Panel（操作页）
@@ -204,6 +205,7 @@ roxy-can -h                               完整帮助
 ## State Tracker
 
 - 对订阅信号的历史做状态分段：值不变的最长区段为一条带，带内标值。
+- 页眉 FilterBar 按 Signal / Bus / Frame 等条件过滤状态带；只影响显示，不取消订阅；条件随工程保存，命名 filter 复用 Signal 族。
 - Signals 页的 lane 菜单或 Data 页里**右键任一信号**即可加入 State Tracker。
 - 恒定贴实时边缘（回放中跟随播放头）；时间窗 5 秒到 30 分钟预设；**Min ms** 把更短的区段并入前一段（0 = 全部显示）。
 - 默认模式取 VAL_ 值表标签（显示枚举名而非数字）；每个状态可固定颜色，未固定的按会话槽位自动配色。自定义模式按切分点分区间，每区间自定义名字与颜色。
@@ -228,7 +230,7 @@ roxy-can -h                               完整帮助
 ## 过滤器
 
 - Trace / Messages / Monitor / Data 页眉搜索框旁的 **漏斗** 共用同一套 filter：AND / OR 组、NOT、最多三层嵌套；空条件忽略，搜索框和高级 filter 叠加。
-- 字段按面板族区分：Signal 族（Signal/Label/Bus/Frame/PDU/Unit）、Message 族（Name/ID/Kind/Data）、Trace 族（Direction/Name/ID/Data/Kind/Decoded/Time）。操作符为 contains / does not contain / equals / is not；数值字段（如 Trace 的 Time）另有 `=`、`≥`、`≤`、`>`、`<`。
+- 字段按面板族区分：Signal 族（Signal/Label/Bus/Frame/PDU/Unit；Monitor、Data、Signals、State）、Message 族（Name/ID/Kind/Data；Messages）、Trace 族（Direction/Name/ID/Data/Kind/Decoded/Time）。操作符为 contains / does not contain / equals / is not；数值字段（如 Trace 的 Time）另有 `=`、`≥`、`≤`、`>`、`<`。
 - **Saved filters**：弹层顶部的下拉列出同族已保存 filter，选中即载入草稿；**Save as…** 起名保存，选中后 **Save** 更新，**Delete** 删除。命名 filter 只作为模板，载入后仍需 **Apply** 才作用到当前面板。
 - 各面板当前高级 filter 与命名 filter 库都随工程保存，并在 `localStorage` 留一份；快速搜索框仍是会话状态。
 

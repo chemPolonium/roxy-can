@@ -4,6 +4,7 @@ import { palette, type Theme } from "../theme";
 
 interface Props {
   rows: StateRow[];
+  filtered?: boolean;
   windowS: number;
   theme: Theme;
   onWindow: (seconds: number) => void;
@@ -75,6 +76,7 @@ function StateStrip({ bands, theme }: { bands: StateBand[]; theme: Theme }) {
 
 export function StatePanel({
   rows,
+  filtered = false,
   windowS,
   theme,
   onWindow,
@@ -110,8 +112,12 @@ export function StatePanel({
       </div>
       {rows.length === 0 ? (
         <div class="empty">
-          <strong>No signals yet</strong>
-          <span>Add a signal to watch its states as bands.</span>
+          <strong>{filtered ? "No matching signals" : "No signals yet"}</strong>
+          <span>
+            {filtered
+              ? "Change the quick search or the funnel filter."
+              : "Add a signal to watch its states as bands."}
+          </span>
         </div>
       ) : (
         <div class="state-rows">
