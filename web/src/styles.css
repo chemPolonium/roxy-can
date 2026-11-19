@@ -1442,6 +1442,27 @@ body.col-resizing {
   color: #cfe7ff;
 }
 
+/* A one-page book needs no tab chrome: the page name is the header title.
+   Real tabs only appear once there is something to switch between. */
+.page-tabs.single .page-tab {
+  padding-right: 0;
+  padding-left: 0;
+  border-radius: 0;
+  background: transparent;
+  color: inherit;
+  font-weight: 600;
+}
+
+.page-tabs.single .page-tab.on {
+  background: transparent;
+  color: inherit;
+}
+
+.page-tabs.single .page-tab:hover:not(:disabled) {
+  background: transparent;
+  color: var(--accent);
+}
+
 .page-tab-rename {
   flex: 0 0 130px;
   height: 22px;

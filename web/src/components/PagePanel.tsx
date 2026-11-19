@@ -2509,8 +2509,7 @@ export function PagePanel({
         }}
       />
       <div class={`panel-head ${editing ? "editing" : ""}`}>
-        <div class="panel-title">Panel</div>
-        <div class="page-tabs">
+        <div class={`page-tabs ${book.pages.length === 1 ? "single" : ""}`}>
           <div
             class="page-tab-list"
             role="tablist"
