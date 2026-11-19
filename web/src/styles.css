@@ -1424,13 +1424,6 @@ body.col-resizing {
   background: #090e14;
 }
 
-.page-menu-button {
-  flex: 0 0 auto;
-  width: 24px;
-  padding: 0;
-  font-size: 14px;
-}
-
 .page-tab-rename {
   flex: 0 0 130px;
   height: 22px;

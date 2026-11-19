@@ -81,8 +81,7 @@ interface History {
 
 type PageMenu =
   | { kind: "widget"; x: number; y: number; id: string }
-  | { kind: "canvas"; x: number; y: number }
-  | { kind: "page"; x: number; y: number; id: string };
+  | { kind: "canvas"; x: number; y: number };
 
 /// The signal a read-only or setpoint cell watches, for "Copy signal key".
 function panelSignalKey(widget: PanelWidget): string {
@@ -1669,7 +1668,6 @@ export function PagePanel({
   const [sizeH, setSizeH] = useState(String(page.height * PAGE_GRID));
   const [addOpen, setAddOpen] = useState(false);
   const addTrigger = useRef<HTMLButtonElement>(null);
-  const pageMenuTrigger = useRef<HTMLButtonElement>(null);
   const addMenu = useRef<HTMLDivElement>(null);
   const [menu, setMenu] = useState<PageMenu | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
@@ -1982,16 +1980,6 @@ export function PagePanel({
     setRenaming(null);
   };
 
-  const openPageMenu = () => {
-    const rect = pageMenuTrigger.current?.getBoundingClientRect();
-    setMenu({
-      kind: "page",
-      id: page.id,
-      x: Math.max(8, rect?.left ?? 8),
-      y: (rect?.bottom ?? 40) + 4,
-    });
-  };
-
   // ←/→ walk the Panel pages even though the tabs now live in the top
   // switch. Typing, menus and dialogs keep their own key handling.
   useEffect(() => {
@@ -2141,7 +2129,7 @@ export function PagePanel({
   // Flip above the click when the menu would run off the bottom; the canvas
   // menu is the tallest (Paste, seven controls, Undo/Redo).
   const menuHeight =
-    menu?.kind === "canvas" ? 330 : menu?.kind === "widget" ? 150 : 150;
+    menu?.kind === "canvas" ? 520 : menu?.kind === "widget" ? 150 : 150;
   const menuTop = menu
     ? menu.y + menuHeight > window.innerHeight - 8
       ? Math.max(8, menu.y - menuHeight)
@@ -2527,20 +2515,6 @@ export function PagePanel({
         }}
       />
       <div class={`panel-head ${editing ? "editing" : ""}`}>
-        {editing && (
-          <button
-            ref={pageMenuTrigger}
-            type="button"
-            class="mini icon-mini page-menu-button"
-            title="Page actions"
-            aria-label="Page actions"
-            aria-haspopup="menu"
-            aria-expanded={menu?.kind === "page"}
-            onClick={openPageMenu}
-          >
-            ⋯
-          </button>
-        )}
         {renaming && (
           <input
             class="page-tab-rename"
@@ -2986,29 +2960,24 @@ export function PagePanel({
               >
                 Redo
               </button>
-            </>
-          )}
-          {menu.kind === "page" && (
-            <>
+              <div class="page-menu-sep" role="separator" />
               <button
                 type="button"
                 role="menuitem"
                 onClick={() => {
-                  const target = book.pages.find((entry) => entry.id === menu.id);
                   setMenu(null);
-                  if (!target) return;
                   renameCanceled.current = false;
-                  setRenaming({ id: target.id, name: target.name });
+                  setRenaming({ id: page.id, name: page.name });
                 }}
               >
-                Rename
+                Rename page
               </button>
               <button
                 type="button"
                 role="menuitem"
                 onClick={() => {
                   setMenu(null);
-                  copyPageById(menu.id);
+                  copyPageById(page.id);
                 }}
               >
                 Duplicate page
@@ -3028,7 +2997,7 @@ export function PagePanel({
                 role="menuitem"
                 onClick={() => {
                   setMenu(null);
-                  exportPageById(menu.id);
+                  exportPageById(page.id);
                 }}
               >
                 Export page
@@ -3037,24 +3006,20 @@ export function PagePanel({
               <button
                 type="button"
                 role="menuitem"
-                class={confirmDelete === menu.id ? "danger" : undefined}
+                class={confirmDelete === page.id ? "danger" : undefined}
                 disabled={book.pages.length <= 1}
                 onClick={() => {
-                  const target = book.pages.find(
-                    (entry) => entry.id === menu.id,
-                  );
-                  if (!target) return;
                   // An empty page can go at once; a page with controls gets
                   // the same two-step confirm as Clear Trace.
-                  if (target.widgets.length > 0 && confirmDelete !== menu.id) {
-                    setConfirmDelete(menu.id);
+                  if (page.widgets.length > 0 && confirmDelete !== page.id) {
+                    setConfirmDelete(page.id);
                     return;
                   }
                   setMenu(null);
-                  deletePageById(menu.id);
+                  deletePageById(page.id);
                 }}
               >
-                {confirmDelete === menu.id
+                {confirmDelete === page.id
                   ? "Delete page and controls?"
                   : "Delete page"}
               </button>
