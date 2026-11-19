@@ -273,7 +273,9 @@ export function FilterBar({
   const active = filterRuleCount(filter);
   const scoped = savedFilters.filter((entry) => entry.scope === scope);
   const draftCount = filterRuleCount(draft);
-  const summary = filterSummary(filter, fields);
+  const fullSummary = filterSummary(filter, fields);
+  const summary =
+    fullSummary.length > 180 ? `${fullSummary.slice(0, 180)}…` : fullSummary;
 
   useEffect(() => {
     if (!open) return;
