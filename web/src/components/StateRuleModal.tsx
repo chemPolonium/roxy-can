@@ -1,5 +1,11 @@
 import { useEffect, useState } from "preact/hooks";
 import type { StateRule } from "../types";
+import {
+  cutError,
+  cutIsInvalid,
+  nextCut,
+  rangeText,
+} from "../bandCuts";
 
 interface Props {
   signal: string;
@@ -21,16 +27,6 @@ function fromRule(rule: StateRule | null): Draft {
   };
 }
 
-/** "&#x3c; 1", "1 .. 5", ">= 5" for band `index`. */
-function rangeText(cuts: number[], index: number): string {
-  const lo = index === 0 ? null : cuts[index - 1];
-  const hi = index === cuts.length ? null : cuts[index];
-  if (lo == null && hi == null) return "all values";
-  if (lo == null) return `< ${hi}`;
-  if (hi == null) return `>= ${lo}`;
-  return `${lo} .. ${hi}`;
-}
-
 export function StateRuleModal({
   signal,
   rule,
@@ -47,12 +43,7 @@ export function StateRuleModal({
     return () => window.removeEventListener("keydown", close);
   }, [onClose]);
   const parsed = draft.cuts.map((cut) => Number(cut));
-  let error = "";
-  if (parsed.some((cut) => !Number.isFinite(cut))) {
-    error = "cuts must be numbers";
-  } else if (parsed.some((cut, i) => i > 0 && cut <= parsed[i - 1])) {
-    error = "cuts must be strictly ascending";
-  }
+  const error = cutError(parsed);
 
   const setCut = (index: number, value: string) => {
     setDraft((current) => {
@@ -69,14 +60,10 @@ export function StateRuleModal({
     });
   };
   const addCut = () => {
-    setDraft((current) => {
-      const last = Number(current.cuts[current.cuts.length - 1]);
-      const cut = Number.isFinite(last) ? String(last + 1) : "0";
-      return {
-        cuts: [...current.cuts, cut],
-        names: [...current.names, `state ${current.names.length}`],
-      };
-    });
+    setDraft((current) => ({
+      cuts: [...current.cuts, nextCut(current.cuts)],
+      names: [...current.names, `state ${current.names.length}`],
+    }));
   };
   const removeCut = (cutIndex: number) => {
     setDraft((current) => ({
@@ -113,6 +100,10 @@ export function StateRuleModal({
                   <label>
                     cut
                     <input
+                      class={
+                        cutIsInvalid(parsed, index - 1) ? "invalid" : ""
+                      }
+                      aria-invalid={cutIsInvalid(parsed, index - 1)}
                       value={draft.cuts[index - 1]}
                       inputMode="decimal"
                       onInput={(event) =>

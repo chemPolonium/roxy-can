@@ -1,6 +1,12 @@
 import { useEffect, useState } from "preact/hooks";
 import type { MonitorRow } from "../types";
 import { palette, type Theme } from "../theme";
+import {
+  cutError,
+  cutIsInvalid,
+  nextCut,
+  rangeText,
+} from "../bandCuts";
 
 interface Props {
   row: MonitorRow;
@@ -13,15 +19,6 @@ function fitColors(colors: number[], count: number): number[] {
   const next = colors.slice(0, count);
   while (next.length < count) next.push(next[next.length - 1] ?? 0);
   return next;
-}
-
-function rangeText(cuts: number[], index: number): string {
-  const lo = index === 0 ? null : cuts[index - 1];
-  const hi = index === cuts.length ? null : cuts[index];
-  if (lo == null && hi == null) return "all values";
-  if (lo == null) return `< ${hi}`;
-  if (hi == null) return `>= ${lo}`;
-  return `${lo} .. ${hi}`;
 }
 
 /** Right-click a Monitor row: decimals, cut points and one color per band. */
@@ -42,15 +39,8 @@ export function MonitorRowModal({ row, theme, onApply, onClose }: Props) {
   }, [onClose]);
 
   const parsed = cuts.map(Number);
-  let error = "";
-  if (parsed.some((cut) => !Number.isFinite(cut))) {
-    error = "cuts must be numbers";
-  } else if (parsed.some((cut, index) => index > 0 && cut <= parsed[index - 1])) {
-    error = "cuts must be strictly ascending";
-  }
-  const invalidCut = (index: number) =>
-    !Number.isFinite(parsed[index]) ||
-    (index > 0 && parsed[index] <= parsed[index - 1]);
+  const error = cutError(parsed);
+  const invalidCut = (index: number) => cutIsInvalid(parsed, index);
 
   const setCut = (index: number, value: string) => {
     setCuts((old) => {
@@ -67,11 +57,7 @@ export function MonitorRowModal({ row, theme, onApply, onClose }: Props) {
     });
   };
   const addCut = () => {
-    setCuts((old) => {
-      const last = Number(old[old.length - 1]);
-      const cut = Number.isFinite(last) ? String(last + 1) : "0";
-      return [...old, cut];
-    });
+    setCuts((old) => [...old, nextCut(old)]);
     setBands((old) => [...old, old[old.length - 1] ?? 0]);
   };
   const removeCut = (cutIndex: number) => {
