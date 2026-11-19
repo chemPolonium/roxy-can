@@ -7,9 +7,10 @@ import {
 } from "./filterTree";
 import { SIGNAL_FILTER_SPECS } from "./signalFilter";
 import { MESSAGE_FILTER_SPECS } from "./messageFilter";
+import { STATS_FILTER_SPECS } from "./statsFilter";
 import { TRACE_FILTER_SPECS } from "./traceFilter";
 
-export type FilterScope = "signal" | "message" | "trace";
+export type FilterScope = "signal" | "message" | "stats" | "trace";
 
 export interface SavedFilter {
   id: string;
@@ -21,12 +22,14 @@ export interface SavedFilter {
 export const FILTER_SCOPE_FIELDS: Record<FilterScope, FilterFieldSpec[]> = {
   signal: SIGNAL_FILTER_SPECS,
   message: MESSAGE_FILTER_SPECS,
+  stats: STATS_FILTER_SPECS,
   trace: TRACE_FILTER_SPECS,
 };
 
 export const FILTER_SCOPE_LABELS: Record<FilterScope, string> = {
   signal: "Signal",
   message: "Message",
+  stats: "Message stats",
   trace: "Trace",
 };
 
@@ -51,6 +54,7 @@ export function normalizeFilterLibrary(value: unknown): SavedFilter[] {
     const scope =
       entry.scope === "signal" ||
       entry.scope === "message" ||
+      entry.scope === "stats" ||
       entry.scope === "trace"
         ? entry.scope
         : null;

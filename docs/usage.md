@@ -145,7 +145,7 @@ roxy-can -h                               完整帮助
 - **Trace**：与 CAN 帧按时间交错混排——Bus 列写这一路的名字（未改名即 `FR{n}`，知道通道时带  `A`/ `B`），ID 列是 `slot.cycle`，Name 列是该路描述里的帧名。勾 **"FR 信号"** 展开解码后的信号子行（含枚举标签）。
 - **Messages** 每 **(路, 槽, 帧)** 一行：计数、周期均值 ± 抖动、末帧载荷、帧名。一个静态槽按周期相位可排多帧，所以按槽统计会让帧名每来一帧变一次；解不出帧的到达自成一"无名"行。行首 `▸` 展开后按描述顺序列出信号子行：**信号名缩进在 Name 列、物理值放在 Cycle 列、单位与枚举标签放在 Data 列**，原始值在悬停提示里；只有展开的行才解码，收起不付代价。信号超过 16 个时展开行里出现过滤框，按名称、枚举标签或单位匹配，Esc 清空；长帧先画 50 行，用 **Show all N signals** / **Show first 50** 切换。CAN 与 Ethernet 报文同样可展开。顶部的总线选择与搜索框按 bus / name / id 收窄当前 Messages；搜索框旁的漏斗使用与 Monitor/Data 相同的高级 filter（AND/OR/NOT，字段 Name / ID / Kind / Data，contains/equals 与否定），条件随工程保存；总线选择与 Trace 共用，切换视图不会丢过滤。垃圾桶图标（Clear）清逐报文计数（二次确认：第一次变成红对勾）；展开/收起图标一次展开或收起所有可解码行，剪贴板图标把当前可见行复制为 TSV。Bus / ID / Name / Cycle 的列宽可拖表头边界调整（表头列边界有竖向分隔线，悬停变蓝；双击分隔线恢复默认宽度；随工程保存）；点表头可按这四列排序（点击时拍快照，新到达的行排在最上面；▲ 升序、▼ 降序、第三次恢复原顺序）。
 - **E2E**：受保护的 CAN/FlexRay/Ethernet 行显示 `E2E Pn`；当 ARXML/DBC 给出 profile、Data ID 和 CRC 位置时，同时校验 CRC（Profile 1/2/4/5/7/11/22/44，Profile 4/5/7/44 需显式 CRC 位置），失败标红并写 `✗`；没有 CRC 位置时只保留计数连续性与 Data ID。
-- **Messages stats**：FR 槽位与 CAN 报文并列（计数、间隔 min/avg/max、占比）。列宽可拖、双击分隔线恢复默认、随工程保存；点表头按该列排序（点击时拍快照，新行仍在最上面）；页宽不够时 Bus（<480px）与 Min/Max（<700px）自动收起，和 Messages 用同一套按槽位宽度的规则。
+- **Messages stats**：FR 槽位与 CAN 报文并列（计数、间隔 min/avg/max、占比）。页眉 FilterBar 支持 Label / Bus / Count / Avg cycle / Jitter / Length（数值条件），条件随工程保存；列宽可拖、双击分隔线恢复默认、随工程保存；点表头按该列排序（点击时拍快照，新行仍在最上面）；页宽不够时 Bus（<480px）与 Min/Max（<700px）自动收起，和 Messages 用同一套按槽位宽度的规则。
 - **作用域**下拉有 `FlexRay: <路名>` 一档（与 `Bus: CAN{n}` 分列，因为两套编号不互解）：只看这一路，占比也算这一路的。**Manual 手动勾选的集合**同样能勾槽，与 CAN 报文共用同一份勾选集合。
 - **信号可订阅**：Signals / Data / State / Monitor 都能选 FlexRay 信号，身份就是 `(路, 槽, 信号名)`。
 - **录与放对称**：CANoe 录的 BLF 与 ASC 里的 FlexRay 收帧一并读入；本工具自己录的文件也写同类对象/行，录完再放回来是同一批帧。`--convert` 与 Trace 的 ASC 导出保留 FlexRay 流量。
@@ -230,7 +230,7 @@ roxy-can -h                               完整帮助
 ## 过滤器
 
 - Trace / Messages / Monitor / Data 页眉搜索框旁的 **漏斗** 共用同一套 filter：AND / OR 组、NOT、最多三层嵌套；空条件忽略，搜索框和高级 filter 叠加。
-- 字段按面板族区分：Signal 族（Signal/Label/Bus/Frame/PDU/Unit；Monitor、Data、Signals、State）、Message 族（Name/ID/Kind/Data；Messages）、Trace 族（Direction/Name/ID/Data/Kind/Decoded/Time）。操作符为 contains / does not contain / equals / is not；数值字段（如 Trace 的 Time）另有 `=`、`≥`、`≤`、`>`、`<`。
+- 字段按面板族区分：Signal 族（Signal/Label/Bus/Frame/PDU/Unit；Monitor、Data、Signals、State）、Message 族（Name/ID/Kind/Data；Messages）、Message stats 族（Label/Bus/Count/Avg cycle/Jitter/Length）、Trace 族（Direction/Name/ID/Data/Kind/Decoded/Time）。操作符为 contains / does not contain / equals / is not；数值字段（如 Trace 的 Time）另有 `=`、`≥`、`≤`、`>`、`<`。
 - **Saved filters**：弹层顶部的下拉列出同族已保存 filter，选中即载入草稿；**Save as…** 起名保存，选中后 **Save** 更新，**Delete** 删除。命名 filter 只作为模板，载入后仍需 **Apply** 才作用到当前面板。
 - 各面板当前高级 filter 与命名 filter 库都随工程保存，并在 `localStorage` 留一份；快速搜索框仍是会话状态。
 

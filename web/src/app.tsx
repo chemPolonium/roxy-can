@@ -41,6 +41,7 @@ import {
   MESSAGE_FILTER_SPECS,
   matchesMessageFilter,
 } from "./messageFilter";
+import { STATS_FILTER_SPECS, matchesStatsFilter } from "./statsFilter";
 import {
   buildTriggerFile,
   parseTriggerFile,
@@ -208,6 +209,7 @@ interface ViewFilters {
   trace: FilterGroup;
   signals: FilterGroup;
   state: FilterGroup;
+  stats: FilterGroup;
 }
 
 interface SavedView {
@@ -299,6 +301,7 @@ function normalizeView(
     trace: normalizeFilter(rawFilters.trace, TRACE_FILTER_SPECS),
     signals: normalizeFilter(rawFilters.signals, SIGNAL_FILTER_SPECS),
     state: normalizeFilter(rawFilters.state, SIGNAL_FILTER_SPECS),
+    stats: normalizeFilter(rawFilters.stats, STATS_FILTER_SPECS),
   };
   const hasLibrary = Array.isArray(raw.filterLibrary);
   const filterLibrary = normalizeFilterLibrary(raw.filterLibrary);
@@ -524,6 +527,9 @@ export function App() {
   const [stateFilter, setStateFilter] = useState<FilterNode>(
     () => savedView.filters?.state ?? emptySignalFilter(),
   );
+  const [statsFilter, setStatsFilter] = useState<FilterNode>(
+    () => savedView.filters?.stats ?? emptyFilterGroup(),
+  );
   const [messageFilter, setMessageFilter] = useState<FilterNode>(
     () => savedView.filters?.message ?? emptyFilterGroup(),
   );
@@ -708,6 +714,7 @@ export function App() {
       setSignalsFilter(emptySignalFilter());
       setStateFilter(emptySignalFilter());
       setMessageFilter(emptyFilterGroup());
+      setStatsFilter(emptyFilterGroup());
       setFilterLibrary([]);
       chartCursorSeq.current = 1;
       return;
@@ -732,6 +739,7 @@ export function App() {
       setSignalsFilter(view.filters.signals);
       setStateFilter(view.filters.state);
       setMessageFilter(view.filters.message);
+      setStatsFilter(view.filters.stats);
     }
     if (view.filterLibrary) setFilterLibrary(view.filterLibrary);
     const columns = parseTraceColumns(saved.traceColumns);
@@ -872,6 +880,7 @@ export function App() {
             trace: traceFilter,
             signals: signalsFilter,
             state: stateFilter,
+            stats: statsFilter,
           },
           filterLibrary,
         },
@@ -895,6 +904,7 @@ export function App() {
     traceFilter,
     signalsFilter,
     stateFilter,
+    statsFilter,
     filterLibrary,
     state?.workspaceRev,
   ]);
@@ -1136,6 +1146,7 @@ export function App() {
             trace: traceFilter,
             signals: signalsFilter,
             state: stateFilter,
+            stats: statsFilter,
           },
           filterLibrary,
         }),
@@ -1158,6 +1169,7 @@ export function App() {
     traceFilter,
     signalsFilter,
     stateFilter,
+    statsFilter,
     filterLibrary,
   ]);
 
@@ -1699,6 +1711,7 @@ export function App() {
           trace: traceFilter,
           signals: signalsFilter,
           state: stateFilter,
+          stats: statsFilter,
         },
         filterLibrary,
       },
@@ -2601,13 +2614,14 @@ export function App() {
   const lowerStats = useMemo(() => {
     const rows = state?.stats ?? [];
     const needle = panelQuery.trim().toLowerCase();
-    if (!needle) return rows;
     return rows.filter(
       (row) =>
-        row.label.toLowerCase().includes(needle) ||
-        row.bus.toLowerCase().includes(needle),
+        matchesStatsFilter(statsFilter, row) &&
+        (!needle ||
+          row.label.toLowerCase().includes(needle) ||
+          row.bus.toLowerCase().includes(needle)),
     );
-  }, [state?.stats, panelQuery]);
+  }, [state?.stats, panelQuery, statsFilter]);
 
   const tracePredicate = useMemo(() => traceQueryPredicate(query), [query]);
   const visibleRows = useMemo(
@@ -4112,30 +4126,24 @@ export function App() {
   const renderStatisticsPanel = (slot: number) => (
     <>
       {slotHeader(slot, "statistics", {
-        meta: `${lowerStats.length} rows`,
+        meta:
+          panelQuery.trim() || filterActive(statsFilter)
+            ? `${lowerStats.length} / ${state?.stats.length ?? 0} rows`
+            : `${lowerStats.length} rows`,
         actions: (
           <>
-            <input
-              class="panel-filter"
-              type="search"
-              value={panelQuery}
-              placeholder="Filter bus, name or id…"
-              onInput={(event) =>
-                setPanelQuery((event.target as HTMLInputElement).value)
-              }
-              onKeyDown={filterEscape(() => setPanelQuery(""))}
+            <FilterBar
+              query={panelQuery}
+              onQuery={setPanelQuery}
+              filter={statsFilter}
+              onFilter={setStatsFilter}
+              fields={STATS_FILTER_SPECS}
+              label="Filter message statistics"
+              placeholder="Filter stats…"
+              scope="stats"
+              savedFilters={filterLibrary}
+              onSavedFilters={setFilterLibrary}
             />
-            {panelQuery && (
-              <button
-                type="button"
-                class="mini icon-btn"
-                title="Clear the filter"
-                aria-label="Clear filter"
-                onClick={() => setPanelQuery("")}
-              >
-                <UiIcon name="close" />
-              </button>
-            )}
             <button
               type="button"
               class="mini icon-btn lower-export"
@@ -4151,7 +4159,7 @@ export function App() {
       <div class="panel-list">
         <StatsTable
           rows={lowerStats}
-          filtered={panelQuery.trim() !== ""}
+          filtered={panelQuery.trim() !== "" || filterActive(statsFilter)}
           columnWidths={statsColumns}
           onColumnWidthsChange={setStatsColumns}
         />
