@@ -6663,6 +6663,14 @@ button.danger:hover:not(:disabled) {
   font-size: 10px;
 }
 
+.monitor-band-cut input.invalid {
+  border-color: var(--error);
+}
+
+.monitor-cut-error {
+  margin: 0;
+}
+
 .monitor-band-edit .monitor-swatches {
   justify-self: end;
 }

@@ -48,6 +48,9 @@ export function MonitorRowModal({ row, theme, onApply, onClose }: Props) {
   } else if (parsed.some((cut, index) => index > 0 && cut <= parsed[index - 1])) {
     error = "cuts must be strictly ascending";
   }
+  const invalidCut = (index: number) =>
+    !Number.isFinite(parsed[index]) ||
+    (index > 0 && parsed[index] <= parsed[index - 1]);
 
   const setCut = (index: number, value: string) => {
     setCuts((old) => {
@@ -88,6 +91,7 @@ export function MonitorRowModal({ row, theme, onApply, onClose }: Props) {
         <header class="modal-head">
           <h2>
             Monitor row — {row.label} · {row.bus}
+            {row.unit ? ` · ${row.unit}` : ""}
           </h2>
           <button type="button" onClick={onClose}>
             Close
@@ -97,7 +101,7 @@ export function MonitorRowModal({ row, theme, onApply, onClose }: Props) {
           <p class="hint">
             Right-clicked from Monitor. Cut points split the value axis; each
             band keeps its own palette color, and the value uses that color
-            while it is inside the band.
+            while it is inside the band. Values are in {row.unit || "raw units"}.
           </p>
           <div class="monitor-style-row">
             <span>Decimals</span>
@@ -126,6 +130,8 @@ export function MonitorRowModal({ row, theme, onApply, onClose }: Props) {
                     <>
                       cut
                       <input
+                        class={invalidCut(index - 1) ? "invalid" : ""}
+                        aria-invalid={invalidCut(index - 1)}
                         value={cuts[index - 1]}
                         inputMode="decimal"
                         onInput={(event) =>
@@ -176,7 +182,25 @@ export function MonitorRowModal({ row, theme, onApply, onClose }: Props) {
               <span class="state-band-range">
                 {rangeText(parsed, cuts.length)}
               </span>
-              <span class="monitor-band-cut" />
+              <label class="monitor-band-cut">
+                {cuts.length > 0 && (
+                  <>
+                    cut
+                    <input
+                      class={invalidCut(cuts.length - 1) ? "invalid" : ""}
+                      aria-invalid={invalidCut(cuts.length - 1)}
+                      value={cuts[cuts.length - 1]}
+                      inputMode="decimal"
+                      onInput={(event) =>
+                        setCut(
+                          cuts.length - 1,
+                          (event.target as HTMLInputElement).value,
+                        )
+                      }
+                    />
+                  </>
+                )}
+              </label>
               <span
                 class="monitor-swatches"
                 role="group"
@@ -197,9 +221,25 @@ export function MonitorRowModal({ row, theme, onApply, onClose }: Props) {
                   />
                 ))}
               </span>
-              <span />
+              {cuts.length > 0 ? (
+                <button
+                  type="button"
+                  class="mini monitor-band-remove"
+                  title="Remove this cut (merge with the band above)"
+                  onClick={() => removeCut(cuts.length - 1)}
+                >
+                  −
+                </button>
+              ) : (
+                <span />
+              )}
             </div>
           </div>
+          {error && (
+            <p class="sv-error monitor-cut-error" role="alert">
+              {error}
+            </p>
+          )}
           <div class="state-rule-actions">
             <button type="button" onClick={addCut}>
               + Cut
@@ -214,7 +254,6 @@ export function MonitorRowModal({ row, theme, onApply, onClose }: Props) {
               Clear bands
             </button>
             <span class="spacer" />
-            {error && <span class="sv-error">{error}</span>}
             <button
               type="button"
               class="primary"
