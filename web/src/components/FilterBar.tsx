@@ -6,6 +6,7 @@ import {
   FILTER_TEXT_OPS,
   emptyFilterGroup,
   filterRuleCount,
+  filterSummary,
   newFilterGroup,
   newFilterRule,
   pruneFilter,
@@ -15,6 +16,7 @@ import {
   type FilterRule,
 } from "../filterTree";
 import {
+  FILTER_SCOPE_LABELS,
   cloneFilter,
   savedFilterId,
   type FilterScope,
@@ -271,6 +273,7 @@ export function FilterBar({
   const active = filterRuleCount(filter);
   const scoped = savedFilters.filter((entry) => entry.scope === scope);
   const draftCount = filterRuleCount(draft);
+  const summary = filterSummary(filter, fields);
 
   useEffect(() => {
     if (!open) return;
@@ -420,8 +423,8 @@ export function FilterBar({
         class={`mini icon-btn filter-open ${active > 0 ? "on" : ""}`}
         title={
           active > 0
-            ? `Advanced filter: ${active} condition${active === 1 ? "" : "s"}`
-            : "Advanced AND/OR filter"
+            ? `Advanced filter: ${active} condition${active === 1 ? "" : "s"} — ${summary}. Click to edit; conditions persist with the project.`
+            : "Advanced AND/OR filter. Blank conditions are ignored; conditions persist with the project."
         }
         aria-label="Advanced filter"
         aria-expanded={open}
@@ -456,6 +459,7 @@ export function FilterBar({
               <select
                 class="filter-saved"
                 aria-label="Saved filters"
+                title={`Saved ${FILTER_SCOPE_LABELS[scope]} filters. Choosing one replaces the draft; Apply uses it on this panel.`}
                 value={selectedId}
                 onChange={(event) =>
                   loadSaved((event.target as HTMLSelectElement).value)

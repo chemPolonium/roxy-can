@@ -151,6 +151,32 @@ export function filterRuleCount(node: FilterNode): number {
   return count(active);
 }
 
+/// Short human-readable form for hover help; the editor itself stays the
+/// full-fidelity view.
+export function filterSummary(
+  filter: FilterNode,
+  fields: FilterFieldSpec[],
+): string {
+  const active = pruneFilter(filter);
+  if (!active) return "";
+  const labels = new Map(fields.map((field) => [field.key, field.label]));
+  let rules = 0;
+  const describe = (entry: FilterNode): string => {
+    if (entry.kind === "rule") {
+      if (rules >= 4) return "…";
+      rules += 1;
+      return `${labels.get(entry.field) ?? entry.field} ${FILTER_OP_LABELS[entry.op]} ${entry.value}`;
+    }
+    const inner = entry.children
+      .map(describe)
+      .filter(Boolean)
+      .join(entry.op === "and" ? " AND " : " OR ");
+    const wrapped = `(${inner})`;
+    return entry.negate ? `NOT ${wrapped}` : wrapped;
+  };
+  return describe(active);
+}
+
 export function matchesFilter(
   filter: FilterNode | null,
   read: (field: string) => string,

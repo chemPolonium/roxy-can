@@ -5028,6 +5028,7 @@ export function App() {
           <button
             type="button"
             class={shellMode !== "panel" ? "on" : ""}
+            title="Standard workspace: layouts, Trace, Messages and the analysis panels"
             onClick={showStandard}
           >
             Standard
@@ -5065,7 +5066,7 @@ export function App() {
                 class={
                   shellMode === "panel" && entry.id === activePage.id ? "on" : ""
                 }
-                title={entry.name}
+                title={`${entry.name} — click to open; right-click for page actions`}
                 onClick={() => showPanelPage(entry.id)}
                 onContextMenu={(event) => openPageMenu(event, entry.id)}
               >

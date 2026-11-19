@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   emptyFilterGroup,
+  filterSummary,
   matchesFilter,
   normalizeFilter,
   type FilterFieldSpec,
@@ -51,6 +52,30 @@ describe("filter tree normalization", () => {
     ]);
     expect(normalizeFilter({ kind: "rule", field: "name", op: "equals", value: "x" }, fields)).toEqual(
       emptyFilterGroup(),
+    );
+  });
+
+  it("summarizes active conditions for hover help", () => {
+    const filter = normalizeFilter(
+      {
+        kind: "group",
+        op: "and",
+        children: [
+          { kind: "rule", field: "name", op: "contains", value: "Engine" },
+          {
+            kind: "group",
+            op: "or",
+            negate: true,
+            children: [
+              { kind: "rule", field: "time", op: "gte", value: "1" },
+            ],
+          },
+        ],
+      },
+      fields,
+    );
+    expect(filterSummary(filter, fields)).toBe(
+      "(Name contains Engine AND NOT (Time ≥ 1))",
     );
   });
 });
