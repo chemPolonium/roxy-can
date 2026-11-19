@@ -1,4 +1,4 @@
-import { useState } from "preact/hooks";
+import { useEffect, useRef, useState } from "preact/hooks";
 import type { MonitorRow } from "../types";
 import { palette, type Theme } from "../theme";
 
@@ -38,6 +38,43 @@ export function MonitorPanel({
     key: string;
     after: boolean;
   } | null>(null);
+  const [menu, setMenu] = useState<{
+    row: MonitorRow;
+    x: number;
+    y: number;
+  } | null>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!menu) return;
+    menuRef.current?.querySelector<HTMLButtonElement>("button")?.focus();
+    const close = (event: MouseEvent) => {
+      if (!menuRef.current?.contains(event.target as Node)) setMenu(null);
+    };
+    const key = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setMenu(null);
+    };
+    const scroll = () => setMenu(null);
+    document.addEventListener("mousedown", close);
+    document.addEventListener("keydown", key);
+    window.addEventListener("scroll", scroll, true);
+    return () => {
+      document.removeEventListener("mousedown", close);
+      document.removeEventListener("keydown", key);
+      window.removeEventListener("scroll", scroll, true);
+    };
+  }, [menu]);
+
+  const openMenu = (event: MouseEvent, row: MonitorRow) => {
+    event.preventDefault();
+    const width = 160;
+    const height = 80;
+    setMenu({
+      row,
+      x: Math.max(8, Math.min(event.clientX, window.innerWidth - width - 8)),
+      y: Math.max(8, Math.min(event.clientY, window.innerHeight - height - 8)),
+    });
+  };
 
   const sideAt = (event: DragEvent, element: HTMLElement) => {
     const rect = element.getBoundingClientRect();
@@ -103,13 +140,10 @@ export function MonitorPanel({
               draggable={sortable}
               title={
                 sortable
-                  ? "Right-click for decimals, bands and colors · drag to reorder"
-                  : "Right-click for decimals, bands and colors"
+                  ? "Right-click for settings or remove · drag to reorder"
+                  : "Right-click for settings or remove"
               }
-              onContextMenu={(event) => {
-                event.preventDefault();
-                onConfigure(row);
-              }}
+              onContextMenu={(event) => openMenu(event, row)}
               onDragStart={(event) => {
                 if (!sortable) return;
                 // Dragging from inside a field stays a text selection;
@@ -177,20 +211,42 @@ export function MonitorPanel({
                   {row.hasValue ? row.value.toFixed(row.digits) : "—"}
                   {row.hasValue && row.unit && <em>{row.unit}</em>}
                 </strong>
-                <button
-                  type="button"
-                  class="mini monitor-remove"
-                  title="Remove this row"
-                  aria-label={`Remove ${row.label}`}
-                  onClick={() => onRemove(row)}
-                >
-                  ×
-                </button>
               </div>
             </div>
           );
         })}
       </div>
+      {menu && (
+        <div
+          class="row-menu monitor-row-menu"
+          role="menu"
+          ref={menuRef}
+          style={{ top: `${menu.y}px`, left: `${menu.x}px` }}
+          onMouseDown={(event) => event.stopPropagation()}
+        >
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => {
+              setMenu(null);
+              onConfigure(menu.row);
+            }}
+          >
+            Settings…
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            class="danger"
+            onClick={() => {
+              setMenu(null);
+              onRemove(menu.row);
+            }}
+          >
+            Remove
+          </button>
+        </div>
+      )}
     </div>
   );
 }
