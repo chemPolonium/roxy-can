@@ -1,9 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
   emptyFilterGroup,
+  filterActive,
+  filterRuleCount,
   filterSummary,
   matchesFilter,
   normalizeFilter,
+  pruneFilter,
   type FilterFieldSpec,
 } from "./filterTree";
 
@@ -77,5 +80,30 @@ describe("filter tree normalization", () => {
     expect(filterSummary(filter, fields)).toBe(
       "(Name contains Engine AND NOT (Time ≥ 1))",
     );
+  });
+
+  it("ignores blank rules and counts only active conditions", () => {
+    const filter = emptyFilterGroup();
+    filter.children = [
+      { kind: "rule", field: "name", op: "contains", value: "" },
+      {
+        kind: "group",
+        op: "or",
+        children: [
+          { kind: "rule", field: "name", op: "equals", value: "Engine" },
+          { kind: "rule", field: "time", op: "gte", value: "2" },
+        ],
+      },
+    ];
+    expect(filterActive(filter)).toBe(true);
+    expect(filterRuleCount(filter)).toBe(2);
+    expect(pruneFilter(filter)).not.toBeNull();
+
+    filter.children = [
+      { kind: "rule", field: "name", op: "contains", value: "  " },
+    ];
+    expect(filterActive(filter)).toBe(false);
+    expect(filterRuleCount(filter)).toBe(0);
+    expect(pruneFilter(filter)).toBeNull();
   });
 });

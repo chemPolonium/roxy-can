@@ -28,7 +28,6 @@ import {
   SIGNAL_FILTER_SPECS,
   emptySignalFilter,
   matchesSignalFilter,
-  signalFilterActive,
 } from "./signalFilter";
 import { emptyFilterGroup, filterActive, normalizeFilter } from "./filterTree";
 import type { FilterGroup, FilterNode } from "./filterTree";
@@ -3803,7 +3802,7 @@ export function App() {
   const renderSignalsPanel = (slot: number) => {
     const labels = cursorLabels(chartCursors);
     const filtered =
-      signalsQuery.trim() !== "" || signalFilterActive(signalsFilter);
+      signalsQuery.trim() !== "" || filterActive(signalsFilter);
     const cursorA =
       labels.indexOf("A") >= 0 ? chartCursors[labels.indexOf("A")] : undefined;
     const cursorB =
@@ -3974,7 +3973,7 @@ export function App() {
     <>
       {slotHeader(slot, "monitor", {
         meta:
-          monitorQuery.trim() || signalFilterActive(monitorFilter)
+          monitorQuery.trim() || filterActive(monitorFilter)
             ? `${visibleMonitorRows.length} / ${monitorRows.length}`
             : undefined,
         actions: (
@@ -4071,7 +4070,7 @@ export function App() {
     <>
       {slotHeader(slot, "data", {
         meta:
-          dataQuery.trim() || signalFilterActive(dataFilter)
+          dataQuery.trim() || filterActive(dataFilter)
             ? `${visibleDataRows.length} / ${dataRows.length}`
             : undefined,
         actions: (
@@ -4159,7 +4158,7 @@ export function App() {
     <>
       {slotHeader(slot, "state", {
         meta:
-          stateQuery.trim() || signalFilterActive(stateFilter)
+          stateQuery.trim() || filterActive(stateFilter)
             ? `${visibleStateRows.length} / ${stateRows.length}`
             : undefined,
         actions: (
@@ -4210,7 +4209,7 @@ export function App() {
       })}
       <StatePanel
         rows={visibleStateRows}
-        filtered={stateQuery.trim() !== "" || signalFilterActive(stateFilter)}
+        filtered={stateQuery.trim() !== "" || filterActive(stateFilter)}
         windowS={state?.stateWindowS ?? 20}
         theme={theme}
         onWindow={(seconds) => void run({ type: "set_state_window", seconds })}

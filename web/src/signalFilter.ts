@@ -1,18 +1,12 @@
 import {
-  FILTER_OP_LABELS,
-  filterActive,
-  filterRuleCount,
+  emptyFilterGroup,
   matchesFilter,
-  newFilterRule,
-  pruneFilter,
   type FilterFieldSpec,
   type FilterGroup,
   type FilterNode,
-  type FilterOp,
-  type FilterRule,
 } from "./filterTree";
 
-export const SIGNAL_FILTER_FIELDS = [
+const SIGNAL_FILTER_FIELDS = [
   "signal",
   "label",
   "bus",
@@ -21,18 +15,7 @@ export const SIGNAL_FILTER_FIELDS = [
   "unit",
 ] as const;
 
-export type SignalFilterField = (typeof SIGNAL_FILTER_FIELDS)[number];
-export type SignalFilterOp = FilterOp;
-
-export interface SignalFilterRule extends FilterRule {
-  field: SignalFilterField;
-}
-
-export interface SignalFilterGroup extends FilterGroup {
-  children: SignalFilterNode[];
-}
-
-export type SignalFilterNode = SignalFilterRule | SignalFilterGroup;
+type SignalFilterField = (typeof SIGNAL_FILTER_FIELDS)[number];
 
 export interface SignalFilterRow {
   name: string;
@@ -43,7 +26,7 @@ export interface SignalFilterRow {
   unit?: string;
 }
 
-export const SIGNAL_FILTER_FIELD_LABELS: Record<SignalFilterField, string> = {
+const SIGNAL_FILTER_FIELD_LABELS: Record<SignalFilterField, string> = {
   signal: "Signal",
   label: "Label",
   bus: "Bus",
@@ -56,18 +39,8 @@ export const SIGNAL_FILTER_SPECS: FilterFieldSpec[] = SIGNAL_FILTER_FIELDS.map(
   (field) => ({ key: field, label: SIGNAL_FILTER_FIELD_LABELS[field] }),
 );
 
-export { FILTER_OP_LABELS };
-
-export function emptySignalFilter(): SignalFilterGroup {
-  return { kind: "group", op: "and", children: [] };
-}
-
-export function newSignalRule(): SignalFilterRule {
-  return { ...newFilterRule("signal"), field: "signal" };
-}
-
-export function newSignalGroup(): SignalFilterGroup {
-  return { kind: "group", op: "and", children: [] };
+export function emptySignalFilter(): FilterGroup {
+  return emptyFilterGroup();
 }
 
 function fieldValue(row: SignalFilterRow, field: SignalFilterField): string {
@@ -85,20 +58,6 @@ function fieldValue(row: SignalFilterRow, field: SignalFilterField): string {
     case "unit":
       return row.unit ?? "";
   }
-}
-
-export function pruneSignalFilter(
-  node: FilterNode,
-): FilterNode | null {
-  return pruneFilter(node);
-}
-
-export function signalFilterActive(node: FilterNode): boolean {
-  return filterActive(node);
-}
-
-export function signalFilterRuleCount(node: FilterNode): number {
-  return filterRuleCount(node);
 }
 
 export function matchesSignalFilter(

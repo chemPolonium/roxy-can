@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { filterSignalRows, rowPathWithoutName } from "./signalRows";
-import { emptySignalFilter, newSignalRule } from "./signalFilter";
+import { emptyFilterGroup, newFilterRule } from "./filterTree";
+import { matchesSignalFilter } from "./signalFilter";
 
 const ROWS = [
   {
@@ -52,12 +53,38 @@ describe("signal row filtering", () => {
   });
 
   it("ands the quick query with the advanced filter", () => {
-    const filter = emptySignalFilter();
+    const filter = emptyFilterGroup();
     filter.children = [
-      { ...newSignalRule(), field: "bus", op: "equals", value: "CAN1" },
+      { ...newFilterRule("bus"), field: "bus", op: "equals", value: "CAN1" },
     ];
     expect(filterSignalRows(ROWS, "", filter)).toHaveLength(2);
     expect(filterSignalRows(ROWS, "throttle", filter)).toHaveLength(1);
     expect(filterSignalRows(ROWS, "speed", filter)).toHaveLength(1);
+  });
+
+  it("maps every signal filter field onto a row", () => {
+    const row = {
+      ...ROWS[0],
+      label: "Engine speed",
+      frame: "EngineStatus",
+    };
+    expect(
+      matchesSignalFilter(
+        { ...emptyFilterGroup(), children: [
+          { ...newFilterRule("label"), field: "label", value: "engine" },
+          { ...newFilterRule("frame"), field: "frame", value: "EngineStatus" },
+          { ...newFilterRule("unit"), field: "unit", value: "rpm" },
+        ] },
+        row,
+      ),
+    ).toBe(true);
+    expect(
+      matchesSignalFilter(
+        { ...emptyFilterGroup(), children: [
+          { ...newFilterRule("path"), field: "path", value: "PDU_A" },
+        ] },
+        row,
+      ),
+    ).toBe(false);
   });
 });
