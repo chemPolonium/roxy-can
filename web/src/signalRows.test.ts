@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { filterSignalRows } from "./signalRows";
+import { filterSignalRows, rowPathWithoutName } from "./signalRows";
 
 const ROWS = [
   {
@@ -40,5 +40,13 @@ describe("signal row filtering", () => {
   it("is case-insensitive and reports no match", () => {
     expect(filterSignalRows(ROWS, "ENGINESTATUS")).toHaveLength(2);
     expect(filterSignalRows(ROWS, "not-there")).toEqual([]);
+  });
+
+  it("drops the trailing signal name from a path label", () => {
+    expect(rowPathWithoutName("EngineStatus / EngineSpeed", "EngineSpeed")).toBe(
+      "EngineStatus",
+    );
+    expect(rowPathWithoutName("A / PDU_A / Speed", "Speed")).toBe("A / PDU_A");
+    expect(rowPathWithoutName("Other / Frame", "Speed")).toBe("Other / Frame");
   });
 });

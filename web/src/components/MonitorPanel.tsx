@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "preact/hooks";
 import type { MonitorRow } from "../types";
 import { palette, type Theme } from "../theme";
+import { rowPathWithoutName } from "../signalRows";
 
 interface Props {
   rows: MonitorRow[];
@@ -193,12 +194,16 @@ export function MonitorPanel({
               <div class="monitor-main">
                 <span
                   class="monitor-label"
-                  title={`${row.bus} · ${row.path || row.name}`}
+                  title={`${row.bus}${
+                    row.path ? ` · ${rowPathWithoutName(row.path, row.name)}` : ""
+                  }`}
                 >
                   {row.label}
                   <small>
                     {row.bus}
-                    {row.path ? ` · ${row.path}` : ` · ${row.name}`}
+                    {row.path
+                      ? ` · ${rowPathWithoutName(row.path, row.name)}`
+                      : ""}
                   </small>
                 </span>
                 <strong

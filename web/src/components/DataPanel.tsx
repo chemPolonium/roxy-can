@@ -1,5 +1,6 @@
 import { useState } from "preact/hooks";
 import type { DataRow } from "../types";
+import { rowPathWithoutName } from "../signalRows";
 
 interface Props {
   rows: DataRow[];
@@ -147,12 +148,14 @@ export function DataPanel({
           )}
           <div
             class="data-name"
-            title={`${row.bus} · ${row.path || row.name}`}
+            title={`${row.bus}${
+              row.path ? ` · ${rowPathWithoutName(row.path, row.name)}` : ""
+            }`}
           >
             <strong>{row.name}</strong>
             <small>
               {row.bus}
-              {row.path ? ` · ${row.path}` : ""}
+              {row.path ? ` · ${rowPathWithoutName(row.path, row.name)}` : ""}
             </small>
           </div>
           <div class="data-value" title={row.value}>
