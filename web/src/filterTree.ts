@@ -158,3 +158,67 @@ export function matchesFilter(
   const active = filter ? pruneFilter(filter) : null;
   return active ? matchesNode(active, read) : true;
 }
+
+const TEXT_OPS: FilterOp[] = ["contains", "notContains", "equals", "notEquals"];
+const NUMBER_OPS: FilterOp[] = ["equals", "notEquals", "gte", "lte", "gt", "lt"];
+const MAX_FILTER_DEPTH = 3;
+const MAX_FILTER_CHILDREN = 32;
+const MAX_FILTER_VALUE = 200;
+
+/// Rebuilds a persisted tree from untrusted project/localStorage JSON.
+/// Unknown fields, operators or over-deep groups are dropped; the result is
+/// always a group, so callers can pass it straight to the editor.
+export function normalizeFilter(
+  value: unknown,
+  fields: FilterFieldSpec[],
+): FilterGroup {
+  const byKey = new Map(fields.map((field) => [field.key, field]));
+  let nodes = 0;
+
+  const node = (raw: unknown, depth: number): FilterNode | null => {
+    if (!raw || typeof raw !== "object" || depth > MAX_FILTER_DEPTH) return null;
+    const entry = raw as Record<string, unknown>;
+    if (entry.kind === "rule") {
+      if (nodes >= MAX_FILTER_CHILDREN * 2) return null;
+      const field = byKey.get(String(entry.field));
+      const op = entry.op as FilterOp;
+      if (!field || (!TEXT_OPS.includes(op) && !NUMBER_OPS.includes(op))) {
+        return null;
+      }
+      const numeric = !!field.numeric;
+      if (!numeric && !TEXT_OPS.includes(op)) return null;
+      if (numeric && !NUMBER_OPS.includes(op)) return null;
+      const text = typeof entry.value === "string"
+        ? entry.value.slice(0, MAX_FILTER_VALUE)
+        : "";
+      nodes += 1;
+      return {
+        kind: "rule",
+        field: field.key,
+        op,
+        value: text,
+        numeric: numeric || undefined,
+      };
+    }
+    if (entry.kind === "group") {
+      const op = entry.op === "or" ? "or" : "and";
+      const children = Array.isArray(entry.children)
+        ? entry.children
+            .slice(0, MAX_FILTER_CHILDREN)
+            .map((child) => node(child, depth + 1))
+            .filter((child): child is FilterNode => child !== null)
+        : [];
+      return {
+        kind: "group",
+        op,
+        negate: entry.negate === true || undefined,
+        children,
+      };
+    }
+    return null;
+  };
+
+  const root = node(value, 0);
+  return root?.kind === "group" ? root : emptyFilterGroup();
+}
+

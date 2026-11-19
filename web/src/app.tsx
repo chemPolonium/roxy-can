@@ -29,8 +29,8 @@ import {
   emptySignalFilter,
   signalFilterActive,
 } from "./signalFilter";
-import type { FilterNode } from "./filterTree";
-import { emptyFilterGroup, filterActive } from "./filterTree";
+import { emptyFilterGroup, filterActive, normalizeFilter } from "./filterTree";
+import type { FilterGroup, FilterNode } from "./filterTree";
 import { FilterBar } from "./components/FilterBar";
 import {
   MESSAGE_FILTER_SPECS,
@@ -196,6 +196,13 @@ interface LegacyView {
   layout?: unknown;
 }
 
+interface ViewFilters {
+  monitor: FilterGroup;
+  data: FilterGroup;
+  message: FilterGroup;
+  trace: FilterGroup;
+}
+
 interface SavedView {
   shellMode: ShellMode;
   dock: DockState;
@@ -205,6 +212,7 @@ interface SavedView {
   derivedReads?: { id: string; name: string }[];
   cursors: ChartCursor[];
   panelBook?: PanelBook;
+  filters?: ViewFilters;
 }
 
 interface SavedWorkspace extends Partial<SavedView>, LegacyView {
@@ -272,6 +280,16 @@ function normalizeView(
       : raw.mainView === "panel"
         ? "panel"
         : "standard";
+  const hasFilters = !!raw.filters && typeof raw.filters === "object";
+  const rawFilters = hasFilters
+    ? (raw.filters as unknown as Record<string, unknown>)
+    : {};
+  const filters: ViewFilters = {
+    monitor: normalizeFilter(rawFilters.monitor, SIGNAL_FILTER_SPECS),
+    data: normalizeFilter(rawFilters.data, SIGNAL_FILTER_SPECS),
+    message: normalizeFilter(rawFilters.message, MESSAGE_FILTER_SPECS),
+    trace: normalizeFilter(rawFilters.trace, TRACE_FILTER_SPECS),
+  };
   return {
     shellMode,
     dock: docking,
@@ -281,6 +299,7 @@ function normalizeView(
     signalView: { windowS, endS },
     cursors,
     panelBook: parsePanelBook(raw.panelBook) ?? defaultPanelBook(),
+    ...(hasFilters ? { filters } : {}),
   };
 }
 
@@ -468,25 +487,27 @@ export function App() {
   const [online, setOnline] = useState(false);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [savedView] = useState(loadView);
   const [query, setQuery] = useState("");
   const [bus, setBus] = useState<string>("all");
-  const [traceFilter, setTraceFilter] = useState<FilterNode>(emptyFilterGroup);
+  const [traceFilter, setTraceFilter] = useState<FilterNode>(
+    () => savedView.filters?.trace ?? emptyFilterGroup(),
+  );
   const [panelQuery, setPanelQuery] = useState("");
   const [messageQuery, setMessageQuery] = useState("");
   const [monitorQuery, setMonitorQuery] = useState("");
   const [dataQuery, setDataQuery] = useState("");
   const [monitorFilter, setMonitorFilter] = useState<FilterNode>(
-    emptySignalFilter,
+    () => savedView.filters?.monitor ?? emptySignalFilter(),
   );
   const [dataFilter, setDataFilter] = useState<FilterNode>(
-    emptySignalFilter,
+    () => savedView.filters?.data ?? emptySignalFilter(),
   );
   const [messageFilter, setMessageFilter] = useState<FilterNode>(
-    emptyFilterGroup,
+    () => savedView.filters?.message ?? emptyFilterGroup(),
   );
   const [writeKind, setWriteKind] = useState("all");
   const [writeQuery, setWriteQuery] = useState("");
-  const [savedView] = useState(loadView);
   const [shellMode, setShellMode] = useState<ShellMode>(
     savedView.shellMode ?? "standard",
   );
@@ -657,6 +678,10 @@ export function App() {
       setStatsColumns(undefined);
       setPanelBook(defaultPanelBook());
       setPanelDirty(false);
+      setTraceFilter(emptyFilterGroup());
+      setMonitorFilter(emptySignalFilter());
+      setDataFilter(emptySignalFilter());
+      setMessageFilter(emptyFilterGroup());
       chartCursorSeq.current = 1;
       return;
     }
@@ -672,6 +697,12 @@ export function App() {
       setChartCursors(view.cursors);
       chartCursorSeq.current =
         Math.max(0, ...view.cursors.map((cursor) => cursor.id)) + 1;
+    }
+    if (view.filters) {
+      setTraceFilter(view.filters.trace);
+      setMonitorFilter(view.filters.monitor);
+      setDataFilter(view.filters.data);
+      setMessageFilter(view.filters.message);
     }
     const columns = parseTraceColumns(saved.traceColumns);
     if (columns) setTraceColumns(columns);
@@ -804,6 +835,12 @@ export function App() {
           messageColumns,
           statsColumns,
           readSignals,
+          filters: {
+            monitor: monitorFilter,
+            data: dataFilter,
+            message: messageFilter,
+            trace: traceFilter,
+          },
         },
       }).catch(() => {});
     }, 350);
@@ -819,6 +856,10 @@ export function App() {
     messageColumns,
     statsColumns,
     readSignals,
+    monitorFilter,
+    dataFilter,
+    messageFilter,
+    traceFilter,
     state?.workspaceRev,
   ]);
 
@@ -1052,6 +1093,12 @@ export function App() {
           derivedReads,
           cursors: chartCursors,
           panelBook,
+          filters: {
+            monitor: monitorFilter,
+            data: dataFilter,
+            message: messageFilter,
+            trace: traceFilter,
+          },
         }),
       );
     } catch {
@@ -1066,6 +1113,10 @@ export function App() {
     derivedReads,
     chartCursors,
     panelBook,
+    monitorFilter,
+    dataFilter,
+    messageFilter,
+    traceFilter,
   ]);
 
   useEffect(() => {
@@ -1599,6 +1650,12 @@ export function App() {
         cursors: chartCursors,
         traceColumns,
         readSignals,
+        filters: {
+          monitor: monitorFilter,
+          data: dataFilter,
+          message: messageFilter,
+          trace: traceFilter,
+        },
       },
     });
 
