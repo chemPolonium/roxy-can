@@ -144,12 +144,16 @@ import {
   addPanelPage,
   addPanelPageFromFile,
   defaultPanelBook,
+  duplicatePanelPage,
   exportPanelFile,
   importPanelFile,
   mergeProjectPanels,
+  panelFileName,
   panelSetpointTarget,
   parsePanelBook,
   parsePanelHex,
+  removePanelPage,
+  renamePanelPage,
   selectPanelPage,
   type PanelBook,
   type PanelButton,
@@ -488,6 +492,18 @@ export function App() {
   );
   const activePage = activePanelPage(panelBook);
   const [panelEditing, setPanelEditing] = useState(false);
+  const [pageMenu, setPageMenu] = useState<{
+    id: string;
+    x: number;
+    y: number;
+  } | null>(null);
+  const [pageRename, setPageRename] = useState<{
+    id: string;
+    name: string;
+  } | null>(null);
+  const [pageConfirmDelete, setPageConfirmDelete] = useState<string | null>(null);
+  const pageMenuRef = useRef<HTMLDivElement>(null);
+  const pageImportInput = useRef<HTMLInputElement>(null);
   // Panel pages only enter the project on Save, so their edits are dirty even
   // when the core's project flag is still clean.
   const [panelDirty, setPanelDirty] = useState(false);
@@ -963,6 +979,40 @@ export function App() {
       ?.querySelector<HTMLButtonElement>("button:not(:disabled)")
       ?.focus();
   }, [runModeOpen]);
+
+  useEffect(() => {
+    if (!pageMenu) return;
+    pageMenuRef.current
+      ?.querySelector<HTMLButtonElement>("button:not(:disabled)")
+      ?.focus();
+    const close = (event: PointerEvent) => {
+      if (
+        !(event.target instanceof Element) ||
+        !event.target.closest(".page-tab-menu")
+      ) {
+        setPageMenu(null);
+        setPageConfirmDelete(null);
+      }
+    };
+    const escape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setPageMenu(null);
+        setPageConfirmDelete(null);
+      }
+    };
+    const scroll = () => {
+      setPageMenu(null);
+      setPageConfirmDelete(null);
+    };
+    window.addEventListener("pointerdown", close);
+    window.addEventListener("keydown", escape);
+    window.addEventListener("scroll", scroll, true);
+    return () => {
+      window.removeEventListener("pointerdown", close);
+      window.removeEventListener("keydown", escape);
+      window.removeEventListener("scroll", scroll, true);
+    };
+  }, [pageMenu]);
 
   useEffect(() => {
     if (maximizedSlot === null) return;
@@ -4192,6 +4242,81 @@ export function App() {
     setExplorerOpen(false);
   };
 
+  const openPageMenu = (event: MouseEvent, id: string) => {
+    event.preventDefault();
+    if (shellMode !== "panel" || activePage.id !== id) showPanelPage(id);
+    setPageConfirmDelete(null);
+    setPageMenu({
+      id,
+      x: Math.max(8, Math.min(event.clientX, window.innerWidth - 190)),
+      y: Math.max(8, Math.min(event.clientY, window.innerHeight - 220)),
+    });
+  };
+
+  const commitPageRename = () => {
+    if (!pageRename) return;
+    updatePanelBook(renamePanelPage(panelBook, pageRename.id, pageRename.name));
+    setPageRename(null);
+  };
+
+  const duplicatePage = (id: string) => {
+    const copy = duplicatePanelPage(panelBook, id);
+    if (!copy) {
+      showToast("Cannot duplicate this page");
+      return;
+    }
+    updatePanelBook(copy.book);
+    setShellMode("panel");
+    setPanelEditing(true);
+    setPageMenu(null);
+  };
+
+  const exportPage = (id: string) => {
+    const page = panelBook.pages.find((entry) => entry.id === id);
+    if (!page) return;
+    const name = panelFileName(page.name);
+    const blob = new Blob([exportPanelFile(page)], {
+      type: "application/json",
+    });
+    const url = URL.createObjectURL(blob);
+    triggerDownload(url, name);
+    window.setTimeout(() => URL.revokeObjectURL(url), 1_000);
+    setPageMenu(null);
+    showToast(`Exported ${name}`);
+  };
+
+  const importPanelPage = async (file: File) => {
+    let raw: unknown;
+    try {
+      raw = JSON.parse(await file.text());
+    } catch {
+      showToast("That Panel file is not valid JSON");
+      return;
+    }
+    const result = importPanelFile(raw);
+    if ("error" in result) {
+      showToast(result.error);
+      return;
+    }
+    const added = addPanelPageFromFile(panelBook, result.page);
+    updatePanelBook(added.book);
+    setShellMode("panel");
+    setPanelEditing(true);
+    showToast(`Imported ${added.page.name}`);
+  };
+
+  const deletePage = (id: string) => {
+    const page = panelBook.pages.find((entry) => entry.id === id);
+    if (!page) return;
+    if (page.widgets.length > 0 && pageConfirmDelete !== id) {
+      setPageConfirmDelete(id);
+      return;
+    }
+    updatePanelBook(removePanelPage(panelBook, id));
+    setPageMenu(null);
+    setPageConfirmDelete(null);
+  };
+
   // The physical mode ships chosen signal values; the core encodes them and
   // keeps the database's start value for everything else.
   const panelPhysical = (frame: PanelFrameSend) => {
@@ -4701,19 +4826,47 @@ export function App() {
           >
             Standard
           </button>
-          {panelBook.pages.map((entry) => (
-            <button
-              key={entry.id}
-              type="button"
-              class={
-                shellMode === "panel" && entry.id === activePage.id ? "on" : ""
-              }
-              title={entry.name}
-              onClick={() => showPanelPage(entry.id)}
-            >
-              {entry.name}
-            </button>
-          ))}
+          {panelBook.pages.map((entry) =>
+            pageRename?.id === entry.id ? (
+              <input
+                key={entry.id}
+                class="page-tab-rename view-tab-rename"
+                autoFocus
+                value={pageRename.name}
+                maxLength={40}
+                onInput={(event) =>
+                  setPageRename({
+                    id: entry.id,
+                    name: (event.target as HTMLInputElement).value,
+                  })
+                }
+                onBlur={commitPageRename}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    event.preventDefault();
+                    commitPageRename();
+                  } else if (event.key === "Escape") {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    setPageRename(null);
+                  }
+                }}
+              />
+            ) : (
+              <button
+                key={entry.id}
+                type="button"
+                class={
+                  shellMode === "panel" && entry.id === activePage.id ? "on" : ""
+                }
+                title={entry.name}
+                onClick={() => showPanelPage(entry.id)}
+                onContextMenu={(event) => openPageMenu(event, entry.id)}
+              >
+                {entry.name}
+              </button>
+            ),
+          )}
           <button
             type="button"
             class="view-add"
@@ -5039,6 +5192,78 @@ export function App() {
           </button>
         </div>
       </header>
+      <input
+        ref={pageImportInput}
+        type="file"
+        accept=".rxpanel,.json,application/json"
+        hidden
+        onChange={(event) => {
+          const file = event.currentTarget.files?.[0];
+          if (file) void importPanelPage(file);
+          event.currentTarget.value = "";
+        }}
+      />
+      {pageMenu && (
+        <div
+          ref={pageMenuRef}
+          class="row-menu page-tab-menu"
+          role="menu"
+          aria-label="Panel page actions"
+          style={{ top: `${pageMenu.y}px`, left: `${pageMenu.x}px` }}
+          onPointerDown={(event) => event.stopPropagation()}
+        >
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => {
+              const page = panelBook.pages.find(
+                (entry) => entry.id === pageMenu.id,
+              );
+              setPageMenu(null);
+              if (!page) return;
+              setPageRename({ id: page.id, name: page.name });
+            }}
+          >
+            Rename page
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => duplicatePage(pageMenu.id)}
+          >
+            Duplicate page
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => {
+              setPageMenu(null);
+              pageImportInput.current?.click();
+            }}
+          >
+            Import page…
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => exportPage(pageMenu.id)}
+          >
+            Export page
+          </button>
+          <div class="page-menu-sep" role="separator" />
+          <button
+            type="button"
+            role="menuitem"
+            class={pageConfirmDelete === pageMenu.id ? "danger" : undefined}
+            disabled={panelBook.pages.length <= 1}
+            onClick={() => deletePage(pageMenu.id)}
+          >
+            {pageConfirmDelete === pageMenu.id
+              ? "Delete page and controls?"
+              : "Delete page"}
+          </button>
+        </div>
+      )}
 
       <section class="stats">
         <div class="stat">

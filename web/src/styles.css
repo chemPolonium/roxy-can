@@ -1431,6 +1431,17 @@ body.col-resizing {
   font-size: 11px;
 }
 
+.view-tab-rename {
+  width: 110px;
+  height: 20px;
+  padding: 0 6px;
+  font-size: 11px;
+}
+
+.page-tab-menu {
+  min-width: 170px;
+}
+
 .page-suggest {
   width: 100%;
 }

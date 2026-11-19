@@ -9,24 +9,17 @@ import {
   PANEL_MAX_BANDS,
   PANEL_WIDGET_KINDS,
   activePanelPage,
-  addPanelPageFromFile,
   addPanelWidget,
-  duplicatePanelPage,
   duplicatePanelWidget,
-  exportPanelFile,
   formatPanelValue,
-  importPanelFile,
   movePanelWidget,
-  panelFileName,
   panelFrameProblem,
   panelSetpointTarget,
   parsePanelHex,
   formatPanelHex,
   panelWidgetSpec,
   pastePanelWidget,
-  removePanelPage,
   removePanelWidget,
-  renamePanelPage,
   resizePanelPage,
   selectPanelPage,
   updatePanelPage,
@@ -1657,10 +1650,6 @@ export function PagePanel({
   const onPage = (next: PanelPage) => onBook(updatePanelPage(book, next));
   const [fullscreen, setFullscreen] = useState(false);
   const [selected, setSelected] = useState<string | null>(null);
-  const [renaming, setRenaming] = useState<{ id: string; name: string } | null>(
-    null,
-  );
-  const renameCanceled = useRef(false);
   const [drag, setDrag] = useState<DragState | null>(null);
   const [history, setHistory] = useState<History>(EMPTY_HISTORY);
   const [clipboard, setClipboard] = useState<PanelWidget | null>(null);
@@ -1670,9 +1659,7 @@ export function PagePanel({
   const addTrigger = useRef<HTMLButtonElement>(null);
   const addMenu = useRef<HTMLDivElement>(null);
   const [menu, setMenu] = useState<PageMenu | null>(null);
-  const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
-  const importInput = useRef<HTMLInputElement>(null);
   const [pageNotice, setPageNotice] = useState("");
   const noticeError = (message: string) => {
     setPageNotice(message);
@@ -1692,7 +1679,6 @@ export function PagePanel({
     setHistory(EMPTY_HISTORY);
     setClipboard(null);
     setSelected(null);
-    setRenaming(null);
     setMenu(null);
     setAddOpen(false);
     setPageNotice("");
@@ -1713,7 +1699,6 @@ export function PagePanel({
 
   useEffect(() => {
     if (!menu) return;
-    setConfirmDelete(null);
     menuRef.current
       ?.querySelector<HTMLButtonElement>("button:not(:disabled)")
       ?.focus();
@@ -1973,13 +1958,6 @@ export function PagePanel({
     });
   };
 
-  const clearPageUi = () => {
-    setSelected(null);
-    setHistory(EMPTY_HISTORY);
-    setClipboard(null);
-    setRenaming(null);
-  };
-
   // ←/→ walk the Panel pages even though the tabs now live in the top
   // switch. Typing, menus and dialogs keep their own key handling.
   useEffect(() => {
@@ -2012,42 +1990,11 @@ export function PagePanel({
       setSelected(null);
       setHistory(EMPTY_HISTORY);
       setClipboard(null);
-      setRenaming(null);
       onBook(selectPanelPage(book, target.id));
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [book, page.id, onBook]);
-
-  const copyPageById = (id: string) => {
-    const copy = duplicatePanelPage(book, id);
-    if (!copy) {
-      noticeError("Cannot duplicate this page");
-      return;
-    }
-    clearPageUi();
-    onBook(copy.book);
-  };
-
-  const deletePageById = (id: string) => {
-    if (book.pages.length <= 1) {
-      noticeError("Keep at least one page");
-      return;
-    }
-    clearPageUi();
-    onBook(removePanelPage(book, id));
-  };
-
-  const commitRename = () => {
-    if (!renaming) return;
-    if (renameCanceled.current) {
-      renameCanceled.current = false;
-      setRenaming(null);
-      return;
-    }
-    onBook(renamePanelPage(book, renaming.id, renaming.name));
-    setRenaming(null);
-  };
 
   const add = (kind: PanelWidgetKind) => {
     const added = addPanelWidget(page, kind);
@@ -2057,40 +2004,6 @@ export function PagePanel({
     }
     commit(added.page);
     setSelected(added.id);
-  };
-
-  const exportPageById = (id: string) => {
-    const target = book.pages.find((entry) => entry.id === id) ?? page;
-    const name = panelFileName(target.name);
-    const blob = new Blob([exportPanelFile(target)], {
-      type: "application/json",
-    });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = name;
-    link.click();
-    window.setTimeout(() => URL.revokeObjectURL(url), 0);
-    noticeDone(`Exported ${name}`);
-  };
-
-  const importPage = (text: string) => {
-    let raw: unknown;
-    try {
-      raw = JSON.parse(text);
-    } catch {
-      noticeError("That file is not valid JSON");
-      return;
-    }
-    const result = importPanelFile(raw);
-    if ("error" in result) {
-      noticeError(result.error);
-      return;
-    }
-    const added = addPanelPageFromFile(book, result.page);
-    clearPageUi();
-    onBook(added.book);
-    noticeDone(`Imported ${added.page.name}`);
   };
 
   const resetSize = () => {
@@ -2129,7 +2042,7 @@ export function PagePanel({
   // Flip above the click when the menu would run off the bottom; the canvas
   // menu is the tallest (Paste, seven controls, Undo/Redo).
   const menuHeight =
-    menu?.kind === "canvas" ? 520 : menu?.kind === "widget" ? 150 : 150;
+    menu?.kind === "canvas" ? 330 : menu?.kind === "widget" ? 150 : 150;
   const menuTop = menu
     ? menu.y + menuHeight > window.innerHeight - 8
       ? Math.max(8, menu.y - menuHeight)
@@ -2502,45 +2415,7 @@ export function PagePanel({
     <section
       class={`panel page-panel ${fullscreen ? "page-fullscreen" : ""}`}
     >
-      <input
-        ref={importInput}
-        type="file"
-        accept=".rxpanel,.json,application/json"
-        hidden
-        onChange={(event) => {
-          const file = event.currentTarget.files?.[0];
-          if (!file) return;
-          void file.text().then(importPage);
-          event.currentTarget.value = "";
-        }}
-      />
       <div class={`panel-head ${editing ? "editing" : ""}`}>
-        {renaming && (
-          <input
-            class="page-tab-rename"
-            autoFocus
-            value={renaming.name}
-            maxLength={40}
-            onInput={(event) =>
-              setRenaming({
-                id: renaming.id,
-                name: (event.target as HTMLInputElement).value,
-              })
-            }
-            onBlur={commitRename}
-            onKeyDown={(event) => {
-              if (event.key === "Enter") {
-                event.preventDefault();
-                commitRename();
-              } else if (event.key === "Escape") {
-                event.preventDefault();
-                event.stopPropagation();
-                renameCanceled.current = true;
-                setRenaming(null);
-              }
-            }}
-          />
-        )}
         <span class="meta">
           {page.width * PAGE_GRID}×{page.height * PAGE_GRID} · {PAGE_GRID}px grid
         </span>
@@ -2959,69 +2834,6 @@ export function PagePanel({
                 }}
               >
                 Redo
-              </button>
-              <div class="page-menu-sep" role="separator" />
-              <button
-                type="button"
-                role="menuitem"
-                onClick={() => {
-                  setMenu(null);
-                  renameCanceled.current = false;
-                  setRenaming({ id: page.id, name: page.name });
-                }}
-              >
-                Rename page
-              </button>
-              <button
-                type="button"
-                role="menuitem"
-                onClick={() => {
-                  setMenu(null);
-                  copyPageById(page.id);
-                }}
-              >
-                Duplicate page
-              </button>
-              <button
-                type="button"
-                role="menuitem"
-                onClick={() => {
-                  setMenu(null);
-                  importInput.current?.click();
-                }}
-              >
-                Import page…
-              </button>
-              <button
-                type="button"
-                role="menuitem"
-                onClick={() => {
-                  setMenu(null);
-                  exportPageById(page.id);
-                }}
-              >
-                Export page
-              </button>
-              <div class="page-menu-sep" role="separator" />
-              <button
-                type="button"
-                role="menuitem"
-                class={confirmDelete === page.id ? "danger" : undefined}
-                disabled={book.pages.length <= 1}
-                onClick={() => {
-                  // An empty page can go at once; a page with controls gets
-                  // the same two-step confirm as Clear Trace.
-                  if (page.widgets.length > 0 && confirmDelete !== page.id) {
-                    setConfirmDelete(page.id);
-                    return;
-                  }
-                  setMenu(null);
-                  deletePageById(page.id);
-                }}
-              >
-                {confirmDelete === page.id
-                  ? "Delete page and controls?"
-                  : "Delete page"}
               </button>
             </>
           )}
