@@ -25,18 +25,6 @@ fn one_u32() -> u32 {
     1
 }
 
-fn one_f64() -> f64 {
-    1.0
-}
-
-fn ten_u32() -> u32 {
-    10
-}
-
-fn trace_limit_default() -> usize {
-    crate::app::TRACE_LIMIT
-}
-
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CanCfg {

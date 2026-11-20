@@ -1,5 +1,4 @@
 //! SOME/IP service catalog read from AUTOSAR ARXML.
-#![allow(dead_code)] // catalog/codec land before the SOME/IP payload view uses them
 //!
 //! The service interface itself carries methods/events/fields and their
 //! argument types; the deployment object carries the numeric service id and
@@ -157,13 +156,6 @@ pub struct ServiceCatalog {
 impl ServiceCatalog {
     pub fn service(&self, id: u16) -> Option<&ServiceDef> {
         self.services.iter().find(|service| service.id == id)
-    }
-
-    pub fn method(&self, service: u16, method: u16) -> Option<&ServiceMethod> {
-        self.service(service)?
-            .methods
-            .iter()
-            .find(|entry| entry.id == method)
     }
 }
 

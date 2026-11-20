@@ -1338,25 +1338,6 @@ impl<D> std::ops::Deref for ProtocolRuntime<D> {
     }
 }
 
-/// One bus coordinate with the protocol kept explicit. Commands, events and
-/// exports should carry this instead of overloading `ch`/`bus`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-#[allow(dead_code)] // Boundary vocabulary for the next trigger/export slices.
-pub enum BusRef {
-    Can(u8),
-    Fr(u8),
-    Eth(u8),
-}
-
-#[allow(dead_code)]
-impl BusRef {
-    pub fn bus(self) -> u8 {
-        match self {
-            BusRef::Can(bus) | BusRef::Fr(bus) | BusRef::Eth(bus) => bus,
-        }
-    }
-}
-
 /// The raw wire event shared by recorder/trigger/export boundaries. Decoding
 /// still uses the per-protocol plan; this only gives one envelope.
 #[derive(Clone, Debug)]
@@ -1364,33 +1345,6 @@ pub enum BusEvent<'a> {
     Can(&'a CanFrame),
     Fr(&'a crate::trace::FrRow),
     Eth(&'a crate::eth::EthFrame),
-}
-
-#[allow(dead_code)]
-impl BusEvent<'_> {
-    pub fn bus_ref(&self) -> BusRef {
-        match self {
-            BusEvent::Can(frame) => BusRef::Can(frame.channel),
-            BusEvent::Fr(row) => BusRef::Fr(row.bus),
-            BusEvent::Eth(frame) => BusRef::Eth(frame.bus),
-        }
-    }
-
-    pub fn t_us(&self) -> u64 {
-        match self {
-            BusEvent::Can(frame) => frame.t_us,
-            BusEvent::Fr(row) => row.t_us,
-            BusEvent::Eth(frame) => frame.t_us,
-        }
-    }
-
-    pub fn payload_len(&self) -> usize {
-        match self {
-            BusEvent::Can(frame) => frame.payload().len(),
-            BusEvent::Fr(row) => row.payload.len(),
-            BusEvent::Eth(frame) => frame.payload.len(),
-        }
-    }
 }
 
 /// One in-flight SOME/IP request. Only the correlation fields are kept; the
@@ -11046,24 +11000,6 @@ mod tests {
             .expect("service became a Comm entity");
         assert_eq!(service.name, "SpeedService");
         assert_eq!(service.events[0].id, 0x8001);
-    }
-
-    #[test]
-    fn bus_event_keeps_protocol_explicit() {
-        let frame = CanFrame {
-            t_us: 10,
-            channel: 2,
-            id: 0x100,
-            extended: false,
-            len: 1,
-            data: [0; 64],
-            dir: Direction::Rx,
-            flags: crate::can::frame::FrameFlags::NONE,
-        };
-        let event = BusEvent::Can(&frame);
-        assert_eq!(event.bus_ref(), BusRef::Can(2));
-        assert_eq!(event.t_us(), 10);
-        assert_eq!(event.payload_len(), 1);
     }
 
     #[test]

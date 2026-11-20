@@ -150,11 +150,8 @@ pub enum TriggerAction {
         /// the service catalog instead of using the bytes above.
         values: std::collections::BTreeMap<String, f64>,
         /// `udp` or `tcp`; TCP uses host/port.
-        #[allow(dead_code)]
         transport: String,
-        #[allow(dead_code)]
         host: String,
-        #[allow(dead_code)]
         port: u16,
     },
     /// Blanks the trace ring on the edge: a clean window at the moment
