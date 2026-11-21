@@ -61,16 +61,6 @@
   color: #1f6fd0;
 }
 
-[data-theme="light"] .fb-menu button {
-  border: 0;
-  background: transparent;
-  color: inherit;
-}
-
-[data-theme="light"] .fb-menu button:hover:not(:disabled) {
-  background: #eef4fb;
-}
-
 /* The project line is a flat text trigger, not a button surface. */
 [data-theme="light"] .brand-project {
   border: 0;
@@ -186,24 +176,6 @@
 
 [data-theme="light"] .app-menu button:hover:not(:disabled) {
   background: #eef4fb;
-}
-
-[data-theme="light"] .trace-menu {
-  border-color: #d4dbe4;
-  background: #ffffff;
-  box-shadow: 0 10px 28px rgb(31 45 61 / 18%);
-}
-
-[data-theme="light"] .trace-menu button {
-  color: #26313f;
-}
-
-[data-theme="light"] .trace-menu button:hover:not(:disabled) {
-  background: #eef4fb;
-}
-
-[data-theme="light"] .signal-menu .signal-menu-remove {
-  color: #b42318;
 }
 
 [data-theme="light"] .data-table th {

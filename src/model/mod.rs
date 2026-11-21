@@ -1395,19 +1395,6 @@ impl ClusterSource {
             ClusterSource::Manual => None,
         }
     }
-
-    pub fn accepts_path(path: &str) -> Option<&'static str> {
-        let lower = path.to_ascii_lowercase();
-        if lower.ends_with(".dbc") {
-            Some("dbc")
-        } else if lower.ends_with(".arxml") {
-            Some("arxml")
-        } else if lower.ends_with(".xml") || lower.ends_with(".fibex") {
-            Some("fibex")
-        } else {
-            None
-        }
-    }
 }
 
 pub struct ImportOutcome {
