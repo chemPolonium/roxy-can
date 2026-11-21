@@ -1169,10 +1169,21 @@ select:disabled {
   white-space: nowrap;
 }
 
-/* Counts use the smaller meta face; nudge their optical centre onto the
-   22px controls beside them. */
+/* Header text uses one font size and one line box, so counts, selects and
+   filter fields share the same baseline instead of being nudged optically. */
+.panel-head .meta,
+.panel-head button.mini,
+.panel-head select,
+.panel-head input {
+  font-size: 11px;
+  line-height: 16px;
+}
+
 .panel-head .meta {
-  transform: translateY(1px);
+  display: inline-flex;
+  align-items: center;
+  height: var(--ctl-h);
+  padding: 0 2px;
 }
 
 .panel-tools {
