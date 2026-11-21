@@ -1675,7 +1675,9 @@ body.col-resizing {
   overflow: hidden;
   color: #cdd8e4;
   font-family: "Cascadia Mono", Consolas, "Courier New", monospace;
-  font-size: clamp(12px, min(68cqh, 25cqw), 72px);
+  /* Leave the label/unit row and padding, then use 85% of the remaining
+     height; cap by width so long values still fit. */
+  font-size: clamp(12px, min(calc(85cqh - 15.3px), 25cqw), 72px);
   font-weight: 600;
   line-height: 1;
   text-overflow: ellipsis;
