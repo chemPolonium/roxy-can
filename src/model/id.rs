@@ -7,7 +7,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-use super::{ClusterId, FrameId, MappingId, PduId, SignalId};
+use super::ClusterId;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -135,10 +135,6 @@ impl ElementIds {
         self.by_source.get(&(kind, source.to_string())).copied()
     }
 
-    pub fn source_for(&self, kind: ElementKind, id: u64) -> Option<&str> {
-        self.by_id.get(&(kind, id)).map(String::as_str)
-    }
-
     /// Persisted aliases. `by_source` also holds the original keys after a
     /// rebind; a project only needs to store the keys that are not derivable
     /// from the current source text, but writing all of them is harmless.
@@ -187,23 +183,5 @@ impl ClusterIds {
 
     pub fn next(&self) -> u32 {
         self.next
-    }
-}
-
-impl ElementIds {
-    pub fn frame_id(&self, source: &str) -> Option<FrameId> {
-        self.id_for(ElementKind::Frame, source).map(FrameId)
-    }
-
-    pub fn pdu_id(&self, source: &str) -> Option<PduId> {
-        self.id_for(ElementKind::Pdu, source).map(PduId)
-    }
-
-    pub fn signal_id(&self, source: &str) -> Option<SignalId> {
-        self.id_for(ElementKind::Signal, source).map(SignalId)
-    }
-
-    pub fn mapping_id(&self, source: &str) -> Option<MappingId> {
-        self.id_for(ElementKind::Mapping, source).map(MappingId)
     }
 }
