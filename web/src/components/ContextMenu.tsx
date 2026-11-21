@@ -55,6 +55,7 @@ export function ContextMenu({
     const key = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         event.preventDefault();
+        event.stopImmediatePropagation();
         close();
         return;
       }

@@ -4294,42 +4294,6 @@ button.mini.on {
   font-weight: 500;
 }
 
-.add-cluster {
-  position: relative;
-}
-
-.add-cluster-menu {
-  position: absolute;
-  top: calc(100% + 4px);
-  right: 0;
-  z-index: 20;
-  display: flex;
-  flex-direction: column;
-  min-width: 190px;
-  padding: 4px;
-  color: inherit;
-  background: var(--panel);
-  border: 1px solid var(--line);
-  border-radius: 5px;
-  box-shadow: 0 12px 30px rgb(0 0 0 / 45%);
-}
-
-.add-cluster-menu > button {
-  width: 100%;
-  justify-self: stretch;
-  padding: 6px 8px;
-  text-align: left;
-  color: inherit;
-  background: transparent !important;
-  border: 0 !important;
-  border-radius: 3px;
-  box-shadow: none;
-}
-
-.add-cluster-menu > button:hover {
-  background: var(--accent-soft) !important;
-}
-
 .buses-tools {
   display: flex;
   align-items: center;

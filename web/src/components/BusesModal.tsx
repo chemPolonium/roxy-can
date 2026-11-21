@@ -546,7 +546,7 @@ export function BusesModal({
   onClose,
 }: Props) {
   const [addOpen, setAddOpen] = useState(false);
-  const addRef = useRef<HTMLDivElement>(null);
+  const [addPos, setAddPos] = useState({ x: 0, y: 0 });
   const [selected, setSelected] = useState<string | null>(null);
   const [busQuery, setBusQuery] = useState("");
   const [confirm, setConfirm] = useState<{
@@ -654,14 +654,6 @@ export function BusesModal({
   };
 
   useEffect(() => {
-    if (!addOpen) return;
-    const close = (event: MouseEvent) => {
-      if (!addRef.current?.contains(event.target as Node)) setAddOpen(false);
-    };
-    document.addEventListener("mousedown", close);
-    return () => document.removeEventListener("mousedown", close);
-  }, [addOpen]);
-  useEffect(() => {
     const close = (event: KeyboardEvent) => {
       if (
         event.key === "Escape" &&
@@ -727,37 +719,43 @@ export function BusesModal({
                 setBusQuery((event.target as HTMLInputElement).value)
               }
             />
-            <div class="add-cluster" ref={addRef}>
-              <button
-                type="button"
-                aria-haspopup="menu"
-                aria-expanded={addOpen}
-                onClick={() => setAddOpen((open) => !open)}
-              >
-                Add bus
-              </button>
-              {addOpen && (
-                <div class="add-cluster-menu" role="menu" aria-label="Add bus">
-                  {[
-                    ["can", "CAN bus"],
-                    ["flexray", "FlexRay bus"],
-                    ["ethernet", "Ethernet bus"],
-                  ].map(([kind, label]) => (
-                    <button
-                      type="button"
-                      role="menuitem"
-                      key={kind}
-                      onClick={() => {
-                        setAddOpen(false);
-                        onAddBus(kind as "can" | "flexray" | "ethernet");
-                      }}
-                    >
-                      {label}
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
+            <button
+              type="button"
+              aria-haspopup="menu"
+              aria-expanded={addOpen}
+              onClick={(event) => {
+                const rect = (
+                  event.currentTarget as HTMLButtonElement
+                ).getBoundingClientRect();
+                setAddPos({ x: rect.left, y: rect.bottom + 4 });
+                setAddOpen((open) => !open);
+              }}
+            >
+              Add bus
+            </button>
+            {addOpen && (
+              <ContextMenu
+                x={addPos.x}
+                y={addPos.y}
+                label="Add bus"
+                zIndex={120}
+                items={[
+                  {
+                    label: "CAN bus",
+                    onSelect: () => onAddBus("can"),
+                  },
+                  {
+                    label: "FlexRay bus",
+                    onSelect: () => onAddBus("flexray"),
+                  },
+                  {
+                    label: "Ethernet bus",
+                    onSelect: () => onAddBus("ethernet"),
+                  },
+                ]}
+                onClose={() => setAddOpen(false)}
+              />
+            )}
             <button type="button" onClick={onClose}>
               Close
             </button>
