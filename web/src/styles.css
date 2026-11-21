@@ -1140,6 +1140,13 @@ select:disabled {
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+.dock-head-actions > button {
+  flex: 0 0 auto;
+  white-space: nowrap;
 }
 
 .panel-head input,
@@ -8462,9 +8469,9 @@ body:has(.cm-tooltip-autocomplete) .script-signature {
 }
 
 .dock-slot.dock-narrow.trace .panel-head .panel-tools {
-  flex: 1 1 auto;
+  flex: 0 1 auto;
   flex-wrap: nowrap;
-  margin-left: 0;
+  margin-left: auto;
   overflow-x: auto;
   scrollbar-width: none;
 }
