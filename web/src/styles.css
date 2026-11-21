@@ -1685,20 +1685,6 @@ body.col-resizing {
   font-variant-numeric: tabular-nums;
 }
 
-/* Colour bands only tint the number; the tile keeps one flat surface so a
-   wall of values stays readable. */
-.page-value .page-value-line strong.band-ok {
-  color: var(--ok);
-}
-
-.page-value .page-value-line strong.band-warn {
-  color: var(--warn);
-}
-
-.page-value .page-value-line strong.band-crit {
-  color: var(--error);
-}
-
 .page-value em {
   flex: 0 0 auto;
   margin-left: auto;
@@ -1737,26 +1723,6 @@ body.col-resizing {
   font-size: 12px;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.page-lamp.on.tone-neutral .page-lamp-dot {
-  background: var(--accent);
-  box-shadow: 0 0 7px var(--accent);
-}
-
-.page-lamp.on.tone-ok .page-lamp-dot {
-  background: var(--ok);
-  box-shadow: 0 0 7px var(--ok);
-}
-
-.page-lamp.on.tone-warn .page-lamp-dot {
-  background: var(--warn);
-  box-shadow: 0 0 7px var(--warn);
-}
-
-.page-lamp.on.tone-crit .page-lamp-dot {
-  background: var(--error);
-  box-shadow: 0 0 7px var(--error);
 }
 
 .page-lamp.missing .page-lamp-label {
@@ -1828,18 +1794,6 @@ body.col-resizing {
   background: var(--accent);
 }
 
-.page-bar-fill.band-ok {
-  background: var(--ok);
-}
-
-.page-bar-fill.band-warn {
-  background: var(--warn);
-}
-
-.page-bar-fill.band-crit {
-  background: var(--error);
-}
-
 .page-bar.missing .page-bar-value {
   color: var(--muted);
 }
@@ -1886,18 +1840,6 @@ body.col-resizing {
   stroke: var(--accent);
   stroke-width: 6;
   stroke-linecap: round;
-}
-
-.page-gauge-fill.band-ok {
-  stroke: var(--ok);
-}
-
-.page-gauge-fill.band-warn {
-  stroke: var(--warn);
-}
-
-.page-gauge-fill.band-crit {
-  stroke: var(--error);
 }
 
 .page-gauge-value {
@@ -2139,16 +2081,46 @@ body.col-resizing {
 
 .page-band-row {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 4px;
+  gap: 3px 4px;
 }
 
-.page-band-up {
+.page-band-range {
+  flex: 0 0 56px;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 9.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.page-band-swatches {
   display: inline-flex;
-  flex: 1 1 auto;
+  flex: 1 1 86px;
+  gap: 3px;
+}
+
+.page-band-swatch {
+  flex: 0 0 13px;
+  width: 13px;
+  height: 13px;
+  padding: 0;
+  border: 1px solid transparent;
+}
+
+.page-band-swatch.on {
+  outline: 1px solid var(--text);
+  outline-offset: 1px;
+}
+
+.page-band-cut {
+  display: inline-flex;
+  flex: 0 0 64px;
   align-items: center;
   gap: 3px;
   min-width: 0;
+  margin-left: 56px;
   color: var(--muted);
   font-size: 10px;
 }
@@ -2160,20 +2132,6 @@ body.col-resizing {
   height: 22px;
   padding: 0 4px;
   font-size: 11px;
-}
-
-.page-band-above {
-  flex: 1 1 auto;
-  color: var(--muted);
-  font-size: 10px;
-}
-
-.page-band-row .page-band-color {
-  flex: 0 0 68px;
-  width: 68px;
-  height: 22px;
-  padding: 0 2px;
-  font-size: 9.5px;
 }
 
 /* Wins over button.mini's padding and block display, which would squeeze the

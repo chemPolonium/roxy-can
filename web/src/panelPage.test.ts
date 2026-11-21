@@ -347,7 +347,7 @@ describe("panel page", () => {
     expect(formatPanelValue(Number.NaN, 1)).toBe("—");
   });
 
-  it("normalises value colour bands", () => {
+  it("normalises cut-based value colours", () => {
     const page = parsePanelPage({
       width: 160,
       height: 90,
@@ -374,28 +374,22 @@ describe("panel page", () => {
       ],
     });
     const widget = page?.widgets[0];
-    expect(widget?.kind === "value" ? widget.bands : null).toEqual([
-      { upTo: 40, color: "warn" },
-      { upTo: 80, color: "ok" },
-      { upTo: null, color: "crit" },
-    ]);
+    const value = widget?.kind === "value" ? widget : null;
+    expect(value?.cuts).toEqual([40, 80]);
+    expect(value?.colors).toEqual([2, 1, 3]);
     const copied = pastePanelWidget(page!, widget!);
     const clone = copied?.page.widgets.find((entry) => entry.id === copied.id);
-    expect(clone?.kind === "value" ? clone.bands : null).toEqual(
-      widget?.kind === "value" ? widget.bands : null,
-    );
+    expect(clone?.kind === "value" ? clone.cuts : null).toEqual(value?.cuts);
+    expect(clone?.kind === "value" ? clone.colors : null).toEqual(value?.colors);
     const capped = updatePanelWidget(page!, "value1", {
-      bands: Array.from({ length: 12 }, (_, index) => ({
-        upTo: index,
-        color: "ok" as const,
-      })),
+      cuts: Array.from({ length: 12 }, (_, index) => index),
     });
     const cappedWidget = capped.widgets[0];
-    expect(cappedWidget.kind === "value" ? cappedWidget.bands : null).toEqual(
-      Array.from({ length: 8 }, (_, index) => ({ upTo: index, color: "ok" })),
+    expect(cappedWidget.kind === "value" ? cappedWidget.cuts : null).toEqual(
+      [0, 1, 2, 3, 4, 5, 6, 7],
     );
-    const cleared = updatePanelWidget(page!, "value1", { bands: [] });
-    expect((cleared.widgets[0] as { bands?: unknown }).bands).toBeUndefined();
+    const cleared = updatePanelWidget(page!, "value1", { cuts: [] });
+    expect((cleared.widgets[0] as { cuts?: unknown }).cuts).toEqual([]);
   });
 
   it("drives palette and inspector from the widget registry", () => {
@@ -652,17 +646,14 @@ describe("panel page", () => {
       max: 120,
       digits: 2,
     });
-    expect(
-      page?.widgets[0].kind === "bar" ? page.widgets[0].bands : null,
-    ).toEqual([
-      { upTo: 0, color: "warn" },
-      { upTo: null, color: "ok" },
-    ]);
+    const bar = page?.widgets[0].kind === "bar" ? page.widgets[0] : null;
+    expect(bar?.cuts).toEqual([0]);
+    expect(bar?.colors).toEqual([2, 1]);
     expect(page?.widgets[1]).toMatchObject({ kind: "gauge", max: 100 });
     expect(page?.widgets[2]).toMatchObject({
       kind: "lamp",
       threshold: 0.5,
-      color: "warn",
+      color: 2,
     });
     const copy = pastePanelWidget(page!, page!.widgets[0]);
     expect(copy?.page.widgets.find((widget) => widget.id === copy.id)).toMatchObject(

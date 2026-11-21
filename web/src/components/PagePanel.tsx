@@ -5,8 +5,7 @@ import {
   PAGE_MAX_W,
   PAGE_MIN_H,
   PAGE_MIN_W,
-  PANEL_BAND_COLORS,
-  PANEL_MAX_BANDS,
+  PANEL_MAX_CUTS,
   PANEL_WIDGET_KINDS,
   activePanelPage,
   addPanelWidget,
@@ -25,8 +24,6 @@ import {
   updatePanelPage,
   updatePanelWidget,
   widgetMinSize,
-  type PanelBand,
-  type PanelBandColor,
   type PanelBook,
   type PanelGauge,
   type PanelPage,
@@ -42,10 +39,10 @@ import {
   clampPanelNumber,
   filterPanelOptions,
   findPanelSysVar,
+  panelBandIndex,
   panelGaugeArc,
   panelLampLit,
   panelMeterRatio,
-  panelValueBand,
   panelWidgetCapability,
   resolvePanelSource,
   someIpMemberFor,
@@ -53,6 +50,7 @@ import {
   type PanelFrameDef,
   type PanelView,
 } from "../panelBinding";
+import { palette, type Theme } from "../theme";
 import { copyText } from "../clipboard";
 import { ContextMenu } from "./ContextMenu";
 import type { SomeIpFieldDef, SomeIpService } from "../types";
@@ -1298,85 +1296,109 @@ function DraftNumberInput({
 
 function BandsField({
   label,
-  bands,
+  cuts,
+  colors,
+  palette,
   onFocus,
   onChange,
 }: {
   label: string;
-  bands: PanelBand[];
+  cuts: number[];
+  colors: number[];
+  palette: string[];
   onFocus: () => void;
-  onChange: (bands: PanelBand[]) => void;
+  onChange: (cuts: number[], colors: number[]) => void;
 }) {
-  const hasAbove = bands.some((band) => band.upTo === null);
-  const full = bands.length >= PANEL_MAX_BANDS;
-  const addBand = () => {
-    const top = bands.reduce<number | null>(
-      (limit, band) =>
-        band.upTo === null ? limit : limit === null ? band.upTo : Math.max(limit, band.upTo),
-      null,
+  const full = cuts.length >= PANEL_MAX_CUTS;
+  const bandColor = (index: number) => colors[index] ?? 0;
+  const setColor = (index: number, slot: number) => {
+    const next = Array.from({ length: cuts.length + 1 }, (_, at) =>
+      at === index ? slot : bandColor(at),
     );
-    onChange([...bands, { upTo: top === null ? 1 : top + 1, color: "ok" }]);
+    onChange(cuts, next);
   };
-  const setBand = (index: number, patch: Partial<PanelBand>) =>
-    onChange(
-      bands.map((band, at) => (at === index ? { ...band, ...patch } : band)),
+  const setCut = (index: number, value: number) => {
+    const next = cuts.slice();
+    next[index] = value;
+    if (next.some((cut, at) => at > 0 && cut <= next[at - 1])) return;
+    onChange(next, colors);
+  };
+  const addCut = () => {
+    const last = cuts[cuts.length - 1] ?? 0;
+    const next = Array.from({ length: cuts.length + 2 }, (_, at) =>
+      at <= cuts.length ? bandColor(at) : (at % palette.length),
     );
+    onChange([...cuts, last + 1], next);
+  };
+  const removeCut = (index: number) => {
+    onChange(
+      cuts.filter((_, at) => at !== index),
+      Array.from({ length: cuts.length }, (_, at) => bandColor(at > index ? at + 1 : at)),
+    );
+  };
+  const range = (index: number) => {
+    const lo = index === 0 ? null : cuts[index - 1];
+    const hi = index === cuts.length ? null : cuts[index];
+    if (lo === null && hi === null) return "all values";
+    if (lo === null) return `< ${hi}`;
+    if (hi === null) return `≥ ${lo}`;
+    return `${lo} – ${hi}`;
+  };
   return (
     <div class="page-bands">
       <div class="page-bands-title">
         <span>{label}</span>
-        <span>
-          {bands.length}/{PANEL_MAX_BANDS}
-        </span>
+        <span>{cuts.length} {cuts.length === 1 ? "cut" : "cuts"}</span>
       </div>
-      {bands.length === 0 && (
+      {cuts.length === 0 && (
         <span class="page-bands-empty">
-          No bands: the value keeps its normal colour.
+          No cuts: the value keeps its normal colour.
         </span>
       )}
-      {bands.map((band, index) => (
+      {Array.from({ length: cuts.length + 1 }, (_, index) => (
         <div class="page-band-row" key={index}>
-          {band.upTo === null ? (
-            <span class="page-band-above">above</span>
-          ) : (
-            <span class="page-band-up">
-              ≤
-              <DraftNumberInput
-                value={band.upTo}
-                label="page-band-limit"
-                onFocus={onFocus}
-                onCommit={(upTo) => setBand(index, { upTo })}
+          <span class="page-band-range">{range(index)}</span>
+          <span class="page-band-swatches">
+            {palette.map((color, slot) => (
+              <button
+                type="button"
+                key={slot}
+                class={`page-band-swatch ${bandColor(index) === slot ? "on" : ""}`}
+                style={{ background: color }}
+                aria-label={`Palette colour ${slot + 1}`}
+                aria-pressed={bandColor(index) === slot}
+                onClick={() => {
+                  onFocus();
+                  setColor(index, slot);
+                }}
               />
-            </span>
-          )}
-          <select
-            class="page-band-color"
-            value={band.color}
-            onFocus={onFocus}
-            onChange={(event) =>
-              setBand(index, {
-                color: (event.target as HTMLSelectElement)
-                  .value as PanelBandColor,
-              })
-            }
-          >
-            {PANEL_BAND_COLORS.map((option) => (
-              <option value={option.value} key={option.value}>
-                {option.label}
-              </option>
             ))}
-          </select>
-          <button
-            type="button"
-            class="mini page-band-remove"
-            title="Remove band"
-            aria-label="Remove band"
-            onClick={() => onChange(bands.filter((_, at) => at !== index))}
-          >
-            <svg viewBox="0 0 16 16" aria-hidden="true">
-              <path d="M4.5 4.5l7 7M11.5 4.5l-7 7" />
-            </svg>
-          </button>
+          </span>
+          {index < cuts.length && (
+            <>
+              <span class="page-band-cut">
+                ≤
+                <DraftNumberInput
+                  value={cuts[index]}
+                  label="page-band-limit"
+                  onFocus={onFocus}
+                  onCommit={(value) => setCut(index, value)}
+                />
+              </span>
+              <button
+                type="button"
+                class="mini page-band-remove"
+                title="Remove cut"
+                aria-label="Remove cut"
+                onClick={() => {
+                  onFocus();
+                  removeCut(index);
+                }}
+              >
+                ×
+              </button>
+            </>
+          )}
         </div>
       ))}
       <div class="page-band-add">
@@ -1384,38 +1406,40 @@ function BandsField({
           type="button"
           class="mini"
           disabled={full}
-          title="Colour values up to a threshold"
-          onClick={addBand}
+          title="Add a value cut"
+          onClick={() => {
+            onFocus();
+            addCut();
+          }}
         >
-          + Band
-        </button>
-        <button
-          type="button"
-          class="mini"
-          disabled={full || hasAbove}
-          title="Colour everything above the last threshold"
-          onClick={() => onChange([...bands, { upTo: null, color: "crit" }])}
-        >
-          + Above
+          + Cut
         </button>
       </div>
     </div>
   );
 }
-
-function meterTone(value: number | null, bands?: PanelBand[]): string {
-  const band = panelValueBand(value, bands);
-  return band && band !== "neutral" ? `band-${band}` : "meter-accent";
+function meterColor(
+  value: number | null,
+  cuts: number[] | undefined,
+  colors: number[] | undefined,
+  palette: string[],
+): string {
+  const index = panelBandIndex(value, cuts);
+  return index === null
+    ? "var(--accent)"
+    : palette[Math.abs(colors?.[index] ?? 0) % palette.length];
 }
 
 function GaugeView({
   widget,
   value,
   unit,
+  color,
 }: {
   widget: PanelGauge;
   value: number | null;
   unit: string;
+  color: string;
 }) {
   const ratio = panelMeterRatio(value, widget.min, widget.max);
   return (
@@ -1427,10 +1451,7 @@ function GaugeView({
     >
       <path class="page-gauge-track" d="M6 50 A44 44 0 0 1 94 50" />
       {ratio !== null && ratio > 0 && (
-        <path
-          class={`page-gauge-fill ${meterTone(value, widget.bands)}`}
-          d={panelGaugeArc(ratio)}
-        />
+        <path class="page-gauge-fill" style={{ stroke: color }} d={panelGaugeArc(ratio)} />
       )}
       <text class="page-gauge-value" x="50" y="45">
         {formatPanelValue(value, widget.digits)}
@@ -1621,6 +1642,7 @@ export function PagePanel({
   actionNames,
   view,
   actionContext,
+  theme,
   editing,
   onEditing,
   onBook,
@@ -1638,6 +1660,7 @@ export function PagePanel({
   actionNames: string[];
   view: PanelView;
   actionContext: PanelActionContext;
+  theme: Theme;
   editing: boolean;
   onEditing: (on: boolean) => void;
   onBook: (book: PanelBook) => void;
@@ -1648,6 +1671,7 @@ export function PagePanel({
   onNotice: (message: string) => void;
 }) {
   const page = activePanelPage(book);
+  const monitorColors = palette(theme).monitors;
   const onPage = (next: PanelPage) => onBook(updatePanelPage(book, next));
   const [fullscreen, setFullscreen] = useState(false);
   const [selected, setSelected] = useState<string | null>(null);
@@ -2021,8 +2045,12 @@ export function PagePanel({
     if (widget.kind === "value") {
       const resolved = resolvePanelSource(widget.source, view);
       const band = capability.enabled
-        ? panelValueBand(resolved.value, widget.bands)
+        ? panelBandIndex(resolved.value, widget.cuts)
         : null;
+      const color =
+        band === null
+          ? undefined
+          : monitorColors[Math.abs(widget.colors?.[band] ?? 0) % monitorColors.length];
       return (
         <div
           class={`page-value ${capability.enabled ? "" : "missing"}`}
@@ -2035,9 +2063,7 @@ export function PagePanel({
             {resolved.unit && <em>{resolved.unit}</em>}
           </span>
           <span class="page-value-line">
-            <strong
-              class={band && band !== "neutral" ? `band-${band}` : undefined}
-            >
+            <strong style={color ? { color } : undefined}>
               {formatPanelValue(resolved.value, widget.digits)}
             </strong>
           </span>
@@ -2108,7 +2134,7 @@ export function PagePanel({
       const lit = capability.enabled && panelLampLit(widget, resolved.value);
       return (
         <div
-          class={`page-lamp tone-${widget.color} ${lit ? "on" : ""} ${
+          class={`page-lamp ${lit ? "on" : ""} ${
             capability.enabled ? "" : "missing"
           }`}
           title={
@@ -2117,7 +2143,20 @@ export function PagePanel({
               : capability.reason
           }
         >
-          <span class="page-lamp-dot" />
+          <span
+            class="page-lamp-dot"
+            style={
+              lit
+                ? {
+                    background:
+                      monitorColors[Math.abs(widget.color) % monitorColors.length],
+                    boxShadow: `0 0 7px ${
+                      monitorColors[Math.abs(widget.color) % monitorColors.length]
+                    }`,
+                  }
+                : undefined
+            }
+          />
           <span class="page-lamp-label">
             {widget.label || widget.source || "Lamp"}
           </span>
@@ -2150,8 +2189,16 @@ export function PagePanel({
           </span>
           <span class="page-bar-track">
             <span
-              class={`page-bar-fill ${meterTone(resolved.value, widget.bands)}`}
-              style={{ width: `${(ratio ?? 0) * 100}%` }}
+              class="page-bar-fill"
+              style={{
+                width: `${(ratio ?? 0) * 100}%`,
+                background: meterColor(
+                  resolved.value,
+                  widget.cuts,
+                  widget.colors,
+                  monitorColors,
+                ),
+              }}
             />
           </span>
         </div>
@@ -2169,6 +2216,12 @@ export function PagePanel({
             widget={widget}
             value={resolved.value}
             unit={resolved.unit}
+            color={meterColor(
+              resolved.value,
+              widget.cuts,
+              widget.colors,
+              monitorColors,
+            )}
           />
         </div>
       );
@@ -2234,20 +2287,50 @@ export function PagePanel({
         />
       );
     }
-    if (fieldSpec.kind === "bands") {
+    if (fieldSpec.kind === "cuts") {
       return (
         <BandsField
           label={fieldSpec.label}
-          bands={
+          cuts={
             widget.kind === "value" ||
             widget.kind === "bar" ||
             widget.kind === "gauge"
-              ? widget.bands ?? []
+              ? widget.cuts ?? []
               : []
           }
+          colors={
+            widget.kind === "value" ||
+            widget.kind === "bar" ||
+            widget.kind === "gauge"
+              ? widget.colors ?? []
+              : []
+          }
+          palette={monitorColors}
           onFocus={pushHistory}
-          onChange={(bands) => update({ bands })}
+          onChange={(cuts, colors) => update({ cuts, colors })}
         />
+      );
+    }
+    if (fieldSpec.kind === "color") {
+      const current =
+        widget.kind === "lamp" ? widget.color : 0;
+      return (
+        <span class="page-band-swatches">
+          {monitorColors.map((color, slot) => (
+            <button
+              type="button"
+              key={slot}
+              class={`page-band-swatch ${current === slot ? "on" : ""}`}
+              style={{ background: color }}
+              aria-label={`Palette colour ${slot + 1}`}
+              aria-pressed={current === slot}
+              onClick={() => {
+                pushHistory();
+                update({ color: slot });
+              }}
+            />
+          ))}
+        </span>
       );
     }
     if (fieldSpec.kind === "select") {

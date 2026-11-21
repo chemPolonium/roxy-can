@@ -192,14 +192,6 @@ export interface PanelButton extends Geometry {
   frame?: PanelFrameSend;
 }
 
-export type PanelBandColor = "neutral" | "ok" | "warn" | "crit";
-
-/// Ascending "up to" thresholds; null colours everything above the last one.
-export interface PanelBand {
-  upTo: number | null;
-  color: PanelBandColor;
-}
-
 /// Read-only value tile: signal key, `derived:Name` or `sysvar:ns::name`.
 export interface PanelValue extends Geometry {
   id: string;
@@ -207,7 +199,8 @@ export interface PanelValue extends Geometry {
   label: string;
   source: string;
   digits: number;
-  bands?: PanelBand[];
+  cuts?: number[];
+  colors?: number[];
 }
 
 /// Boolean tile bound to a system variable (0/1).
@@ -249,7 +242,8 @@ export interface PanelLamp extends Geometry {
   label: string;
   source: string;
   threshold: number;
-  color: PanelBandColor;
+  /// Monitor palette slot used when lit.
+  color: number;
 }
 
 interface PanelMeter extends Geometry {
@@ -259,7 +253,8 @@ interface PanelMeter extends Geometry {
   min: number;
   max: number;
   digits: number;
-  bands?: PanelBand[];
+  cuts?: number[];
+  colors?: number[];
 }
 
 /// Horizontal fill over a fixed range.
@@ -307,9 +302,10 @@ export interface PanelWidgetPatch {
   digits?: number;
   sysvar?: string;
   step?: number;
-  bands?: PanelBand[];
+  cuts?: number[];
+  colors?: number[];
   threshold?: number;
-  color?: PanelBandColor;
+  color?: number;
   min?: number;
   max?: number;
   target?: PanelSetpointTarget;
@@ -320,7 +316,7 @@ export type PanelFieldKey = keyof PanelWidgetPatch;
 export interface PanelFieldSpec {
   key: PanelFieldKey;
   label: string;
-  kind: "text" | "select" | "list" | "digits" | "number" | "bands" | "frame";
+  kind: "text" | "select" | "list" | "digits" | "number" | "cuts" | "color" | "frame";
   options?: { value: string; label: string }[];
   placeholder?: string;
   maxLength?: number;
@@ -358,17 +354,110 @@ export function formatPanelValue(value: number | null, digits: number): string {
   return value.toFixed(clamp(Math.round(digits), 0, 3));
 }
 
-export const PANEL_BAND_COLORS: { value: PanelBandColor; label: string }[] = [
-  { value: "neutral", label: "Neutral" },
-  { value: "ok", label: "OK" },
-  { value: "warn", label: "Warning" },
-  { value: "crit", label: "Critical" },
-];
+export const PANEL_MAX_CUTS = 8;
 
-export const PANEL_MAX_BANDS = 8;
+/// Palette slot used when migrating old semantic band colours.
+function legacyBandSlot(color: unknown): number {
+  if (color === "ok") return 1;
+  if (color === "warn") return 2;
+  if (color === "crit") return 3;
+  return 0;
+}
 
-function isBandColor(value: unknown): value is PanelBandColor {
-  return PANEL_BAND_COLORS.some((entry) => entry.value === value);
+function paletteSlot(value: unknown, fallback = 0): number {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return Math.max(0, Math.round(value));
+  }
+  return value === undefined ? fallback : legacyBandSlot(value);
+}
+
+function normalisePanelCuts(raw: unknown): number[] | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  const cuts = raw
+    .slice(0, PANEL_MAX_CUTS)
+    .map((entry) => Number(entry))
+    .filter((entry) => Number.isFinite(entry))
+    .sort((a, b) => a - b)
+    .filter((entry, index, all) => index === 0 || entry !== all[index - 1]);
+  return cuts.length > 0 ? cuts : undefined;
+}
+
+function normalisePanelColors(
+  raw: unknown,
+  count: number,
+): number[] | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  const colors = raw
+    .slice(0, count)
+    .map((entry) => Math.max(0, Math.round(Number(entry)) || 0));
+  while (colors.length < count) colors.push(0);
+  return colors.length > 0 ? colors : undefined;
+}
+
+/// Reads the new cut/colour fields, converting the old upTo/above bands.
+function normalisePanelBandFields(value: Record<string, unknown>): {
+  cuts?: number[];
+  colors?: number[];
+} {
+  const cuts = normalisePanelCuts(value.cuts);
+  if (Array.isArray(value.cuts)) {
+    return {
+      cuts: cuts ?? [],
+      colors:
+        normalisePanelColors(value.colors, (cuts?.length ?? 0) + (cuts ? 1 : 0)) ??
+        [],
+    };
+  }
+  if (cuts) {
+    return {
+      cuts,
+      colors:
+        normalisePanelColors(value.colors, cuts.length + 1) ??
+        Array.from({ length: cuts.length + 1 }, () => 0),
+    };
+  }
+  if (!Array.isArray(value.bands)) return {};
+  const bands = value.bands
+    .filter((entry): entry is Record<string, unknown> =>
+      Boolean(entry && typeof entry === "object"),
+    )
+    .filter(
+      (entry) =>
+        entry.color === "neutral" ||
+        entry.color === "ok" ||
+        entry.color === "warn" ||
+        entry.color === "crit",
+    )
+    .map((entry) => ({ entry, upTo: Number(entry.upTo) }))
+    .filter((band) => band.entry.upTo !== null && Number.isFinite(band.upTo));
+  if (bands.length === 0) {
+    const above = value.bands.find(
+      (entry): entry is Record<string, unknown> =>
+        Boolean(entry && typeof entry === "object") && entry.upTo === null,
+    );
+    return above ? { cuts: [], colors: [legacyBandSlot(above.color)] } : {};
+  }
+  const seen = new Set<number>();
+  const unique = bands.filter((band) => {
+    if (seen.has(band.upTo)) return false;
+    seen.add(band.upTo);
+    return true;
+  });
+  const above = value.bands.find(
+    (entry): entry is Record<string, unknown> =>
+      Boolean(entry && typeof entry === "object") && entry.upTo === null,
+  );
+  const nextCuts = unique
+    .map((band) => band.upTo)
+    .sort((a, b) => a - b);
+  const colors = unique
+    .slice()
+    .sort((a, b) => a.upTo - b.upTo)
+    .map((band) => legacyBandSlot(band.entry.color));
+  colors.push(
+    above ? legacyBandSlot(above.color) : colors[colors.length - 1] ?? 0,
+  );
+  return { cuts: nextCuts, colors };
 }
 
 function isPanelKind(value: unknown): value is PanelWidgetKind {
@@ -461,27 +550,6 @@ function normalisePanelFrame(raw: unknown): PanelFrameSend | undefined {
   return panelFrameProblem(frame) ? undefined : frame;
 }
 
-/// Keeps valid bands, sorts them by threshold and drops duplicate limits.
-export function normalisePanelBands(raw: unknown): PanelBand[] | undefined {
-  if (!Array.isArray(raw)) return undefined;
-  const bands: PanelBand[] = [];
-  for (const entry of raw.slice(0, PANEL_MAX_BANDS)) {
-    if (!entry || typeof entry !== "object") continue;
-    const value = entry as Record<string, unknown>;
-    if (!isBandColor(value.color)) continue;
-    const upTo = value.upTo === null ? null : Number(value.upTo);
-    if (upTo !== null && !Number.isFinite(upTo)) continue;
-    if (bands.some((band) => band.upTo === upTo)) continue;
-    bands.push({ upTo, color: value.color });
-  }
-  bands.sort((a, b) => {
-    if (a.upTo === null) return b.upTo === null ? 0 : 1;
-    if (b.upTo === null) return -1;
-    return a.upTo - b.upTo;
-  });
-  return bands.length > 0 ? bands : undefined;
-}
-
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
 }
@@ -544,7 +612,7 @@ const VALUE_FIELDS: PanelFieldSpec[] = [
   { key: "label", label: "Label", kind: "text", maxLength: 80 },
   SOURCE_FIELD,
   { key: "digits", label: "Decimals", kind: "digits" },
-  { key: "bands", label: "Color bands", kind: "bands" },
+  { key: "cuts", label: "Color cuts", kind: "cuts" },
 ];
 
 const TOGGLE_FIELDS: PanelFieldSpec[] = [
@@ -615,11 +683,7 @@ const LAMP_FIELDS: PanelFieldSpec[] = [
   {
     key: "color",
     label: "Lit color",
-    kind: "select",
-    options: PANEL_BAND_COLORS.map((entry) => ({
-      value: entry.value as string,
-      label: entry.label,
-    })),
+    kind: "color",
   },
 ];
 
@@ -629,7 +693,7 @@ const METER_FIELDS: PanelFieldSpec[] = [
   { key: "min", label: "Minimum", kind: "number", placeholder: "0" },
   { key: "max", label: "Maximum", kind: "number", placeholder: "100" },
   { key: "digits", label: "Decimals", kind: "digits" },
-  { key: "bands", label: "Color bands", kind: "bands" },
+  { key: "cuts", label: "Color cuts", kind: "cuts" },
 ];
 
 const BUTTON_SPEC: PanelWidgetSpec = {
@@ -716,6 +780,9 @@ const VALUE_SPEC: PanelWidgetSpec = {
   },
   applyPatch: (widget, patch) => {
     if (widget.kind !== "value") return widget;
+    const bands = normalisePanelBandFields(
+      patch as Record<string, unknown>,
+    );
     return {
       ...widget,
       label: patch.label === undefined ? widget.label : patch.label.slice(0, 80),
@@ -727,10 +794,8 @@ const VALUE_SPEC: PanelWidgetSpec = {
         patch.digits === undefined
           ? widget.digits
           : clamp(Math.round(patch.digits), 0, 3),
-      bands:
-        patch.bands === undefined
-          ? widget.bands
-          : normalisePanelBands(patch.bands),
+      cuts: bands.cuts ?? widget.cuts,
+      colors: bands.colors ?? widget.colors,
     };
   },
 };
@@ -854,7 +919,7 @@ const LAMP_SPEC: PanelWidgetSpec = {
     label: "Lamp",
     source: "",
     threshold: 0.5,
-    color: "ok",
+    color: 1,
     x,
     y,
     w,
@@ -883,9 +948,9 @@ const LAMP_SPEC: PanelWidgetSpec = {
           ? widget.threshold
           : threshold,
       color:
-        patch.color !== undefined && isBandColor(patch.color)
-          ? patch.color
-          : widget.color,
+        patch.color === undefined
+          ? widget.color
+          : paletteSlot(patch.color, widget.color),
     };
   },
 };
@@ -905,6 +970,7 @@ function meterFieldValue(
 function meterPatch(widget: PanelBar | PanelGauge, patch: PanelWidgetPatch) {
   const min = Number(patch.min);
   const max = Number(patch.max);
+  const bands = normalisePanelBandFields(patch as Record<string, unknown>);
   return {
     label: patch.label === undefined ? widget.label : patch.label.slice(0, 80),
     source:
@@ -915,10 +981,8 @@ function meterPatch(widget: PanelBar | PanelGauge, patch: PanelWidgetPatch) {
       patch.digits === undefined
         ? widget.digits
         : clamp(Math.round(patch.digits), 0, 3),
-    bands:
-      patch.bands === undefined
-        ? widget.bands
-        : normalisePanelBands(patch.bands),
+    cuts: bands.cuts ?? widget.cuts,
+    colors: bands.colors ?? widget.colors,
   };
 }
 
@@ -1159,7 +1223,7 @@ function widgetPatch(
       ? {
           source: text(value.source, 120),
           digits: clamp(Math.round(Number(value.digits) || 0), 0, 3),
-          bands: normalisePanelBands(value.bands),
+          ...normalisePanelBandFields(value),
         }
       : {}),
     ...(kind === "toggle" ? { sysvar: text(value.sysvar, 120) } : {}),
@@ -1177,7 +1241,7 @@ function widgetPatch(
       ? {
           source: text(value.source, 120),
           threshold: Number(value.threshold),
-          ...(isBandColor(value.color) ? { color: value.color } : {}),
+          color: paletteSlot(value.color, 1),
         }
       : {}),
     ...(kind === "bar" || kind === "gauge"
@@ -1186,7 +1250,7 @@ function widgetPatch(
           min: Number(value.min),
           max: Number(value.max),
           digits: clamp(Math.round(Number(value.digits) || 0), 0, 3),
-          bands: normalisePanelBands(value.bands),
+          ...normalisePanelBandFields(value),
         }
       : {}),
   };
@@ -1644,7 +1708,7 @@ export function pastePanelWidget(
         }
       : {}),
     ...(widget.kind === "value"
-      ? { source: widget.source, digits: widget.digits, bands: widget.bands }
+      ? { source: widget.source, digits: widget.digits, cuts: widget.cuts, colors: widget.colors }
       : {}),
     ...(widget.kind === "toggle" ? { sysvar: widget.sysvar } : {}),
     ...(widget.kind === "setpoint"
@@ -1670,7 +1734,8 @@ export function pastePanelWidget(
           min: widget.min,
           max: widget.max,
           digits: widget.digits,
-          bands: widget.bands,
+          cuts: widget.cuts,
+          colors: widget.colors,
         }
       : {}),
   });

@@ -10,8 +10,6 @@ import {
   panelSetpointTarget,
   parsePanelHex,
   parseSysVarRef,
-  type PanelBand,
-  type PanelBandColor,
   type PanelButton,
   type PanelLamp,
   type PanelSetpoint,
@@ -114,16 +112,16 @@ export function resolvePanelSource(
   };
 }
 
-/// Colour band the value falls into: the first "up to" it fits, or null.
-export function panelValueBand(
+/// Band index for a value: the number of cuts at or below it, or null when
+/// the value is absent or the widget has no cuts.
+export function panelBandIndex(
   value: number | null,
-  bands?: PanelBand[],
-): PanelBandColor | null {
-  if (value === null || !Number.isFinite(value) || !bands?.length) return null;
-  for (const band of bands) {
-    if (band.upTo === null || value <= band.upTo) return band.color;
-  }
-  return null;
+  cuts?: number[],
+): number | null {
+  if (value === null || !Number.isFinite(value) || !cuts?.length) return null;
+  let index = 0;
+  while (index < cuts.length && value >= cuts[index]) index += 1;
+  return index;
 }
 
 /// 0..1 fill for a meter; null when the range is empty or the value is absent.

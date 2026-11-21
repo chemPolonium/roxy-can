@@ -12,7 +12,7 @@ import {
   panelToggleCapability,
   panelLampLit,
   panelMeterRatio,
-  panelValueBand,
+  panelBandIndex,
   panelValueCapability,
   panelWidgetCapability,
   resolvePanelSource,
@@ -22,7 +22,6 @@ import {
   type PanelView,
 } from "./panelBinding";
 import type {
-  PanelBand,
   PanelBar,
   PanelButton,
   PanelLamp,
@@ -299,24 +298,15 @@ describe("panel bindings", () => {
     ).toBe(true);
   });
 
-  it("picks the first colour band the value fits", () => {
-    const bands: PanelBand[] = [
-      { upTo: 0, color: "neutral" },
-      { upTo: 40, color: "ok" },
-      { upTo: 80, color: "warn" },
-      { upTo: null, color: "crit" },
-    ];
-    expect(panelValueBand(-5, bands)).toBe("neutral");
-    expect(panelValueBand(0, bands)).toBe("neutral");
-    expect(panelValueBand(12, bands)).toBe("ok");
-    expect(panelValueBand(40, bands)).toBe("ok");
-    expect(panelValueBand(40.5, bands)).toBe("warn");
-    expect(panelValueBand(80, bands)).toBe("warn");
-    expect(panelValueBand(120, bands)).toBe("crit");
-    expect(panelValueBand(12, [{ upTo: 10, color: "ok" }])).toBeNull();
-    expect(panelValueBand(12, [])).toBeNull();
-    expect(panelValueBand(null, bands)).toBeNull();
-    expect(panelValueBand(Number.NaN, bands)).toBeNull();
+  it("maps a value to the band between its cuts", () => {
+    const cuts = [40, 80];
+    expect(panelBandIndex(-5, cuts)).toBe(0);
+    expect(panelBandIndex(40, cuts)).toBe(1);
+    expect(panelBandIndex(80, cuts)).toBe(2);
+    expect(panelBandIndex(120, cuts)).toBe(2);
+    expect(panelBandIndex(12, [])).toBeNull();
+    expect(panelBandIndex(null, cuts)).toBeNull();
+    expect(panelBandIndex(Number.NaN, cuts)).toBeNull();
   });
 
   it("fills meters and lights lamps from their range", () => {
@@ -333,7 +323,7 @@ describe("panel bindings", () => {
       label: "Ready",
       source: "sysvar:Bench::Ready",
       threshold: 0.5,
-      color: "ok",
+      color: 1,
       x: 0,
       y: 0,
       w: 14,

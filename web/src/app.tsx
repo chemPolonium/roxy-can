@@ -5822,6 +5822,7 @@ export function App() {
             actionNames={pageActionNames}
             view={pageView}
             actionContext={pageActionContext}
+            theme={theme}
             editing={panelEditing}
             onEditing={setPanelEditing}
             onBook={updatePanelBook}
