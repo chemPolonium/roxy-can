@@ -486,7 +486,7 @@ export function TraceTable({
     tUs: frame.tUs,
   });
   const head = (
-    <div class="panel-head">
+    <div class="panel-head dock-head">
       {leading}
       <div class="panel-title">{title}</div>
       <div class="panel-tools">{tools}</div>

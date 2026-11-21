@@ -1136,6 +1136,17 @@ select:disabled {
   width: var(--ctl-h);
 }
 
+.panel-head button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.panel-head input,
+.panel-head select {
+  line-height: calc(var(--ctl-h) - 6px);
+}
+
 .panel-title {
   display: flex;
   align-items: baseline;
@@ -2344,7 +2355,7 @@ body.col-resizing {
 .filter-bar .panel-filter {
   flex: 1 1 auto;
   min-width: 0;
-  height: 24px;
+  height: var(--ctl-h);
 }
 
 .filter-open {
@@ -8421,11 +8432,11 @@ body:has(.cm-tooltip-autocomplete) .script-signature {
    The tool cluster scrolls horizontally when it cannot fit; wrapping it to a
    second row made the header two lines in every narrow layout. */
 .dock-slot.dock-narrow.trace .panel-head {
-  flex: 0 0 auto;
+  flex: 0 0 26px;
   flex-wrap: nowrap;
-  height: auto;
-  min-height: 30px;
-  padding: 3px 8px;
+  height: 26px;
+  min-height: 26px;
+  padding: 2px 6px;
   overflow: hidden;
 }
 

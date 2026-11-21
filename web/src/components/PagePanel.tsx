@@ -2378,7 +2378,7 @@ export function PagePanel({
     <section
       class={`panel page-panel ${fullscreen ? "page-fullscreen" : ""}`}
     >
-      <div class={`panel-head ${editing ? "editing" : ""}`}>
+      <div class={`panel-head dock-head ${editing ? "editing" : ""}`}>
         <span class="meta">
           {page.width * PAGE_GRID}×{page.height * PAGE_GRID} · {PAGE_GRID}px grid
         </span>
