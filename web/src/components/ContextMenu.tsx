@@ -1,3 +1,4 @@
+import type { ComponentChildren } from "preact";
 import { useEffect, useRef } from "preact/hooks";
 
 export interface ContextMenuItem {
@@ -5,20 +6,33 @@ export interface ContextMenuItem {
   onSelect: () => void;
   danger?: boolean;
   disabled?: boolean;
+  separator?: boolean;
 }
 
 interface Props {
   x: number;
   y: number;
   label: string;
-  items: ContextMenuItem[];
+  items?: ContextMenuItem[];
+  children?: ComponentChildren;
+  className?: string;
+  focusKey?: string | number;
   onClose: () => void;
 }
 
 /// One fixed-position row menu for every right-click surface. Keeps focus on
 /// the first enabled item, walks with arrows and closes on Esc, outside click
 /// or scroll.
-export function ContextMenu({ x, y, label, items, onClose }: Props) {
+export function ContextMenu({
+  x,
+  y,
+  label,
+  items = [],
+  children,
+  className = "",
+  focusKey,
+  onClose,
+}: Props) {
   const menuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -71,32 +85,37 @@ export function ContextMenu({ x, y, label, items, onClose }: Props) {
       document.removeEventListener("keydown", key);
       window.removeEventListener("scroll", scroll, true);
     };
-  }, [onClose]);
+  }, [onClose, focusKey]);
 
   return (
     <div
       ref={menuRef}
-      class="row-menu"
+      class={`row-menu ${className}`.trim()}
       role="menu"
       aria-label={label}
       style={{ top: `${y}px`, left: `${x}px` }}
       onPointerDown={(event) => event.stopPropagation()}
     >
-      {items.map((item) => (
-        <button
-          key={item.label}
-          type="button"
-          role="menuitem"
-          class={item.danger ? "danger" : undefined}
-          disabled={item.disabled}
-          onClick={() => {
-            item.onSelect();
-            onClose();
-          }}
-        >
-          {item.label}
-        </button>
-      ))}
+      {children ??
+        items.map((item) =>
+          item.separator ? (
+            <div key={item.label} class="page-menu-sep" role="separator" />
+          ) : (
+            <button
+              key={item.label}
+              type="button"
+              role="menuitem"
+              class={item.danger ? "danger" : undefined}
+              disabled={item.disabled}
+              onClick={() => {
+                item.onSelect();
+                onClose();
+              }}
+            >
+              {item.label}
+            </button>
+          ),
+        )}
     </div>
   );
 }

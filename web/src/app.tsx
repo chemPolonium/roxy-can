@@ -54,6 +54,7 @@ import { BusStatsPanel } from "./components/BusStatsPanel";
 import { CursorAnalysis } from "./components/CursorAnalysis";
 import { ColumnsMenu } from "./components/ColumnsMenu";
 import { CommandPalette } from "./components/CommandPalette";
+import { ContextMenu } from "./components/ContextMenu";
 import { MenuButton } from "./components/MenuButton";
 import type { PaletteCommand } from "./components/CommandPalette";
 import { DataPanel } from "./components/DataPanel";
@@ -566,7 +567,6 @@ export function App() {
     left: false,
     right: false,
   });
-  const pageMenuRef = useRef<HTMLDivElement>(null);
   const pageSwitchRef = useRef<HTMLDivElement>(null);
   const pageImportInput = useRef<HTMLInputElement>(null);
   // Panel pages only enter the project on Save, so their edits are dirty even
@@ -1114,66 +1114,6 @@ export function App() {
     const frame = window.requestAnimationFrame(syncPageOverflow);
     return () => window.cancelAnimationFrame(frame);
   }, [activePage.id, panelBook.pages.length, pageRename, shellMode]);
-
-  useEffect(() => {
-    if (!pageMenu) return;
-    pageMenuRef.current
-      ?.querySelector<HTMLButtonElement>("button:not(:disabled)")
-      ?.focus();
-    const close = (event: PointerEvent) => {
-      if (
-        !(event.target instanceof Element) ||
-        !event.target.closest(".page-tab-menu")
-      ) {
-        setPageMenu(null);
-        setPageConfirmDelete(null);
-      }
-    };
-    const key = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        setPageMenu(null);
-        setPageConfirmDelete(null);
-        return;
-      }
-      if (
-        event.key !== "ArrowDown" &&
-        event.key !== "ArrowUp" &&
-        event.key !== "Home" &&
-        event.key !== "End"
-      ) {
-        return;
-      }
-      const items = [
-        ...(pageMenuRef.current?.querySelectorAll<HTMLButtonElement>(
-          "button:not(:disabled)",
-        ) ?? []),
-      ];
-      if (items.length === 0) return;
-      event.preventDefault();
-      const active = items.indexOf(document.activeElement as HTMLButtonElement);
-      const index =
-        event.key === "Home"
-          ? 0
-          : event.key === "End"
-            ? items.length - 1
-            : event.key === "ArrowDown"
-              ? (active + 1 + items.length) % items.length
-              : (active - 1 + items.length) % items.length;
-      items[index]?.focus();
-    };
-    const scroll = () => {
-      setPageMenu(null);
-      setPageConfirmDelete(null);
-    };
-    window.addEventListener("pointerdown", close);
-    window.addEventListener("keydown", key);
-    window.addEventListener("scroll", scroll, true);
-    return () => {
-      window.removeEventListener("pointerdown", close);
-      window.removeEventListener("keydown", key);
-      window.removeEventListener("scroll", scroll, true);
-    };
-  }, [pageMenu, pageMenuMode]);
 
   useEffect(() => {
     if (maximizedSlot === null) return;
@@ -5501,13 +5441,16 @@ export function App() {
         }}
       />
       {pageMenu && (
-        <div
-          ref={pageMenuRef}
-          class="row-menu page-tab-menu"
-          role="menu"
-          aria-label="Panel page actions"
-          style={{ top: `${pageMenu.y}px`, left: `${pageMenu.x}px` }}
-          onPointerDown={(event) => event.stopPropagation()}
+        <ContextMenu
+          x={pageMenu.x}
+          y={pageMenu.y}
+          label="Panel page actions"
+          className="page-tab-menu"
+          focusKey={pageMenuMode}
+          onClose={() => {
+            setPageMenu(null);
+            setPageConfirmDelete(null);
+          }}
         >
           {pageMenuMode === "move" ? (
             <>
@@ -5605,7 +5548,7 @@ export function App() {
               </button>
             </>
           )}
-        </div>
+        </ContextMenu>
       )}
 
       <section class="stats">
