@@ -1,6 +1,6 @@
 [package]
 name = "roxy-can"
-version = "0.39.8"
+version = "0.39.9"
 edition = "2024"
 
 [dependencies]
