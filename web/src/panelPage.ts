@@ -1501,6 +1501,20 @@ export function mergeProjectPanels(
   return next;
 }
 
+/// The project owns its Panel pages: this ignores the local book and starts
+/// from the documents in the project file. An empty list is one empty page.
+export function panelBookFromProject(documents: unknown[]): PanelBook {
+  const pages: PanelPage[] = [];
+  for (const raw of documents) {
+    const parsed = importPanelFile(raw);
+    if ("error" in parsed) continue;
+    const page = parsed.page;
+    pages.push({ ...page, id: `page${pages.length + 1}` });
+  }
+  if (pages.length === 0) return defaultPanelBook();
+  return { version: 1, activeId: pages[0].id, pages };
+}
+
 export function updatePanelWidget(
   page: PanelPage,
   id: string,

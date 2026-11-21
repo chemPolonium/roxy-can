@@ -18,6 +18,7 @@ import {
   movePanelPage,
   movePanelWidget,
   mergeProjectPanels,
+  panelBookFromProject,
   panelFileName,
   panelFrameProblem,
   panelSetpointTarget,
@@ -880,5 +881,18 @@ describe("panel page", () => {
     };
     const merged = mergeProjectPanels(book, [renamed, "not a page"]);
     expect(merged.pages.some((entry) => entry.name === "Bench")).toBe(true);
+  });
+
+  it("owns project pages instead of inheriting the local book", () => {
+    const book = defaultPanelBook();
+    const document = JSON.parse(exportPanelFile(book.pages[0]));
+    const renamed = {
+      ...document,
+      page: { ...document.page, name: "Bench" },
+    };
+    const loaded = panelBookFromProject([renamed, "not a page"]);
+    expect(loaded.pages.map((page) => page.name)).toEqual(["Bench"]);
+    expect(panelBookFromProject([]).pages).toHaveLength(1);
+    expect(panelBookFromProject([]).pages[0].widgets).toHaveLength(0);
   });
 });

@@ -102,7 +102,7 @@ DBC 与 ARXML 都只读：解析出的事实先进统一模型（`Cluster → Ne
 
 - **单进程本地服务**：axum 只监听本机（默认 `127.0.0.1:2010`）。`GET /api/state` 返回 DTO 快照；`POST /api/command` 把 `WebCommand` 翻成 `BusCommand`——默认值、合法性、总线写入都留在 core。catalog / scripts / nodes / debug / recording 等按需端点只是同一份状态的投影。
 - **快照只读、写入集中**：前端轮询状态（10 Hz，表格/曲线走 `epoch/seq` 增量），从不改写后端数据；用户动作都通过 `Command`，由 `app.tsx` 的 `run()` 发出。新增命令要同时落到 `WebCommand`、TypeScript `Command` 与调用点，并补一条无头测试。
-- **前端状态分层**：跨会话的布局（四种 preset、每个槽位的页面与分隔比例）/曲线 A/B 游标/列宽/Panel book 存 localStorage 与工程 `web` 段；组件本地只放草稿、弹窗与选中态。布局模型在 `web/src/dockLayout.ts`，只做纯数据操作并单测；`app.tsx` 只负责把面板渲染到槽位。Trace 用手写固定行高虚拟化，曲线用 canvas 抽稀，没有表格/图表组件库。
+- **前端状态分层**：跨会话的布局（四种 preset、每个槽位的页面与分隔比例）/曲线 A/B 游标/列宽存 localStorage 与工程 `web` 段；**Panel book 属于工程文件**，打开/新建工程时整体替换，不从 localStorage 继承；组件本地只放草稿、弹窗与选中态。布局模型在 `web/src/dockLayout.ts`，只做纯数据操作并单测；`app.tsx` 只负责把面板渲染到槽位。Trace 用手写固定行高虚拟化，曲线用 canvas 抽稀，没有表格/图表组件库。
 - **文件交换**：浏览器上传经 `/api/upload` 落到 per-user 数据目录，导出经 `/api/download` 取回；不提供任意主机路径读取。`.rxpanel` 与脚本文本在前端序列化，不经过后端。
 
 ## Panel 操作页

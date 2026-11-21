@@ -161,11 +161,10 @@ import {
   duplicatePanelPage,
   exportPanelFile,
   importPanelFile,
-  mergeProjectPanels,
+  panelBookFromProject,
   movePanelPage,
   panelFileName,
   panelSetpointTarget,
-  parsePanelBook,
   parsePanelHex,
   removePanelPage,
   renamePanelPage,
@@ -223,7 +222,6 @@ interface SavedView {
   yModes?: Record<string, ChartYMode>;
   derivedReads?: { id: string; name: string }[];
   cursors: ChartCursor[];
-  panelBook?: PanelBook;
   filters?: ViewFilters;
   filterLibrary?: SavedFilter[];
 }
@@ -316,7 +314,6 @@ function normalizeView(
     derivedReads,
     signalView: { windowS, endS },
     cursors,
-    panelBook: parsePanelBook(raw.panelBook) ?? defaultPanelBook(),
     ...(hasFilters ? { filters } : {}),
     ...(hasLibrary ? { filterLibrary } : {}),
   };
@@ -547,9 +544,7 @@ export function App() {
   const [dock, setDock] = useState<DockState>(
     savedView.dock ?? defaultDock(),
   );
-  const [panelBook, setPanelBook] = useState<PanelBook>(
-    savedView.panelBook ?? defaultPanelBook(),
-  );
+  const [panelBook, setPanelBook] = useState<PanelBook>(defaultPanelBook());
   const activePage = activePanelPage(panelBook);
   const [panelEditing, setPanelEditing] = useState(false);
   const [pageMenu, setPageMenu] = useState<{
@@ -754,7 +749,7 @@ export function App() {
     const savedReads = parseReadSignals(saved.readSignals);
     setReadSignals(savedReads);
     setDerivedReads(view.derivedReads ?? []);
-    setPanelBook(view.panelBook ?? defaultPanelBook());
+    setPanelBook(defaultPanelBook());
     setPanelDirty(false);
     for (const spec of savedReads) void run(readSpecCommand(spec));
     for (const spec of view.derivedReads ?? []) {
@@ -781,22 +776,20 @@ export function App() {
     setWorkspaceHydrated(true);
   }, [state?.workspaceRev]);
 
-  // Panel pages live in the project file as `.rxpanel` documents. Merge them
-  // into the book once per project revision, skipping names the book already
-  // has, so opening a project restores its pages without a manual Import.
   const panelPagesSignature = useMemo(
     () => JSON.stringify(state?.panelPages ?? []),
     [state?.panelPages],
   );
+
+  // Panel pages belong to the project file. Replace the whole book on every
+  // project load (including an empty project) instead of merging local pages
+  // into it; a local draft must never leak into another project.
   useEffect(() => {
-    if (!workspaceHydrated || !state) return;
-    const pages = state.panelPages ?? [];
-    if (pages.length === 0) return;
+    if (!workspaceHydrated || !state?.projectPath) return;
     const key = `${state.projectPath}|${panelPagesSignature}`;
     if (appliedPanelPages.current === key) return;
     appliedPanelPages.current = key;
-    setPanelBook((book) => mergeProjectPanels(book, pages));
-    // These pages came from the project file, so they are already saved.
+    setPanelBook(panelBookFromProject(state.panelPages ?? []));
     setPanelDirty(false);
   }, [workspaceHydrated, state?.projectPath, panelPagesSignature]);
 
@@ -1145,7 +1138,6 @@ export function App() {
           yModes: chartYModes,
           derivedReads,
           cursors: chartCursors,
-          panelBook,
           filters: {
             monitor: monitorFilter,
             data: dataFilter,
@@ -1169,7 +1161,6 @@ export function App() {
     chartYModes,
     derivedReads,
     chartCursors,
-    panelBook,
     monitorFilter,
     dataFilter,
     messageFilter,
