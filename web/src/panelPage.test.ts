@@ -589,10 +589,10 @@ describe("panel page", () => {
         },
       ],
     });
-    expect(widgetMinSize("value")).toEqual({ w: 12, h: 5 });
+    expect(widgetMinSize("value")).toEqual({ w: 12, h: 4 });
     expect(movePanelWidget(page!, "value1", 8, 8, 12, 6)).not.toBeNull();
     const floor = movePanelWidget(page!, "value1", 8, 8, 1, 1);
-    expect(floor?.widgets[0]).toMatchObject({ w: 12, h: 5 });
+    expect(floor?.widgets[0]).toMatchObject({ w: 12, h: 4 });
   });
 
   it("round-trips lamp, bar and gauge widgets", () => {

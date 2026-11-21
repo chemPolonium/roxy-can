@@ -692,7 +692,7 @@ const VALUE_SPEC: PanelWidgetSpec = {
   kind: "value",
   label: "Value",
   minW: 12,
-  minH: 5,
+  minH: 4,
   defaultW: 16,
   defaultH: 6,
   fields: VALUE_FIELDS,
