@@ -8,6 +8,7 @@ import type {
 } from "../types";
 import { HostPathPick, fileBrowserOpen } from "./FileBrowser";
 import { ConfirmDialog } from "./ConfirmDialog";
+import { ContextMenu } from "./ContextMenu";
 import { uploadFile } from "../api";
 
 interface Props {
@@ -555,7 +556,6 @@ export function BusesModal({
   } | null>(null);
   const [rowMenu, setRowMenu] = useState<string | null>(null);
   const [menuPos, setMenuPos] = useState({ top: 0, left: 0 });
-  const rowMenuRef = useRef<HTMLDivElement>(null);
   const selectedBus = buses.find((bus) => busKey(bus) === selected) ?? null;
   const selectedCanBus = selectedBus?.kind === "can" ? selectedBus : null;
   const selectedFrBus = selectedBus?.kind === "flexray" ? selectedBus : null;
@@ -654,39 +654,6 @@ export function BusesModal({
   };
 
   useEffect(() => {
-    if (!rowMenu) return;
-    rowMenuRef.current
-      ?.querySelector<HTMLButtonElement>('[role="menuitem"]')
-      ?.focus();
-  }, [rowMenu]);
-
-  useEffect(() => {
-    if (!rowMenu) return;
-    const close = () => setRowMenu(null);
-    window.addEventListener("resize", close);
-    window.addEventListener("scroll", close, true);
-    return () => {
-      window.removeEventListener("resize", close);
-      window.removeEventListener("scroll", close, true);
-    };
-  }, [rowMenu]);
-
-  useEffect(() => {
-    if (!rowMenu) return;
-    const close = (event: MouseEvent) => {
-      if (!rowMenuRef.current?.contains(event.target as Node)) setRowMenu(null);
-    };
-    const escape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setRowMenu(null);
-    };
-    document.addEventListener("mousedown", close);
-    document.addEventListener("keydown", escape);
-    return () => {
-      document.removeEventListener("mousedown", close);
-      document.removeEventListener("keydown", escape);
-    };
-  }, [rowMenu]);
-  useEffect(() => {
     if (!addOpen) return;
     const close = (event: MouseEvent) => {
       if (!addRef.current?.contains(event.target as Node)) setAddOpen(false);
@@ -696,7 +663,13 @@ export function BusesModal({
   }, [addOpen]);
   useEffect(() => {
     const close = (event: KeyboardEvent) => {
-      if (event.key === "Escape" && !fileBrowserOpen()) onClose();
+      if (
+        event.key === "Escape" &&
+        !fileBrowserOpen() &&
+        !document.querySelector(".row-menu")
+      ) {
+        onClose();
+      }
     };
     window.addEventListener("keydown", close);
     return () => window.removeEventListener("keydown", close);
@@ -867,98 +840,53 @@ export function BusesModal({
                           ⋯
                         </button>
                         {rowMenu === key && (
-                          <div
-                            class="row-menu"
-                            role="menu"
-                            ref={rowMenuRef}
-                            style={{ top: `${menuPos.top}px`, left: `${menuPos.left}px` }}
-                            onClick={(event) => event.stopPropagation()}
-                            onKeyDown={(event) => {
-                              const menu = event.currentTarget;
-                              const items = [
-                                ...menu.querySelectorAll<HTMLButtonElement>(
-                                  '[role="menuitem"]',
-                                ),
-                              ];
-                              const at = items.indexOf(
-                                document.activeElement as HTMLButtonElement,
-                              );
-                              if (event.key === "Escape") {
-                                event.preventDefault();
-                                event.stopPropagation();
-                                setRowMenu(null);
-                                menu.parentElement
-                                  ?.querySelector<HTMLButtonElement>(
-                                    ".row-menu-button",
-                                  )
-                                  ?.focus();
-                                return;
-                              }
-                              const next =
-                                event.key === "ArrowDown"
-                                  ? (at + 1) % items.length
-                                  : event.key === "ArrowUp"
-                                    ? (at - 1 + items.length) % items.length
-                                    : event.key === "Home"
-                                      ? 0
-                                      : event.key === "End"
-                                        ? items.length - 1
-                                        : -1;
-                              if (next >= 0) {
-                                event.preventDefault();
-                                event.stopPropagation();
-                                items[next]?.focus();
-                              }
-                            }}
-                          >
-                            {bus.kind === "can" && (
-                              <button
-                                type="button"
-                                role="menuitem"
-                                onClick={() => {
-                                  setRowMenu(null);
-                                  document
-                                    .getElementById(`bus-name-${bus.index}`)
-                                    ?.focus();
-                                }}
-                              >
-                                Rename
-                              </button>
-                            )}
-                            {bus.kind === "can" && (
-                              <button
-                                type="button"
-                                role="menuitem"
-                                onClick={() => {
-                                  setRowMenu(null);
-                                  document
-                                    .getElementById(`bus-attach-${bus.index}`)
-                                    ?.focus();
-                                }}
-                              >
-                                Attach…
-                              </button>
-                            )}
-                            <button
-                              type="button"
-                              role="menuitem"
-                              class="danger"
-                              onClick={() => {
-                                setRowMenu(null);
-                                const message =
-                                  bus.kind === "can"
-                                    ? `Remove ${bus.name}? Its attachments, signals and trace rows for this bus are removed.`
-                                    : `Remove ${bus.name}?`;
-                                askRemove("Remove bus", message, () => {
-                                  if (bus.kind === "can") onRemoveBus(bus.index);
-                                  else if (bus.kind === "flexray") onRemoveFr(bus.index);
-                                  else onRemoveEth(bus.index);
-                                });
-                              }}
-                            >
-                              Remove
-                            </button>
-                          </div>
+                          <ContextMenu
+                            x={menuPos.left}
+                            y={menuPos.top}
+                            label="Bus actions"
+                            zIndex={120}
+                            items={[
+                              ...(bus.kind === "can"
+                                ? [
+                                    {
+                                      label: "Rename",
+                                      onSelect: () =>
+                                        document
+                                          .getElementById(
+                                            `bus-name-${bus.index}`,
+                                          )
+                                          ?.focus(),
+                                    },
+                                    {
+                                      label: "Attach…",
+                                      onSelect: () =>
+                                        document
+                                          .getElementById(
+                                            `bus-attach-${bus.index}`,
+                                          )
+                                          ?.focus(),
+                                    },
+                                  ]
+                                : []),
+                              {
+                                label: "Remove",
+                                danger: true,
+                                onSelect: () => {
+                                  const message =
+                                    bus.kind === "can"
+                                      ? `Remove ${bus.name}? Its attachments, signals and trace rows for this bus are removed.`
+                                      : `Remove ${bus.name}?`;
+                                  askRemove("Remove bus", message, () => {
+                                    if (bus.kind === "can") onRemoveBus(bus.index);
+                                    else if (bus.kind === "flexray")
+                                      onRemoveFr(bus.index);
+                                    else onRemoveEth(bus.index);
+                                  });
+                                },
+                              },
+                            ]}
+                            onClose={() => setRowMenu(null)}
+                          />
                         )}
                       </td>
                     </tr>

@@ -19,6 +19,7 @@ interface Props {
   className?: string;
   focusKey?: string | number;
   maxHeight?: string;
+  zIndex?: number;
   onClose: () => void;
 }
 
@@ -34,6 +35,7 @@ export function ContextMenu({
   className = "",
   focusKey,
   maxHeight,
+  zIndex,
   onClose,
 }: Props) {
   const menuRef = useRef<HTMLDivElement>(null);
@@ -108,6 +110,7 @@ export function ContextMenu({
         left: `${x}px`,
         maxHeight,
         overflowY: maxHeight ? "auto" : undefined,
+        zIndex,
       }}
       onPointerDown={(event) => event.stopPropagation()}
       onContextMenu={(event) => event.preventDefault()}
