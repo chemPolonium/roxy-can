@@ -32,6 +32,7 @@ impl PlanCache {
         self.plans.get(&frame)
     }
 
+    #[cfg(test)]
     pub fn len(&self) -> usize {
         self.plans.len()
     }

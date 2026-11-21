@@ -5,7 +5,8 @@ import type { SomeIpEvent, SomeIpService, SomeIpSubscription } from "../types";
 import { groupSomeIpServices } from "../someipView";
 import { copyText } from "../clipboard";
 import { sdServiceStatuses } from "../sdView";
-import { UiIcon } from "./icons";
+import { EmptyState } from "./EmptyState";
+import { PanelFilterInput } from "./PanelFilterInput";
 
 const SD_KINDS: Record<number, string> = {
   0x00: "Find",
@@ -179,26 +180,12 @@ export function SomeIpPanel({
         >
           Database
         </button>
-        <input
-          class="panel-filter"
-          type="search"
+        <PanelFilterInput
           value={query}
           placeholder="Filter service, method, instance, eventgroup…"
-          onInput={(event) =>
-            setQuery((event.target as HTMLInputElement).value)
-          }
+          label="Filter SOME/IP messages"
+          onInput={setQuery}
         />
-        {query && (
-          <button
-            type="button"
-            class="mini icon-btn"
-            title="Clear the filter"
-            aria-label="Clear filter"
-            onClick={() => setQuery("")}
-          >
-            <UiIcon name="close" />
-          </button>
-        )}
       </div>
       {issues.length > 0 && (
         <div class="someip-issues" title={issues.join("\n")}>
@@ -209,10 +196,10 @@ export function SomeIpPanel({
       )}
       {view === "availability" ? (
         availability.length === 0 ? (
-          <div class="empty">
-            <strong>No service offers</strong>
-            <span>SD offer/stop-offer entries define availability.</span>
-          </div>
+          <EmptyState
+            title="No service offers"
+            hint="SD offer/stop-offer entries define availability."
+          />
         ) : (
           <div class="table-scroll">
             <table class="data-table someip-table">
@@ -275,21 +262,18 @@ export function SomeIpPanel({
         )
       ) : view === "database" ? (
         services.length === 0 ? (
-          <div class="empty">
-            <strong>No ARXML service objects</strong>
-            <span>Import an Ethernet ARXML with SERVICE-INTERFACE deployments.</span>
-          </div>
+          <EmptyState
+            title="No ARXML service objects"
+            hint="Import an Ethernet ARXML with SERVICE-INTERFACE deployments."
+          />
         ) : (
           <div class="table-scroll">
             <div class="panel-filter-row">
-              <input
-                class="panel-filter"
-                type="search"
+              <PanelFilterInput
                 value={dbQuery}
                 placeholder="Filter service, instance, eventgroup, endpoint…"
-                onInput={(event) =>
-                  setDbQuery((event.target as HTMLInputElement).value)
-                }
+                label="Filter ARXML service objects"
+                onInput={setDbQuery}
               />
               <span class="muted">
                 {dbServices.length} / {services.length}
@@ -367,10 +351,10 @@ export function SomeIpPanel({
         )
       ) : view === "services" ? (
         trafficServices.length === 0 ? (
-          <div class="empty">
-            <strong>No SOME/IP services</strong>
-            <span>Only method/event traffic is counted; SD is the directory.</span>
-          </div>
+          <EmptyState
+            title="No SOME/IP services"
+            hint="Only method/event traffic is counted; SD is the directory."
+          />
         ) : (
           <div class="table-scroll">
             <table class="data-table someip-table">
@@ -435,13 +419,10 @@ export function SomeIpPanel({
           </div>
         )
       ) : visible.length === 0 ? (
-        <div class="empty">
-          <strong>No SOME/IP messages</strong>
-          <span>
-            Load a PCAP/PCAPNG with SOME/IP over UDP (SD included) and replay
-            it.
-          </span>
-        </div>
+        <EmptyState
+          title="No SOME/IP messages"
+          hint="Load a PCAP/PCAPNG with SOME/IP over UDP (SD included) and replay it."
+        />
       ) : (
         <div class="table-scroll">
           <table class="data-table someip-table someip-events-table">

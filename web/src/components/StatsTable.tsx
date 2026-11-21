@@ -1,6 +1,7 @@
 import type { ComponentChildren } from "preact";
 import { useLayoutEffect, useMemo, useRef, useState } from "preact/hooks";
 import type { StatsRow } from "../types";
+import { EmptyState } from "./EmptyState";
 import {
   ColumnResizeHandle,
   useColumnWidths,
@@ -156,16 +157,14 @@ export function StatsTable({
   if (rows.length === 0) {
     if (empty) return <>{empty}</>;
     return (
-      <div class="empty">
-        <strong>
-          {filtered ? "No matching statistics" : "No statistics yet"}
-        </strong>
-        <span>
-          {filtered
+      <EmptyState
+        title={filtered ? "No matching statistics" : "No statistics yet"}
+        hint={
+          filtered
             ? "Adjust or clear the bus or message filter."
-            : "Start a measurement or open a log to collect counts, cycle times and jitter."}
-        </span>
-      </div>
+            : "Start a measurement or open a log to collect counts, cycle times and jitter."
+        }
+      />
     );
   }
   return (

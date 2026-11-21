@@ -94,12 +94,6 @@ pub struct ClusterCfg {
     pub node_roles: BTreeMap<String, String>,
 }
 
-impl ClusterCfg {
-    pub fn id(&self) -> ClusterId {
-        ClusterId(self.id)
-    }
-}
-
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct IdAliasCfg {

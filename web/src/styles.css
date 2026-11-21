@@ -6964,14 +6964,6 @@ button.danger:hover:not(:disabled) {
   font-size: 9.5px;
 }
 
-.spec-empty {
-  display: grid;
-  flex: 1 1 auto;
-  place-items: center;
-  color: var(--muted);
-  font-size: 10.5px;
-}
-
 /* Bus Statistics: one card per bus with a load sparkline and compact
    current/min/max/avg rows. */
 .busstat-list {

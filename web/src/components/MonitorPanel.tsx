@@ -1,8 +1,10 @@
 import type { ComponentChildren } from "preact";
-import { useEffect, useRef, useState } from "preact/hooks";
+import { useState } from "preact/hooks";
 import type { MonitorRow } from "../types";
 import { palette, type Theme } from "../theme";
 import { rowPathWithoutName } from "../signalRows";
+import { ContextMenu } from "./ContextMenu";
+import { EmptyState } from "./EmptyState";
 
 interface Props {
   rows: MonitorRow[];
@@ -48,27 +50,6 @@ export function MonitorPanel({
     x: number;
     y: number;
   } | null>(null);
-  const menuRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (!menu) return;
-    menuRef.current?.querySelector<HTMLButtonElement>("button")?.focus();
-    const close = (event: MouseEvent) => {
-      if (!menuRef.current?.contains(event.target as Node)) setMenu(null);
-    };
-    const key = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setMenu(null);
-    };
-    const scroll = () => setMenu(null);
-    document.addEventListener("mousedown", close);
-    document.addEventListener("keydown", key);
-    window.addEventListener("scroll", scroll, true);
-    return () => {
-      document.removeEventListener("mousedown", close);
-      document.removeEventListener("keydown", key);
-      window.removeEventListener("scroll", scroll, true);
-    };
-  }, [menu]);
 
   const openMenu = (event: MouseEvent, row: MonitorRow) => {
     event.preventDefault();
@@ -114,14 +95,14 @@ export function MonitorPanel({
   if (rows.length === 0) {
     if (empty) return <>{empty}</>;
     return (
-      <div class="empty">
-        <strong>{filtered ? "No matching signals" : "No signals yet"}</strong>
-        <span>
-          {filtered
+      <EmptyState
+        title={filtered ? "No matching signals" : "No signals yet"}
+        hint={
+          filtered
             ? "Try a different signal, frame, PDU, bus or unit."
-            : "Add a signal to watch its live value."}
-        </span>
-      </div>
+            : "Add a signal to watch its live value."
+        }
+      />
     );
   }
   const colorAt = (slot: number) => colors[Math.abs(slot) % colors.length];
@@ -227,35 +208,23 @@ export function MonitorPanel({
         })}
       </div>
       {menu && (
-        <div
-          class="row-menu monitor-row-menu"
-          role="menu"
-          ref={menuRef}
-          style={{ top: `${menu.y}px`, left: `${menu.x}px` }}
-          onMouseDown={(event) => event.stopPropagation()}
-        >
-          <button
-            type="button"
-            role="menuitem"
-            onClick={() => {
-              setMenu(null);
-              onConfigure(menu.row);
-            }}
-          >
-            Settings…
-          </button>
-          <button
-            type="button"
-            role="menuitem"
-            class="danger"
-            onClick={() => {
-              setMenu(null);
-              onRemove(menu.row);
-            }}
-          >
-            Remove
-          </button>
-        </div>
+        <ContextMenu
+          x={menu.x}
+          y={menu.y}
+          label="Monitor row actions"
+          items={[
+            {
+              label: "Settings…",
+              onSelect: () => onConfigure(menu.row),
+            },
+            {
+              label: "Remove",
+              danger: true,
+              onSelect: () => onRemove(menu.row),
+            },
+          ]}
+          onClose={() => setMenu(null)}
+        />
       )}
     </div>
   );

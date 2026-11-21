@@ -856,28 +856,6 @@ impl Issue {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum FrameMatchKey {
-    Can { id: u32, extended: bool },
-    FlexRay { slot: u16, cycle: u8 },
-    Ethernet { vlan: Option<u16>, flow: EthFlowKey },
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct EthFlowKey {
-    pub vlan: Option<u16>,
-    pub dst: [u8; 6],
-    pub src: [u8; 6],
-    pub ethertype: u16,
-    pub payload_len: usize,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct FrameRoute {
-    pub cluster: ClusterId,
-    pub key: FrameMatchKey,
-}
-
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum MuxSelector {
@@ -1131,12 +1109,6 @@ impl Comm {
         self.clusters.values().find(|c| c.matches_name(name))
     }
 
-    pub fn cluster_by_name_exact(&self, name: &str) -> Option<&Cluster> {
-        self.clusters
-            .values()
-            .find(|c| c.name.eq_ignore_ascii_case(name))
-    }
-
     pub fn frames_in_cluster(&self, cluster: ClusterId) -> impl Iterator<Item = &Frame> {
         self.frames.values().filter(move |f| f.cluster == cluster)
     }
@@ -1146,12 +1118,6 @@ impl Comm {
         self.services
             .iter()
             .find(|service| service.cluster == cluster && service.id.0 == u32::from(id))
-    }
-
-    pub fn services_in_cluster(&self, cluster: ClusterId) -> impl Iterator<Item = &Service> {
-        self.services
-            .iter()
-            .filter(move |service| service.cluster == cluster)
     }
 
     /// ECU by its document name; DBC nodes and ARXML ECUs meet here.
@@ -1312,66 +1278,11 @@ impl Comm {
             .collect()
     }
 
-    pub fn frame_route(&self, frame: &Frame) -> FrameRoute {
-        let key = match frame.address {
-            FrameAddress::Can { id, extended, .. } => FrameMatchKey::Can { id, extended },
-            FrameAddress::FlexRay {
-                slot, base_cycle, ..
-            } => FrameMatchKey::FlexRay {
-                slot,
-                cycle: base_cycle,
-            },
-            FrameAddress::Ethernet { vlan } => {
-                let vlan = self.overrides.get(&frame.id).and_then(|o| o.vlan).or(vlan);
-                FrameMatchKey::Ethernet {
-                    vlan,
-                    flow: EthFlowKey {
-                        vlan,
-                        dst: self
-                            .overrides
-                            .get(&frame.id)
-                            .and_then(|o| o.dst_mac)
-                            .unwrap_or([0; 6]),
-                        src: self
-                            .overrides
-                            .get(&frame.id)
-                            .and_then(|o| o.src_mac)
-                            .unwrap_or([0; 6]),
-                        ethertype: self
-                            .overrides
-                            .get(&frame.id)
-                            .and_then(|o| o.ethertype)
-                            .unwrap_or(0),
-                        payload_len: frame.length as usize,
-                    },
-                }
-            }
-        };
-        FrameRoute {
-            cluster: frame.cluster,
-            key,
-        }
-    }
-
     pub fn sender_of_frame(&self, frame: FrameId) -> Option<&Ecu> {
         self.frame_relations
             .iter()
             .find(|r| r.frame == frame && r.role == RelationRole::Sender)
             .and_then(|r| self.ecus.get(&r.ecu))
-    }
-
-    pub fn sender_of_pdu(&self, pdu: PduId) -> Option<&Ecu> {
-        self.pdu_relations
-            .iter()
-            .find(|r| r.pdu == pdu && r.role == RelationRole::Sender)
-            .and_then(|r| self.ecus.get(&r.ecu))
-    }
-
-    fn frame_for_pdu(&self, pdu: PduId) -> Option<FrameId> {
-        self.frame_pdu_mappings
-            .values()
-            .find(|m| m.pdu == pdu)
-            .map(|m| m.frame)
     }
 
     /// Structural checks that need no XML: every reference points at an

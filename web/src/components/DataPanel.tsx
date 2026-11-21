@@ -1,7 +1,9 @@
 import type { ComponentChildren } from "preact";
-import { useEffect, useRef, useState } from "preact/hooks";
+import { useState } from "preact/hooks";
 import type { DataRow } from "../types";
 import { rowPathWithoutName } from "../signalRows";
+import { ContextMenu } from "./ContextMenu";
+import { EmptyState } from "./EmptyState";
 
 interface Props {
   rows: DataRow[];
@@ -35,27 +37,6 @@ export function DataPanel({
     x: number;
     y: number;
   } | null>(null);
-  const menuRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (!menu) return;
-    menuRef.current?.querySelector<HTMLButtonElement>("button")?.focus();
-    const close = (event: MouseEvent) => {
-      if (!menuRef.current?.contains(event.target as Node)) setMenu(null);
-    };
-    const key = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setMenu(null);
-    };
-    const scroll = () => setMenu(null);
-    document.addEventListener("mousedown", close);
-    document.addEventListener("keydown", key);
-    window.addEventListener("scroll", scroll, true);
-    return () => {
-      document.removeEventListener("mousedown", close);
-      document.removeEventListener("keydown", key);
-      window.removeEventListener("scroll", scroll, true);
-    };
-  }, [menu]);
 
   const openMenu = (event: MouseEvent, row: DataRow) => {
     event.preventDefault();
@@ -99,14 +80,14 @@ export function DataPanel({
   if (rows.length === 0) {
     if (empty) return <>{empty}</>;
     return (
-      <div class="empty">
-        <strong>{filtered ? "No matching signals" : "No signals yet"}</strong>
-        <span>
-          {filtered
+      <EmptyState
+        title={filtered ? "No matching signals" : "No signals yet"}
+        hint={
+          filtered
             ? "Try a different signal, frame, PDU, bus or unit."
-            : "Add a signal to watch live, raw and scaled values."}
-        </span>
-      </div>
+            : "Add a signal to watch live, raw and scaled values."
+        }
+      />
     );
   }
   return (
@@ -219,25 +200,19 @@ export function DataPanel({
       ))}
     </div>
     {menu && (
-      <div
-        ref={menuRef}
-        class="row-menu"
-        role="menu"
-        style={{ top: `${menu.y}px`, left: `${menu.x}px` }}
-        onPointerDown={(event) => event.stopPropagation()}
-      >
-        <button
-          type="button"
-          role="menuitem"
-          class="danger"
-          onClick={() => {
-            onRemove(menu.row);
-            setMenu(null);
-          }}
-        >
-          Remove
-        </button>
-      </div>
+      <ContextMenu
+        x={menu.x}
+        y={menu.y}
+        label="Data row actions"
+        items={[
+          {
+            label: "Remove",
+            danger: true,
+            onSelect: () => onRemove(menu.row),
+          },
+        ]}
+        onClose={() => setMenu(null)}
+      />
     )}
     </>
   );

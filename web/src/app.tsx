@@ -48,6 +48,7 @@ import {
   triggerEditOf,
 } from "./triggerFile";
 import { Activity } from "./components/Activity";
+import { ArmedClearButton } from "./components/ArmedClearButton";
 import { BusesModal } from "./components/BusesModal";
 import { BusStatsPanel } from "./components/BusStatsPanel";
 import { CursorAnalysis } from "./components/CursorAnalysis";
@@ -56,6 +57,7 @@ import { CommandPalette } from "./components/CommandPalette";
 import { MenuButton } from "./components/MenuButton";
 import type { PaletteCommand } from "./components/CommandPalette";
 import { DataPanel } from "./components/DataPanel";
+import { EmptyState } from "./components/EmptyState";
 import { DbcExplorer } from "./components/DbcExplorer";
 import { EventJumpModal } from "./components/EventJumpModal";
 import {
@@ -71,6 +73,7 @@ import { HelpModal } from "./components/HelpModal";
 import { TriggersModal } from "./components/TriggersModal";
 import { MessageTable } from "./components/MessageTable";
 import { MonitorPanel } from "./components/MonitorPanel";
+import { PanelFilterInput } from "./components/PanelFilterInput";
 import { MonitorRowModal } from "./components/MonitorRowModal";
 import { PagePanel } from "./components/PagePanel";
 import { RateChart } from "./components/RateChart";
@@ -582,7 +585,6 @@ export function App() {
   const [localRecentProjects, setLocalRecentProjects] = useState<string[]>(
     loadLocalRecentProjects,
   );
-  const [armedClear, setArmedClear] = useState<string | null>(null);
   const [allMessagesExpanded, setAllMessagesExpanded] = useState(false);
   const [replayStepMs, setReplayStepMs] = useState(100);
   const [replayForS, setReplayForS] = useState(5);
@@ -956,12 +958,6 @@ export function App() {
     });
   }, [state?.projectPath]);
 
-  useEffect(() => {
-    if (!armedClear) return;
-    const timer = window.setTimeout(() => setArmedClear(null), 3000);
-    return () => window.clearTimeout(timer);
-  }, [armedClear]);
-
   // Transport changes deserve a message even though the status line keeps
   // showing the bus state rather than the command result.
   useEffect(() => {
@@ -1133,22 +1129,48 @@ export function App() {
         setPageConfirmDelete(null);
       }
     };
-    const escape = (event: KeyboardEvent) => {
+    const key = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         setPageMenu(null);
         setPageConfirmDelete(null);
+        return;
       }
+      if (
+        event.key !== "ArrowDown" &&
+        event.key !== "ArrowUp" &&
+        event.key !== "Home" &&
+        event.key !== "End"
+      ) {
+        return;
+      }
+      const items = [
+        ...(pageMenuRef.current?.querySelectorAll<HTMLButtonElement>(
+          "button:not(:disabled)",
+        ) ?? []),
+      ];
+      if (items.length === 0) return;
+      event.preventDefault();
+      const active = items.indexOf(document.activeElement as HTMLButtonElement);
+      const index =
+        event.key === "Home"
+          ? 0
+          : event.key === "End"
+            ? items.length - 1
+            : event.key === "ArrowDown"
+              ? (active + 1 + items.length) % items.length
+              : (active - 1 + items.length) % items.length;
+      items[index]?.focus();
     };
     const scroll = () => {
       setPageMenu(null);
       setPageConfirmDelete(null);
     };
     window.addEventListener("pointerdown", close);
-    window.addEventListener("keydown", escape);
+    window.addEventListener("keydown", key);
     window.addEventListener("scroll", scroll, true);
     return () => {
       window.removeEventListener("pointerdown", close);
-      window.removeEventListener("keydown", escape);
+      window.removeEventListener("keydown", key);
       window.removeEventListener("scroll", scroll, true);
     };
   }, [pageMenu, pageMenuMode]);
@@ -1387,17 +1409,6 @@ export function App() {
   };
 
   const clearChartCursors = () => setChartCursors([]);
-
-  /// One armed state for every trash-can action: first click arms, second
-  /// click clears, and leaving it alone disarms after three seconds.
-  const armClear = (key: string, action: () => void) => {
-    if (armedClear !== key) {
-      setArmedClear(key);
-      return;
-    }
-    setArmedClear(null);
-    action();
-  };
 
   const saveDerived = (defs: DerivedDef[]) => {
     // Pin the editor's resolution; the core never guesses between same-named
@@ -2046,18 +2057,6 @@ export function App() {
     setExportKind(kind);
     setExportOpen(true);
   };
-
-  /// Escape parks a filter box: clear it and hand the keyboard back to the
-  /// table. F2 is the matching way in.
-  const filterEscape =
-    (clear: () => void) =>
-    (event: JSX.TargetedKeyboardEvent<HTMLInputElement>) => {
-      if (event.key !== "Escape") return;
-      event.preventDefault();
-      event.stopPropagation();
-      clear();
-      event.currentTarget.blur();
-    };
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -2788,27 +2787,31 @@ export function App() {
   }, [state?.recentProjects, localRecentProjects]);
 
   const emptyWorkspace = (
-    <div class="empty empty-workspace">
-      <strong>No buses yet</strong>
-      <span>Open a project, create a sample, or add a bus to get started.</span>
-      <div class="empty-actions">
-        <button
-          type="button"
-          class="primary"
-          onClick={() => void openProjectPicker()}
-        >
-          Open project…
-        </button>
-        <button
-          type="button"
-          onClick={() => void createSampleProject()}
-        >
-          Sample project
-        </button>
-        <button type="button" onClick={openBuses}>
-          Add bus…
-        </button>
-      </div>
+    <EmptyState
+      workspace
+      title="No buses yet"
+      hint="Open a project, create a sample, or add a bus to get started."
+      actions={
+        <>
+          <button
+            type="button"
+            class="primary"
+            onClick={() => void openProjectPicker()}
+          >
+            Open project…
+          </button>
+          <button
+            type="button"
+            onClick={() => void createSampleProject()}
+          >
+            Sample project
+          </button>
+          <button type="button" onClick={openBuses}>
+            Add bus…
+          </button>
+        </>
+      }
+    >
       {projectRecents.length > 0 && (
         <div class="empty-recent">
           <span>Recent</span>
@@ -2824,7 +2827,7 @@ export function App() {
           ))}
         </div>
       )}
-    </div>
+    </EmptyState>
   );
   const replayText =
     state?.replayPosUs != null && state?.replayTotalUs != null
@@ -3542,24 +3545,14 @@ export function App() {
             >
               <UiIcon name="download" />
             </button>
-            <button
-              type="button"
-              class={`mini icon-btn ${armedClear === "trace" ? "danger" : ""}`}
+            <ArmedClearButton
               disabled={!canControl || traceRows.length === 0}
-              title={
-                armedClear === "trace"
-                  ? "Click again to clear the visible trace"
-                  : "Clear the visible trace; measurement keeps running"
-              }
-              aria-label={
-                armedClear === "trace" ? "Confirm clear trace" : "Clear trace"
-              }
-              onClick={() =>
-                armClear("trace", () => void run({ type: "clear_trace" }))
-              }
-            >
-              <UiIcon name={armedClear === "trace" ? "check" : "trash"} />
-            </button>
+              title="Clear the visible trace; measurement keeps running"
+              confirmTitle="Click again to clear the visible trace"
+              label="Clear trace"
+              confirmLabel="Confirm clear trace"
+              onClear={() => void run({ type: "clear_trace" })}
+            />
             <ColumnsMenu
               columns={traceColumns}
               onChange={setTraceColumns}
@@ -3693,28 +3686,15 @@ export function App() {
             >
               <UiIcon name="clipboard" />
             </button>
-            <button
-              type="button"
-              class={`mini icon-btn message-clear ${armedClear === "messages" ? "danger" : ""}`}
+            <ArmedClearButton
+              className="message-clear"
               disabled={mainMessages.length === 0}
-              title={
-                armedClear === "messages"
-                  ? "Click again to reset message counters"
-                  : "Reset message counters; Trace data is kept"
-              }
-              aria-label={
-                armedClear === "messages"
-                  ? "Confirm reset message counters"
-                  : "Reset message counters"
-              }
-              onClick={() =>
-                armClear("messages", () =>
-                  void run({ type: "clear_messages" }),
-                )
-              }
-            >
-              <UiIcon name={armedClear === "messages" ? "check" : "trash"} />
-            </button>
+              title="Reset message counters; Trace data is kept"
+              confirmTitle="Click again to reset message counters"
+              label="Reset message counters"
+              confirmLabel="Confirm reset message counters"
+              onClear={() => void run({ type: "clear_messages" })}
+            />
             <button
               type="button"
               class="mini icon-btn"
@@ -3835,25 +3815,13 @@ export function App() {
                 <UiIcon name="cursor" />
               </button>
               {chartCursors.length > 0 && (
-                <button
-                  type="button"
-                  class={`mini icon-btn ${armedClear === "cursors" ? "danger" : ""}`}
-                  title={
-                    armedClear === "cursors"
-                      ? "Click again to remove all time cursors"
-                      : "Remove all time cursors"
-                  }
-                  aria-label={
-                    armedClear === "cursors"
-                      ? "Confirm clear cursors"
-                      : "Clear cursors"
-                  }
-                  onClick={() => armClear("cursors", clearChartCursors)}
-                >
-                  <UiIcon
-                    name={armedClear === "cursors" ? "check" : "trash"}
-                  />
-                </button>
+                <ArmedClearButton
+                  title="Remove all time cursors"
+                  confirmTitle="Click again to remove all time cursors"
+                  label="Clear cursors"
+                  confirmLabel="Confirm clear cursors"
+                  onClear={clearChartCursors}
+                />
               )}
               <button
                 type="button"
@@ -4018,26 +3986,14 @@ export function App() {
             >
               <UiIcon name="plus-signal" />
             </button>
-            <button
-              type="button"
-              class={`mini icon-btn ${armedClear === "monitor" ? "danger" : ""}`}
+            <ArmedClearButton
               disabled={!(state?.monitor.length ?? 0)}
-              title={
-                armedClear === "monitor"
-                  ? "Click again to clear all watched signals"
-                  : "Clear watched signals"
-              }
-              aria-label={
-                armedClear === "monitor"
-                  ? "Confirm clear watched signals"
-                  : "Clear watched signals"
-              }
-              onClick={() =>
-                armClear("monitor", () => void run({ type: "clear_monitor" }))
-              }
-            >
-              <UiIcon name={armedClear === "monitor" ? "check" : "trash"} />
-            </button>
+              title="Clear watched signals"
+              confirmTitle="Click again to clear all watched signals"
+              label="Clear watched signals"
+              confirmLabel="Confirm clear watched signals"
+              onClear={() => void run({ type: "clear_monitor" })}
+            />
           </>
         ),
       })}
@@ -4098,26 +4054,14 @@ export function App() {
             >
               <UiIcon name="plus-signal" />
             </button>
-            <button
-              type="button"
-              class={`mini icon-btn ${armedClear === "data" ? "danger" : ""}`}
+            <ArmedClearButton
               disabled={!(state?.data.length ?? 0)}
-              title={
-                armedClear === "data"
-                  ? "Click again to clear all tracked signals"
-                  : "Clear tracked signals"
-              }
-              aria-label={
-                armedClear === "data"
-                  ? "Confirm clear tracked signals"
-                  : "Clear tracked signals"
-              }
-              onClick={() =>
-                armClear("data", () => void run({ type: "clear_data" }))
-              }
-            >
-              <UiIcon name={armedClear === "data" ? "check" : "trash"} />
-            </button>
+              title="Clear tracked signals"
+              confirmTitle="Click again to clear all tracked signals"
+              label="Clear tracked signals"
+              confirmLabel="Confirm clear tracked signals"
+              onClear={() => void run({ type: "clear_data" })}
+            />
           </>
         ),
       })}
@@ -4187,26 +4131,14 @@ export function App() {
             >
               <UiIcon name="plus-signal" />
             </button>
-            <button
-              type="button"
-              class={`mini icon-btn ${armedClear === "state" ? "danger" : ""}`}
+            <ArmedClearButton
               disabled={!(state?.stateRows.length ?? 0)}
-              title={
-                armedClear === "state"
-                  ? "Click again to clear all state bands"
-                  : "Clear state bands"
-              }
-              aria-label={
-                armedClear === "state"
-                  ? "Confirm clear state bands"
-                  : "Clear state bands"
-              }
-              onClick={() =>
-                armClear("state", () => void run({ type: "clear_state" }))
-              }
-            >
-              <UiIcon name={armedClear === "state" ? "check" : "trash"} />
-            </button>
+              title="Clear state bands"
+              confirmTitle="Click again to clear all state bands"
+              label="Clear state bands"
+              confirmLabel="Confirm clear state bands"
+              onClear={() => void run({ type: "clear_state" })}
+            />
           </>
         ),
       })}
@@ -4352,27 +4284,12 @@ export function App() {
             <option value="warn">Warn</option>
             <option value="error">Error</option>
           </select>
-          <input
-            class="panel-filter"
-            type="search"
+          <PanelFilterInput
             value={writeQuery}
             placeholder="Filter text…"
-            onInput={(event) =>
-              setWriteQuery((event.target as HTMLInputElement).value)
-            }
-            onKeyDown={filterEscape(() => setWriteQuery(""))}
+            label="Filter log text"
+            onInput={setWriteQuery}
           />
-          {writeQuery && (
-            <button
-              type="button"
-              class="mini icon-btn"
-              title="Clear the filter"
-              aria-label="Clear filter"
-              onClick={() => setWriteQuery("")}
-            >
-              <UiIcon name="close" />
-            </button>
-          )}
         </div>
         <Activity
           rows={writeRows}
@@ -4558,16 +4475,20 @@ export function App() {
     setExplorerOpen(false);
   };
 
-  const openPageMenu = (event: MouseEvent, id: string) => {
-    event.preventDefault();
+  const openPageMenuAt = (id: string, x: number, y: number) => {
     if (shellMode !== "panel" || activePage.id !== id) showPanelPage(id);
     setPageConfirmDelete(null);
     setPageMenuMode("menu");
     setPageMenu({
       id,
-      x: Math.max(8, Math.min(event.clientX, window.innerWidth - 230)),
-      y: Math.max(8, Math.min(event.clientY, window.innerHeight - 260)),
+      x: Math.max(8, Math.min(x, window.innerWidth - 230)),
+      y: Math.max(8, Math.min(y, window.innerHeight - 260)),
     });
+  };
+
+  const openPageMenu = (event: MouseEvent, id: string) => {
+    event.preventDefault();
+    openPageMenuAt(id, event.clientX, event.clientY);
   };
 
   const commitPageRename = () => {
@@ -5210,6 +5131,17 @@ export function App() {
                 title={`${entry.name} — click to open; right-click for page actions`}
                 onClick={() => showPanelPage(entry.id)}
                 onContextMenu={(event) => openPageMenu(event, entry.id)}
+                onKeyDown={(event) => {
+                  if (
+                    event.key !== "ContextMenu" &&
+                    !(event.shiftKey && event.key === "F10")
+                  ) {
+                    return;
+                  }
+                  event.preventDefault();
+                  const rect = event.currentTarget.getBoundingClientRect();
+                  openPageMenuAt(entry.id, rect.left, rect.bottom + 4);
+                }}
               >
                 {entry.name}
               </button>

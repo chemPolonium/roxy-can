@@ -342,54 +342,6 @@ fn cluster_ids_are_monotonic_and_never_reused() {
     assert_eq!(ids.allocate(), ClusterId(10));
 }
 #[test]
-fn frame_route_uses_the_address_and_overrides() {
-    let comm = fixture();
-    let frame = comm.frames.get(&FrameId(17)).unwrap();
-    assert_eq!(
-        comm.frame_route(frame).key,
-        FrameMatchKey::Can {
-            id: 0x100,
-            extended: false
-        }
-    );
-
-    let mut eth = eth_comm();
-    let frame = eth.frames.get(&FrameId(30)).unwrap();
-    assert_eq!(
-        eth.frame_route(frame).key,
-        FrameMatchKey::Ethernet {
-            vlan: Some(100),
-            flow: EthFlowKey {
-                vlan: Some(100),
-                dst: [0; 6],
-                src: [0; 6],
-                ethertype: 0,
-                payload_len: 64,
-            },
-        }
-    );
-
-    eth.overrides.insert(
-        FrameId(30),
-        FrameOverride {
-            ethertype: Some(0x22F0),
-            dst_mac: Some([1, 2, 3, 4, 5, 6]),
-            src_mac: Some([7, 8, 9, 10, 11, 12]),
-            length_includes_header: Some(false),
-            vlan: Some(200),
-        },
-    );
-    let route = eth.frame_route(eth.frames.get(&FrameId(30)).unwrap());
-    let FrameMatchKey::Ethernet { vlan, flow } = route.key else {
-        panic!("expected Ethernet route");
-    };
-    assert_eq!(vlan, Some(200));
-    assert_eq!(flow.vlan, Some(200));
-    assert_eq!(flow.ethertype, 0x22F0);
-    assert_eq!(flow.dst, [1, 2, 3, 4, 5, 6]);
-}
-
-#[test]
 fn comm_lookup_and_integrity() {
     let mut comm = fixture();
     assert_eq!(comm.cluster_by_name("Powertrain").unwrap().id, ClusterId(1));

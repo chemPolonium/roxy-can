@@ -2,6 +2,7 @@ import type { ComponentChildren } from "preact";
 import { useEffect, useState } from "preact/hooks";
 import type { SpecRow } from "../types";
 import { UiIcon } from "./icons";
+import { EmptyState } from "./EmptyState";
 
 interface Props {
   rows: SpecRow[];
@@ -145,7 +146,10 @@ export function SpecPanel({
         <span class="spec-count">{visible.length} violations</span>
       </div>
       {visible.length === 0 ? (
-        <div class="spec-empty">no violations</div>
+        <EmptyState
+          title="No violations"
+          hint="The selected rules have no findings in this session."
+        />
       ) : (
         <div class="spec-list">
           {visible.map((row) => (

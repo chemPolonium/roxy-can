@@ -2,6 +2,7 @@ import type { ComponentChildren } from "preact";
 import { useEffect, useRef } from "preact/hooks";
 import type { BusStats } from "../types";
 import { palette, type Theme } from "../theme";
+import { EmptyState } from "./EmptyState";
 
 function Spark({ points, theme }: { points: number[]; theme: Theme }) {
   const ref = useRef<HTMLCanvasElement>(null);
@@ -65,10 +66,10 @@ export function BusStatsPanel({
   if (buses.length === 0) {
     if (empty) return <>{empty}</>;
     return (
-      <div class="empty">
-        <strong>No bus statistics yet</strong>
-        <span>Start a measurement to collect load and timing statistics.</span>
-      </div>
+      <EmptyState
+        title="No bus statistics yet"
+        hint="Start a measurement to collect load and timing statistics."
+      />
     );
   }
   return (

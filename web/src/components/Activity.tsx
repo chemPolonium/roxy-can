@@ -1,4 +1,5 @@
 import type { WriteLine } from "../types";
+import { EmptyState } from "./EmptyState";
 
 export function Activity({
   rows,
@@ -13,16 +14,14 @@ export function Activity({
 }) {
   if (rows.length === 0) {
     return (
-      <div class="empty">
-        <strong>
-          {filtered ? "No matching lines" : "Nothing reported yet"}
-        </strong>
-        <span>
-          {filtered
+      <EmptyState
+        title={filtered ? "No matching lines" : "Nothing reported yet"}
+        hint={
+          filtered
             ? "Try a different category or text."
-            : "Command results and bus events land here."}
-        </span>
-      </div>
+            : "Command results and bus events land here."
+        }
+      />
     );
   }
   return (
