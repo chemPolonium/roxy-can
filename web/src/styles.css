@@ -1469,18 +1469,6 @@ body.col-resizing {
   background: var(--accent-soft);
 }
 
-.page-add {
-  position: relative;
-  display: flex;
-}
-
-.app-menu-page {
-  top: calc(100% + 4px);
-  right: 0;
-  z-index: 30;
-  min-width: 104px;
-}
-
 @media (max-width: 1100px) {
   .page-panel .panel-head.editing .meta {
     display: none;

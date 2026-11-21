@@ -1657,8 +1657,8 @@ export function PagePanel({
   const [sizeW, setSizeW] = useState(String(page.width * PAGE_GRID));
   const [sizeH, setSizeH] = useState(String(page.height * PAGE_GRID));
   const [addOpen, setAddOpen] = useState(false);
+  const [addPos, setAddPos] = useState({ x: 0, y: 0 });
   const addTrigger = useRef<HTMLButtonElement>(null);
-  const addMenu = useRef<HTMLDivElement>(null);
   const [menu, setMenu] = useState<PageMenu | null>(null);
   const [pageNotice, setPageNotice] = useState("");
   const noticeError = (message: string) => {
@@ -1693,11 +1693,6 @@ export function PagePanel({
   }, [editing]);
 
   useEffect(() => {
-    if (!addOpen) return;
-    addMenu.current?.querySelector<HTMLButtonElement>("button")?.focus();
-  }, [addOpen]);
-
-  useEffect(() => {
     if (!menu) return;
     const onKey = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
@@ -1708,28 +1703,6 @@ export function PagePanel({
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
   }, [menu]);
-
-  useEffect(() => {
-    if (!addOpen) return;
-    const close = (event: PointerEvent) => {
-      if (!(event.target as HTMLElement).closest(".page-add")) {
-        setAddOpen(false);
-      }
-    };
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key !== "Escape") return;
-      // Capture phase: the editor's own Esc handler must not leave Edit too.
-      event.stopImmediatePropagation();
-      setAddOpen(false);
-      addTrigger.current?.focus();
-    };
-    window.addEventListener("pointerdown", close);
-    window.addEventListener("keydown", onKey, true);
-    return () => {
-      window.removeEventListener("pointerdown", close);
-      window.removeEventListener("keydown", onKey, true);
-    };
-  }, [addOpen]);
 
   useEffect(() => {
     if (!editing) return;
@@ -2412,71 +2385,38 @@ export function PagePanel({
         <div class="panel-tools">
           {editing && (
             <>
-              <div
-                class="page-add"
-                onBlur={(event) => {
-                  const next = event.relatedTarget as Node | null;
-                  if (!next || !(event.currentTarget as HTMLElement).contains(next)) {
-                    setAddOpen(false);
-                  }
+              <button
+                ref={addTrigger}
+                type="button"
+                class="mini"
+                aria-haspopup="menu"
+                aria-expanded={addOpen}
+                title="Add a control"
+                onClick={(event) => {
+                  const rect = (
+                    event.currentTarget as HTMLButtonElement
+                  ).getBoundingClientRect();
+                  setAddPos({ x: rect.left, y: rect.bottom + 4 });
+                  setAddOpen((open) => !open);
                 }}
               >
-                <button
-                  ref={addTrigger}
-                  type="button"
-                  class="mini"
-                  aria-haspopup="menu"
-                  aria-expanded={addOpen}
-                  title="Add a control"
-                  onClick={() => setAddOpen((open) => !open)}
-                >
-                  + Add
-                </button>
-                {addOpen && (
-                  <div
-                    ref={addMenu}
-                    class="app-menu app-menu-page"
-                    role="menu"
-                    onKeyDown={(event) => {
-                      const items = [
-                        ...(addMenu.current?.querySelectorAll("button") ?? []),
-                      ];
-                      const index = items.indexOf(
-                        document.activeElement as HTMLButtonElement,
-                      );
-                      if (event.key === "ArrowDown" || event.key === "ArrowUp") {
-                        event.preventDefault();
-                        const step = event.key === "ArrowDown" ? 1 : -1;
-                        const next =
-                          index < 0
-                            ? 0
-                            : (index + step + items.length) % items.length;
-                        items[next]?.focus();
-                      } else if (event.key === "Home" || event.key === "End") {
-                        event.preventDefault();
-                        items[event.key === "Home" ? 0 : items.length - 1]?.focus();
-                      } else if (event.key === "Tab") {
-                        setAddOpen(false);
-                      }
-                    }}
-                  >
-                    {PANEL_WIDGET_KINDS.map((entry) => (
-                      <button
-                        type="button"
-                        role="menuitem"
-                        key={entry.kind}
-                        onClick={() => {
-                          setAddOpen(false);
-                          add(entry.kind);
-                          addTrigger.current?.focus();
-                        }}
-                      >
-                        {entry.label}
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </div>
+                + Add
+              </button>
+              {addOpen && (
+                <ContextMenu
+                  x={addPos.x}
+                  y={addPos.y}
+                  label="Add control"
+                  items={PANEL_WIDGET_KINDS.map((entry) => ({
+                    label: entry.label,
+                    onSelect: () => add(entry.kind),
+                  }))}
+                  onClose={() => {
+                    setAddOpen(false);
+                    addTrigger.current?.focus();
+                  }}
+                />
+              )}
               <button
                 type="button"
                 class="mini icon-mini"
