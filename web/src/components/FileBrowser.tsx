@@ -14,6 +14,7 @@ import {
   renameFolder,
 } from "../api";
 import type { FsEntry, FsList } from "../types";
+import { ContextMenu } from "./ContextMenu";
 
 export interface FilePickOptions {
   mode: "file" | "folder" | "save";
@@ -197,7 +198,6 @@ function FileBrowser({
   const [actionError, setActionError] = useState("");
   const [menuFor, setMenuFor] = useState<string | null>(null);
   const [menuPos, setMenuPos] = useState({ top: 0, left: 0 });
-  const menuRef = useRef<HTMLDivElement>(null);
   const menuTriggerRef = useRef<HTMLButtonElement | null>(null);
   const [sort, setSort] = useState<{ key: SortKey; dir: 1 | -1 }>({
     key: "name",
@@ -328,21 +328,6 @@ function FileBrowser({
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
   }, [onClose, menuFor, renaming, creating]);
-
-  useEffect(() => {
-    if (!menuFor) return;
-    menuRef.current?.querySelector<HTMLButtonElement>("button")?.focus();
-    const close = (event: PointerEvent) => {
-      if (
-        !(event.target instanceof Element) ||
-        !event.target.closest(".fb-menu")
-      ) {
-        setMenuFor(null);
-      }
-    };
-    window.addEventListener("pointerdown", close);
-    return () => window.removeEventListener("pointerdown", close);
-  }, [menuFor]);
 
   const choose = (path: string | null) => {
     if (path) onClose(path);
@@ -705,57 +690,27 @@ function FileBrowser({
           </button>
         </footer>
         {menuEntry && (
-          <div
-            class="fb-menu"
-            role="menu"
-            ref={menuRef}
-            style={{ top: `${menuPos.top}px`, left: `${menuPos.left}px` }}
-            onKeyDown={(event) => {
-              const menu = event.currentTarget;
-              const items = [
-                ...menu.querySelectorAll<HTMLButtonElement>("button"),
-              ];
-              const at = items.indexOf(
-                document.activeElement as HTMLButtonElement,
-              );
-              if (event.key === "Escape") {
-                event.preventDefault();
-                event.stopPropagation();
-                setMenuFor(null);
-                menuTriggerRef.current?.focus();
-                return;
-              }
-              const next =
-                event.key === "ArrowDown"
-                  ? (at + 1) % items.length
-                  : event.key === "ArrowUp"
-                    ? (at - 1 + items.length) % items.length
-                    : event.key === "Home"
-                      ? 0
-                      : event.key === "End"
-                        ? items.length - 1
-                        : -1;
-              if (next >= 0) {
-                event.preventDefault();
-                items[next].focus();
-              }
+          <ContextMenu
+            x={menuPos.left}
+            y={menuPos.top}
+            label="Folder actions"
+            zIndex={120}
+            items={[
+              {
+                label: "Rename",
+                onSelect: () => startRename(menuEntry),
+              },
+              {
+                label: "Delete empty folder",
+                danger: true,
+                onSelect: () => void remove(menuEntry),
+              },
+            ]}
+            onClose={() => {
+              setMenuFor(null);
+              menuTriggerRef.current?.focus();
             }}
-          >
-            <button
-              type="button"
-              role="menuitem"
-              onClick={() => startRename(menuEntry)}
-            >
-              Rename
-            </button>
-            <button
-              type="button"
-              role="menuitem"
-              onClick={() => void remove(menuEntry)}
-            >
-              Delete empty folder
-            </button>
-          </div>
+          />
         )}
       </div>
     </div>
