@@ -25,12 +25,11 @@ export function PanelFilterInput({
         aria-label={label}
         onInput={(event) => onInput((event.target as HTMLInputElement).value)}
         onKeyDown={(event) => {
-          if (event.key === "Escape" && value) {
-            event.preventDefault();
-            event.stopPropagation();
-            onInput("");
-            event.currentTarget.blur();
-          }
+          if (event.key !== "Escape") return;
+          event.preventDefault();
+          event.stopPropagation();
+          if (value) onInput("");
+          event.currentTarget.blur();
         }}
       />
       {value && (
