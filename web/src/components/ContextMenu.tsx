@@ -18,6 +18,7 @@ interface Props {
   children?: ComponentChildren;
   className?: string;
   focusKey?: string | number;
+  maxHeight?: string;
   onClose: () => void;
 }
 
@@ -32,6 +33,7 @@ export function ContextMenu({
   children,
   className = "",
   focusKey,
+  maxHeight,
   onClose,
 }: Props) {
   const menuRef = useRef<HTMLDivElement>(null);
@@ -51,6 +53,10 @@ export function ContextMenu({
     const key = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         event.preventDefault();
+        close();
+        return;
+      }
+      if (event.key === "Tab") {
         close();
         return;
       }
@@ -97,7 +103,12 @@ export function ContextMenu({
       class={`row-menu ${className}`.trim()}
       role="menu"
       aria-label={label}
-      style={{ top: `${y}px`, left: `${x}px` }}
+      style={{
+        top: `${y}px`,
+        left: `${x}px`,
+        maxHeight,
+        overflowY: maxHeight ? "auto" : undefined,
+      }}
       onPointerDown={(event) => event.stopPropagation()}
       onContextMenu={(event) => event.preventDefault()}
     >

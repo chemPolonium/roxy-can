@@ -54,6 +54,7 @@ import {
   type PanelView,
 } from "../panelBinding";
 import { copyText } from "../clipboard";
+import { ContextMenu } from "./ContextMenu";
 import type { SomeIpFieldDef, SomeIpService } from "../types";
 
 interface DragState {
@@ -1659,7 +1660,6 @@ export function PagePanel({
   const addTrigger = useRef<HTMLButtonElement>(null);
   const addMenu = useRef<HTMLDivElement>(null);
   const [menu, setMenu] = useState<PageMenu | null>(null);
-  const menuRef = useRef<HTMLDivElement>(null);
   const [pageNotice, setPageNotice] = useState("");
   const noticeError = (message: string) => {
     setPageNotice(message);
@@ -1699,24 +1699,14 @@ export function PagePanel({
 
   useEffect(() => {
     if (!menu) return;
-    menuRef.current
-      ?.querySelector<HTMLButtonElement>("button:not(:disabled)")
-      ?.focus();
-    const close = (event: PointerEvent) => {
-      if (!menuRef.current?.contains(event.target as Node)) setMenu(null);
-    };
     const onKey = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
       // Capture phase: the editor's Esc handler must not leave Edit too.
       event.stopImmediatePropagation();
       setMenu(null);
     };
-    window.addEventListener("pointerdown", close);
     window.addEventListener("keydown", onKey, true);
-    return () => {
-      window.removeEventListener("pointerdown", close);
-      window.removeEventListener("keydown", onKey, true);
-    };
+    return () => window.removeEventListener("keydown", onKey, true);
   }, [menu]);
 
   useEffect(() => {
@@ -1970,7 +1960,7 @@ export function PagePanel({
         tag === "INPUT" ||
         tag === "TEXTAREA" ||
         tag === "SELECT" ||
-        document.querySelector(".modal-backdrop, .trace-menu, .row-menu, .app-menu")
+        document.querySelector(".modal-backdrop, .row-menu, .app-menu")
       ) {
         return;
       }
@@ -2703,40 +2693,12 @@ export function PagePanel({
         )}
       </div>
       {menu && (
-        <div
-          ref={menuRef}
-          class="trace-menu page-menu"
-          role="menu"
-          style={{
-            left: `${menuLeft}px`,
-            top: `${menuTop}px`,
-            maxHeight: `calc(100vh - ${menuTop + 8}px)`,
-          }}
-          onPointerDown={(event) => event.stopPropagation()}
-          onKeyDown={(event) => {
-            const items = [
-              ...(menuRef.current?.querySelectorAll<HTMLButtonElement>(
-                "button:not(:disabled)",
-              ) ?? []),
-            ];
-            const index = items.indexOf(
-              document.activeElement as HTMLButtonElement,
-            );
-            if (event.key === "ArrowDown" || event.key === "ArrowUp") {
-              event.preventDefault();
-              const step = event.key === "ArrowDown" ? 1 : -1;
-              items[
-                index < 0
-                  ? 0
-                  : (index + step + items.length) % items.length
-              ]?.focus();
-            } else if (event.key === "Home" || event.key === "End") {
-              event.preventDefault();
-              items[event.key === "Home" ? 0 : items.length - 1]?.focus();
-            } else if (event.key === "Tab") {
-              setMenu(null);
-            }
-          }}
+        <ContextMenu
+          x={menuLeft}
+          y={menuTop}
+          label="Panel actions"
+          maxHeight={`calc(100vh - ${menuTop + 8}px)`}
+          onClose={() => setMenu(null)}
         >
           {menu.kind === "widget" && (
             <>
@@ -2837,7 +2799,7 @@ export function PagePanel({
               </button>
             </>
           )}
-        </div>
+        </ContextMenu>
       )}
       {fullscreen && toast && (
         <div class="page-toast" role="status">

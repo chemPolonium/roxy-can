@@ -1120,7 +1120,7 @@ export function App() {
     const escape = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
       // A menu opened inside the maximized page owns the first Escape.
-      if (document.querySelector(".row-menu, .trace-menu, .modal-backdrop")) {
+      if (document.querySelector(".row-menu, .modal-backdrop")) {
         return;
       }
       setMaximizedSlot(null);
