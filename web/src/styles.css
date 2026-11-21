@@ -1632,7 +1632,7 @@ body.col-resizing {
   height: 100%;
   flex-direction: column;
   align-items: flex-start;
-  justify-content: center;
+  justify-content: flex-start;
   gap: 1px;
   padding: 2px 4px;
   overflow: hidden;
@@ -1766,7 +1766,7 @@ body.col-resizing {
   width: 100%;
   height: 100%;
   flex-direction: column;
-  justify-content: center;
+  justify-content: flex-start;
   gap: 3px;
   padding: 2px 4px;
   overflow: hidden;
@@ -1977,7 +1977,7 @@ body.col-resizing {
   width: 100%;
   height: 100%;
   flex-direction: column;
-  justify-content: center;
+  justify-content: flex-start;
   /* Content must fit the 5-cell floor (40px, 38px inside the border):
      label + gap + input = 34, plus 4px vertical padding. */
   gap: 1px;
