@@ -1,3 +1,4 @@
+import type { ComponentChildren } from "preact";
 import { useEffect, useRef, useState } from "preact/hooks";
 import type { MonitorRow } from "../types";
 import { palette, type Theme } from "../theme";
@@ -8,6 +9,8 @@ interface Props {
   filtered?: boolean;
   columns?: number;
   theme: Theme;
+  /// Replaces the signal empty state when no bus/project is open.
+  empty?: ComponentChildren;
   /// Row drag: the `sig:` key lands before/after the target slot.
   onMoveRow?: (key: string, to: number) => void;
   onConfigure: (row: MonitorRow) => void;
@@ -26,6 +29,7 @@ export function MonitorPanel({
   filtered = false,
   columns = 1,
   theme,
+  empty,
   onMoveRow,
   onConfigure,
   onRemove,
@@ -108,6 +112,7 @@ export function MonitorPanel({
   };
 
   if (rows.length === 0) {
+    if (empty) return <>{empty}</>;
     return (
       <div class="empty">
         <strong>{filtered ? "No matching signals" : "No signals yet"}</strong>

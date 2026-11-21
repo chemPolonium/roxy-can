@@ -1,3 +1,4 @@
+import type { ComponentChildren } from "preact";
 import { useLayoutEffect, useMemo, useRef, useState } from "preact/hooks";
 import type { StatsRow } from "../types";
 import {
@@ -64,11 +65,14 @@ function compareStats(a: StatsRow, b: StatsRow, key: StatsSortKey): number {
 export function StatsTable({
   rows,
   filtered = false,
+  empty,
   columnWidths,
   onColumnWidthsChange,
 }: {
   rows: StatsRow[];
   filtered?: boolean;
+  /// Replaces the table empty state when no bus/project is open.
+  empty?: ComponentChildren;
   /// Widths from the project workspace; localStorage is only the fallback.
   columnWidths?: unknown;
   onColumnWidthsChange?: (widths: Record<string, number>) => void;
@@ -150,6 +154,7 @@ export function StatsTable({
     return () => observer.disconnect();
   }, [rows.length]);
   if (rows.length === 0) {
+    if (empty) return <>{empty}</>;
     return (
       <div class="empty">
         <strong>

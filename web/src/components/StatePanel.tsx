@@ -1,3 +1,4 @@
+import type { ComponentChildren } from "preact";
 import { useEffect, useRef } from "preact/hooks";
 import type { StateBand, StateRow } from "../types";
 import { palette, type Theme } from "../theme";
@@ -5,6 +6,8 @@ import { palette, type Theme } from "../theme";
 interface Props {
   rows: StateRow[];
   filtered?: boolean;
+  /// Replaces the signal empty state when no bus/project is open.
+  empty?: ComponentChildren;
   windowS: number;
   theme: Theme;
   onWindow: (seconds: number) => void;
@@ -77,6 +80,7 @@ function StateStrip({ bands, theme }: { bands: StateBand[]; theme: Theme }) {
 export function StatePanel({
   rows,
   filtered = false,
+  empty,
   windowS,
   theme,
   onWindow,
@@ -111,14 +115,18 @@ export function StatePanel({
         </span>
       </div>
       {rows.length === 0 ? (
-        <div class="empty">
-          <strong>{filtered ? "No matching signals" : "No signals yet"}</strong>
-          <span>
-            {filtered
-              ? "Change the quick search or the funnel filter."
-              : "Add a signal to watch its states as bands."}
-          </span>
-        </div>
+        empty ?? (
+          <div class="empty">
+            <strong>
+              {filtered ? "No matching signals" : "No signals yet"}
+            </strong>
+            <span>
+              {filtered
+                ? "Change the quick search or the funnel filter."
+                : "Add a signal to watch its states as bands."}
+            </span>
+          </div>
+        )
       ) : (
         <div class="state-rows">
           {rows.map((row) => (

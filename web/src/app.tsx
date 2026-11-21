@@ -3436,10 +3436,7 @@ export function App() {
 
   const renderRate = () =>
     state && state.buses.length === 0 ? (
-      <div class="empty">
-        <strong>No bus rate yet</strong>
-        <span>Open a project or add a bus to start charting traffic.</span>
-      </div>
+      emptyWorkspace
     ) : (
       <RateChart
         points={state?.series ?? []}
@@ -3920,36 +3917,40 @@ export function App() {
           ),
         })}
         <div class="signal-stack">
-          <SignalChart
-            series={visibleChartSeries}
-            markers={state?.markers ?? []}
-            theme={theme}
-            onReorder={filtered ? () => {} : moveSignal}
-            view={signalView}
-            onView={(update) => setSignalView(update)}
-            cursors={chartCursors}
-            onAddCursor={addChartCursor}
-            onMoveCursor={moveChartCursor}
-            onClearCursors={clearChartCursors}
-            onSignalAction={chartSignalAction}
-            onTriggerSignal={triggerFromSignal}
-            fullscreen={maximizedSlot === slot}
-            measuring={measuring}
-            paused={state?.tracePaused ?? false}
-            reference={reference}
-            onOpenReference={() => setReferenceOpen(true)}
-            overlay={signalOverlay}
-            onToggleOverlay={() => setSignalOverlay((value) => !value)}
-            yModes={chartYModes}
-            onYMode={setSignalYMode}
-            ranges={signalRanges}
-            hasReadout={visibleReadSeries.length > 0}
-            readRange={readRange}
-            readCount={visibleReadSeries.length}
-            filtered={filtered}
-            showCursorTools={false}
-            exportRef={chartExportRef}
-          />
+          {state && state.buses.length === 0 ? (
+            emptyWorkspace
+          ) : (
+            <SignalChart
+              series={visibleChartSeries}
+              markers={state?.markers ?? []}
+              theme={theme}
+              onReorder={filtered ? () => {} : moveSignal}
+              view={signalView}
+              onView={(update) => setSignalView(update)}
+              cursors={chartCursors}
+              onAddCursor={addChartCursor}
+              onMoveCursor={moveChartCursor}
+              onClearCursors={clearChartCursors}
+              onSignalAction={chartSignalAction}
+              onTriggerSignal={triggerFromSignal}
+              fullscreen={maximizedSlot === slot}
+              measuring={measuring}
+              paused={state?.tracePaused ?? false}
+              reference={reference}
+              onOpenReference={() => setReferenceOpen(true)}
+              overlay={signalOverlay}
+              onToggleOverlay={() => setSignalOverlay((value) => !value)}
+              yModes={chartYModes}
+              onYMode={setSignalYMode}
+              ranges={signalRanges}
+              hasReadout={visibleReadSeries.length > 0}
+              readRange={readRange}
+              readCount={visibleReadSeries.length}
+              filtered={filtered}
+              showCursorTools={false}
+              exportRef={chartExportRef}
+            />
+          )}
           {maximizedSlot === slot && (
             <CursorAnalysis
               series={cursorSeries}
@@ -4043,6 +4044,7 @@ export function App() {
       <MonitorPanel
         rows={visibleMonitorRows}
         filtered={monitorQuery.trim() !== "" || filterActive(monitorFilter)}
+        empty={state && state.buses.length === 0 ? emptyWorkspace : undefined}
         columns={state?.monitorColumns ?? 1}
         theme={theme}
         onMoveRow={(key, to) =>
@@ -4122,6 +4124,7 @@ export function App() {
       <DataPanel
         rows={visibleDataRows}
         filtered={dataQuery.trim() !== "" || filterActive(dataFilter)}
+        empty={state && state.buses.length === 0 ? emptyWorkspace : undefined}
         onMoveRow={(key, to) => void run({ type: "move_data_row", key, to })}
         onVisible={(row, visible) =>
           row.kind === "derived"
@@ -4210,6 +4213,7 @@ export function App() {
       <StatePanel
         rows={visibleStateRows}
         filtered={stateQuery.trim() !== "" || filterActive(stateFilter)}
+        empty={state && state.buses.length === 0 ? emptyWorkspace : undefined}
         windowS={state?.stateWindowS ?? 20}
         theme={theme}
         onWindow={(seconds) => void run({ type: "set_state_window", seconds })}
@@ -4256,6 +4260,7 @@ export function App() {
         <StatsTable
           rows={lowerStats}
           filtered={panelQuery.trim() !== "" || filterActive(statsFilter)}
+          empty={state && state.buses.length === 0 ? emptyWorkspace : undefined}
           columnWidths={statsColumns}
           onColumnWidthsChange={setStatsColumns}
         />
@@ -4268,7 +4273,11 @@ export function App() {
       {slotHeader(slot, "bus", {
         meta: `${state?.busStats.length ?? 0} buses`,
       })}
-      <BusStatsPanel buses={state?.busStats ?? []} theme={theme} />
+      <BusStatsPanel
+        buses={state?.busStats ?? []}
+        theme={theme}
+        empty={state && state.buses.length === 0 ? emptyWorkspace : undefined}
+      />
     </>
   );
 

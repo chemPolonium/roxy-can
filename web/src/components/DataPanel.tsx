@@ -1,3 +1,4 @@
+import type { ComponentChildren } from "preact";
 import { useState } from "preact/hooks";
 import type { DataRow } from "../types";
 import { rowPathWithoutName } from "../signalRows";
@@ -5,6 +6,8 @@ import { rowPathWithoutName } from "../signalRows";
 interface Props {
   rows: DataRow[];
   filtered?: boolean;
+  /// Replaces the signal empty state when no bus/project is open.
+  empty?: ComponentChildren;
   /// Row drag: the `sig:` key lands before slot `to`.
   onMoveRow?: (key: string, to: number) => void;
   onVisible: (row: DataRow, visible: boolean) => void;
@@ -14,6 +17,7 @@ interface Props {
 export function DataPanel({
   rows,
   filtered = false,
+  empty,
   onMoveRow,
   onVisible,
   onRemove,
@@ -58,6 +62,7 @@ export function DataPanel({
   };
 
   if (rows.length === 0) {
+    if (empty) return <>{empty}</>;
     return (
       <div class="empty">
         <strong>{filtered ? "No matching signals" : "No signals yet"}</strong>

@@ -1,3 +1,4 @@
+import type { ComponentChildren } from "preact";
 import { useEffect, useRef } from "preact/hooks";
 import type { BusStats } from "../types";
 import { palette, type Theme } from "../theme";
@@ -55,11 +56,14 @@ function Spark({ points, theme }: { points: number[]; theme: Theme }) {
 export function BusStatsPanel({
   buses,
   theme,
+  empty,
 }: {
   buses: BusStats[];
   theme: Theme;
+  empty?: ComponentChildren;
 }) {
   if (buses.length === 0) {
+    if (empty) return <>{empty}</>;
     return (
       <div class="empty">
         <strong>No bus statistics yet</strong>
