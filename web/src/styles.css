@@ -1169,6 +1169,12 @@ select:disabled {
   white-space: nowrap;
 }
 
+/* Counts use the smaller meta face; nudge their optical centre onto the
+   22px controls beside them. */
+.panel-head .meta {
+  transform: translateY(1px);
+}
+
 .panel-tools {
   display: flex;
   gap: 5px;
