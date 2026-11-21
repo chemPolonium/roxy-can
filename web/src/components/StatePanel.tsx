@@ -1,5 +1,5 @@
 import type { ComponentChildren } from "preact";
-import { useEffect, useRef } from "preact/hooks";
+import { useEffect, useRef, useState } from "preact/hooks";
 import type { StateBand, StateRow } from "../types";
 import { palette, type Theme } from "../theme";
 
@@ -92,7 +92,44 @@ export function StatePanel({
     : [...WINDOWS, [windowS, `${windowS} s`] as [number, string]].sort(
         (a, b) => a[0] - b[0],
       );
+  const [menu, setMenu] = useState<{
+    row: StateRow;
+    x: number;
+    y: number;
+  } | null>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!menu) return;
+    menuRef.current?.querySelector<HTMLButtonElement>("button")?.focus();
+    const close = (event: MouseEvent) => {
+      if (!menuRef.current?.contains(event.target as Node)) setMenu(null);
+    };
+    const key = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setMenu(null);
+    };
+    const scroll = () => setMenu(null);
+    document.addEventListener("mousedown", close);
+    document.addEventListener("keydown", key);
+    window.addEventListener("scroll", scroll, true);
+    return () => {
+      document.removeEventListener("mousedown", close);
+      document.removeEventListener("keydown", key);
+      window.removeEventListener("scroll", scroll, true);
+    };
+  }, [menu]);
+
+  const openMenu = (event: MouseEvent, row: StateRow) => {
+    event.preventDefault();
+    setMenu({
+      row,
+      x: Math.max(8, Math.min(event.clientX, window.innerWidth - 160 - 8)),
+      y: Math.max(8, Math.min(event.clientY, window.innerHeight - 50 - 8)),
+    });
+  };
+
   return (
+    <>
     <div class="state-panel">
       <div class="state-tools">
         <label>
@@ -133,6 +170,8 @@ export function StatePanel({
             <div
               class="state-row"
               key={`${row.kind}:${row.ch}:${row.id}:${row.ext}:${row.name}`}
+              title="Right-click to remove this state row"
+              onContextMenu={(event) => openMenu(event, row)}
             >
               <div class="state-name" title={`${row.bus} · ${row.name}`}>
                 <strong>{row.name}</strong>
@@ -150,18 +189,32 @@ export function StatePanel({
               >
                 bands
               </button>
-              <button
-                type="button"
-                class="mini"
-                title="Remove this signal"
-                onClick={() => onRemove(row)}
-              >
-                ×
-              </button>
             </div>
           ))}
         </div>
       )}
     </div>
+    {menu && (
+      <div
+        ref={menuRef}
+        class="row-menu"
+        role="menu"
+        style={{ top: `${menu.y}px`, left: `${menu.x}px` }}
+        onPointerDown={(event) => event.stopPropagation()}
+      >
+        <button
+          type="button"
+          role="menuitem"
+          class="danger"
+          onClick={() => {
+            onRemove(menu.row);
+            setMenu(null);
+          }}
+        >
+          Remove
+        </button>
+      </div>
+    )}
+    </>
   );
 }

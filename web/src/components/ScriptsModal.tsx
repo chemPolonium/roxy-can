@@ -18,6 +18,7 @@ import type {
   SysVar,
 } from "../types";
 import { FilePick } from "./FilePick";
+import { ConfirmDialog } from "./ConfirmDialog";
 import type { ScriptEditorApi } from "../scriptEditor";
 import type { Theme } from "../theme";
 import { SCRIPT_KEYWORDS as KEYWORDS } from "../scriptKeywords";
@@ -1398,6 +1399,7 @@ export function ScriptsModal({
   const [name, setName] = useState("");
   const [savePath, setSavePath] = useState("");
   const [newOpen, setNewOpen] = useState(false);
+  const [confirmRemove, setConfirmRemove] = useState(false);
   const [newName, setNewName] = useState("");
   const [newChannel, setNewChannel] = useState(0);
   const [newAttach, setNewAttach] = useState("");
@@ -1729,6 +1731,7 @@ export function ScriptsModal({
   const failedTests = scriptTests.filter((test) => test.failures > 0).length;
 
   return (
+    <>
     <div class="modal-backdrop" onMouseDown={onClose}>
       <div
         class="scripts-modal"
@@ -2161,13 +2164,7 @@ export function ScriptsModal({
                         ? "Continue or stop the debugger first"
                         : undefined
                     }
-                    onClick={() => {
-                      if (window.confirm(`Remove ${current.name}?`)) {
-                        onCommand({ type: "remove_script", id: current.id });
-                        setSelected(null);
-                        setTimeout(() => setReload((tick) => tick + 1), 500);
-                      }
-                    }}
+                    onClick={() => setConfirmRemove(true)}
                   >
                     Remove
                   </button>
@@ -2258,5 +2255,20 @@ export function ScriptsModal({
         </div>
       </div>
     </div>
+    {confirmRemove && current && (
+      <ConfirmDialog
+        title="Remove script"
+        message={`Remove ${current.name}? Its source and runtime state are discarded.`}
+        danger
+        onConfirm={() => {
+          onCommand({ type: "remove_script", id: current.id });
+          setSelected(null);
+          setConfirmRemove(false);
+          setTimeout(() => setReload((tick) => tick + 1), 500);
+        }}
+        onClose={() => setConfirmRemove(false)}
+      />
+    )}
+    </>
   );
 }

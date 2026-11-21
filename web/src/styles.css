@@ -4261,6 +4261,29 @@ button.mini.on {
   color: #cfe6ff;
 }
 
+.confirm-modal {
+  width: min(420px, 100%);
+  overflow: hidden;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+
+.confirm-body {
+  padding: 12px;
+  color: inherit;
+  font-size: 11.5px;
+  line-height: 1.55;
+}
+
+.confirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+  padding: 8px 12px;
+  border-top: 1px solid var(--line);
+}
+
 .buses-modal {
   display: flex;
   flex-direction: column;
@@ -6417,7 +6440,7 @@ button.danger:hover:not(:disabled) {
 .state-row {
   display: grid;
   flex: 0 0 auto;
-  grid-template-columns: 100px minmax(60px, 1fr) 56px 40px 18px;
+  grid-template-columns: 100px minmax(60px, 1fr) 56px 40px;
   align-items: center;
   gap: 4px;
 }
@@ -6644,10 +6667,10 @@ button.danger:hover:not(:disabled) {
   display: grid;
   flex: 0 0 auto;
   grid-template-areas:
-    "check name value raw remove"
-    "check stats stats stats remove"
-    "check bar bar bar remove";
-  grid-template-columns: 16px minmax(70px, 1fr) auto auto 20px;
+    "check name value raw"
+    "check stats stats stats"
+    "check bar bar bar";
+  grid-template-columns: 16px minmax(70px, 1fr) auto auto;
   align-items: center;
   gap: 2px 6px;
   padding: 4px 6px;
@@ -6763,13 +6786,6 @@ button.danger:hover:not(:disabled) {
   color: var(--muted);
   font-size: 9.5px;
   white-space: nowrap;
-}
-
-.data-row > .mini {
-  grid-area: remove;
-  padding: 0 4px;
-  color: var(--muted);
-  line-height: 15px;
 }
 
 .data-stats {

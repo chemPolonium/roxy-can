@@ -1,5 +1,5 @@
 import type { ComponentChildren } from "preact";
-import { useState } from "preact/hooks";
+import { useEffect, useRef, useState } from "preact/hooks";
 import type { DataRow } from "../types";
 import { rowPathWithoutName } from "../signalRows";
 
@@ -30,6 +30,41 @@ export function DataPanel({
     key: string;
     after: boolean;
   } | null>(null);
+  const [menu, setMenu] = useState<{
+    row: DataRow;
+    x: number;
+    y: number;
+  } | null>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!menu) return;
+    menuRef.current?.querySelector<HTMLButtonElement>("button")?.focus();
+    const close = (event: MouseEvent) => {
+      if (!menuRef.current?.contains(event.target as Node)) setMenu(null);
+    };
+    const key = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setMenu(null);
+    };
+    const scroll = () => setMenu(null);
+    document.addEventListener("mousedown", close);
+    document.addEventListener("keydown", key);
+    window.addEventListener("scroll", scroll, true);
+    return () => {
+      document.removeEventListener("mousedown", close);
+      document.removeEventListener("keydown", key);
+      window.removeEventListener("scroll", scroll, true);
+    };
+  }, [menu]);
+
+  const openMenu = (event: MouseEvent, row: DataRow) => {
+    event.preventDefault();
+    setMenu({
+      row,
+      x: Math.max(8, Math.min(event.clientX, window.innerWidth - 160 - 8)),
+      y: Math.max(8, Math.min(event.clientY, window.innerHeight - 50 - 8)),
+    });
+  };
 
   const sideAt = (event: DragEvent, element: HTMLElement) => {
     const rect = element.getBoundingClientRect();
@@ -75,6 +110,7 @@ export function DataPanel({
     );
   }
   return (
+    <>
     <div class="data-list">
       {rows.map((row) => (
         <div
@@ -89,9 +125,10 @@ export function DataPanel({
           draggable={sortable}
           title={
             sortable
-              ? "Drag onto another row to reorder; the order is saved with the project"
-              : undefined
+              ? "Right-click to remove · drag to reorder"
+              : "Right-click to remove"
           }
+          onContextMenu={(event) => openMenu(event, row)}
           onDragStart={(event) => {
             if (!sortable) return;
             // Dragging from the checkbox or a field keeps its normal
@@ -170,14 +207,6 @@ export function DataPanel({
           <div class="data-raw" title={`raw ${row.raw}`}>
             raw {row.raw}
           </div>
-          <button
-            type="button"
-            class="mini"
-            title="Remove this signal"
-            onClick={() => onRemove(row)}
-          >
-            ×
-          </button>
           <div class="data-stats">
             <span>min {row.min}</span>
             <span>avg {row.avg}</span>
@@ -189,5 +218,27 @@ export function DataPanel({
         </div>
       ))}
     </div>
+    {menu && (
+      <div
+        ref={menuRef}
+        class="row-menu"
+        role="menu"
+        style={{ top: `${menu.y}px`, left: `${menu.x}px` }}
+        onPointerDown={(event) => event.stopPropagation()}
+      >
+        <button
+          type="button"
+          role="menuitem"
+          class="danger"
+          onClick={() => {
+            onRemove(menu.row);
+            setMenu(null);
+          }}
+        >
+          Remove
+        </button>
+      </div>
+    )}
+    </>
   );
 }

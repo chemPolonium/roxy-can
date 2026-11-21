@@ -1,3 +1,4 @@
+import type { ComponentChildren } from "preact";
 import { useEffect, useState } from "preact/hooks";
 import type { SpecRow } from "../types";
 import { UiIcon } from "./icons";
@@ -11,6 +12,7 @@ interface Props {
   onGrace: (value: number) => void;
   onClear: () => void;
   onExport: () => void;
+  empty?: ComponentChildren;
 }
 
 const RULES = ["Unknown id", "DLC", "Cycle", "Dropped"];
@@ -72,6 +74,7 @@ export function SpecPanel({
   onGrace,
   onClear,
   onExport,
+  empty,
 }: Props) {
   const [shown, setShown] = useState<Set<string>>(new Set(RULES));
   const visible = rows.filter((row) => shown.has(row.rule));
@@ -83,6 +86,7 @@ export function SpecPanel({
       return next;
     });
   };
+  if (empty && rows.length === 0) return <>{empty}</>;
 
   return (
     <div class="spec-panel">

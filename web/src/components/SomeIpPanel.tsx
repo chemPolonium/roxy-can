@@ -1,3 +1,4 @@
+import type { ComponentChildren } from "preact";
 import { Fragment } from "preact";
 import { useMemo, useState } from "preact/hooks";
 import type { SomeIpEvent, SomeIpService, SomeIpSubscription } from "../types";
@@ -90,11 +91,13 @@ export function SomeIpPanel({
   services = [],
   subscriptions = [],
   issues = [],
+  empty,
 }: {
   rows: SomeIpEvent[];
   services?: SomeIpService[];
   subscriptions?: SomeIpSubscription[];
   issues?: string[];
+  empty?: ComponentChildren;
 }) {
   const [query, setQuery] = useState("");
   const [view, setView] = useState<
@@ -142,6 +145,8 @@ export function SomeIpPanel({
       : rows;
     return [...filtered].reverse();
   }, [rows, query]);
+
+  if (empty) return <>{empty}</>;
 
   return (
     <div class="panel-list">

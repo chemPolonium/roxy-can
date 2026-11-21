@@ -7,6 +7,7 @@ import type {
   HwChannel,
 } from "../types";
 import { HostPathPick, fileBrowserOpen } from "./FileBrowser";
+import { ConfirmDialog } from "./ConfirmDialog";
 import { uploadFile } from "../api";
 
 interface Props {
@@ -379,15 +380,7 @@ function BusCard({
         <button
           type="button"
           class="bus-remove"
-          onClick={() => {
-            if (
-              window.confirm(
-                `Remove ${bus.name}? Its attachments, signals and trace rows for this bus are removed.`,
-              )
-            ) {
-              onRemove(bus.index);
-            }
-          }}
+          onClick={() => onRemove(bus.index)}
         >
           Remove
         </button>
@@ -555,6 +548,11 @@ export function BusesModal({
   const addRef = useRef<HTMLDivElement>(null);
   const [selected, setSelected] = useState<string | null>(null);
   const [busQuery, setBusQuery] = useState("");
+  const [confirm, setConfirm] = useState<{
+    title: string;
+    message: string;
+    action: () => void;
+  } | null>(null);
   const [rowMenu, setRowMenu] = useState<string | null>(null);
   const [menuPos, setMenuPos] = useState({ top: 0, left: 0 });
   const rowMenuRef = useRef<HTMLDivElement>(null);
@@ -714,7 +712,11 @@ export function BusesModal({
       bus.ethernet?.attached,
   ).length;
 
+  const askRemove = (title: string, message: string, action: () => void) =>
+    setConfirm({ title, message, action });
+
   return (
+    <>
     <div class="modal-backdrop" onMouseDown={onClose}>
       <div
         class="buses-modal"
@@ -947,11 +949,11 @@ export function BusesModal({
                                   bus.kind === "can"
                                     ? `Remove ${bus.name}? Its attachments, signals and trace rows for this bus are removed.`
                                     : `Remove ${bus.name}?`;
-                                if (window.confirm(message)) {
+                                askRemove("Remove bus", message, () => {
                                   if (bus.kind === "can") onRemoveBus(bus.index);
                                   else if (bus.kind === "flexray") onRemoveFr(bus.index);
                                   else onRemoveEth(bus.index);
-                                }
+                                });
                               }}
                             >
                               Remove
@@ -1051,7 +1053,15 @@ export function BusesModal({
               loading={loading}
               onAttach={onAttach}
               onDetach={onDetach}
-              onRemove={onRemoveBus}
+              onRemove={(index) => {
+                const target = buses.find((entry) => entry.index === index);
+                if (!target) return;
+                askRemove(
+                  "Remove bus",
+                  `Remove ${target.name}? Its attachments, signals and trace rows for this bus are removed.`,
+                  () => onRemoveBus(index),
+                );
+              }}
               onRename={onRenameBus}
               onSetRates={onSetRates}
               scan={arxmlScan}
@@ -1121,7 +1131,13 @@ export function BusesModal({
               <button
                 type="button"
                 class="bus-remove"
-                onClick={() => onRemoveFr(selectedFrBus.index)}
+                onClick={() =>
+                  askRemove(
+                    "Remove bus",
+                    `Remove ${selectedFrBus.name}?`,
+                    () => onRemoveFr(selectedFrBus.index),
+                  )
+                }
               >
                 Remove bus
               </button>
@@ -1160,7 +1176,13 @@ export function BusesModal({
               <button
                 type="button"
                 class="bus-remove"
-                onClick={() => onRemoveEth(selectedEthBus.index)}
+                onClick={() =>
+                  askRemove(
+                    "Remove bus",
+                    `Remove ${selectedEthBus.name}?`,
+                    () => onRemoveEth(selectedEthBus.index),
+                  )
+                }
               >
                 Remove bus
               </button>
@@ -1279,5 +1301,18 @@ export function BusesModal({
         </p>
       </div>
     </div>
+    {confirm && (
+      <ConfirmDialog
+        title={confirm.title}
+        message={confirm.message}
+        danger
+        onConfirm={() => {
+          confirm.action();
+          setConfirm(null);
+        }}
+        onClose={() => setConfirm(null)}
+      />
+    )}
+    </>
   );
 }

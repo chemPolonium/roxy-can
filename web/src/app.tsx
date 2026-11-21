@@ -4287,7 +4287,7 @@ export function App() {
         meta: `${state?.specRows.length ?? 0} violations`,
       })}
       <SpecPanel
-        rows={state?.specRows ?? []}
+        rows={state && state.buses.length > 0 ? state.specRows : []}
         tolerance={state?.specTolerance ?? 5}
         grace={state?.specGrace ?? 3}
         periodic={state?.specPeriodic ?? 0}
@@ -4297,6 +4297,7 @@ export function App() {
         onGrace={(value) => void run({ type: "set_spec_grace", value })}
         onClear={() => void run({ type: "clear_spec" })}
         onExport={() => openExport("spec")}
+        empty={state && state.buses.length === 0 ? emptyWorkspace : undefined}
       />
     </>
   );
@@ -4313,6 +4314,7 @@ export function App() {
         services={state?.someipServices ?? []}
         subscriptions={state?.someipSubscriptions ?? []}
         issues={state?.someipIssues ?? []}
+        empty={state && state.buses.length === 0 ? emptyWorkspace : undefined}
       />
     </>
   );
@@ -4333,8 +4335,11 @@ export function App() {
           </button>
         ),
       })}
-      <div class="panel-list">
-        <div class="panel-filter-row">
+      {state && state.buses.length === 0 ? (
+        emptyWorkspace
+      ) : (
+        <div class="panel-list">
+          <div class="panel-filter-row">
           <select
             value={writeKind}
             onChange={(event) =>
@@ -4378,7 +4383,8 @@ export function App() {
             revealPanel("trace");
           }}
         />
-      </div>
+        </div>
+      )}
     </>
   );
 
@@ -5090,9 +5096,16 @@ export function App() {
           <div class="brand-text">
             <h1>
               Roxy CAN
-              <span class={`presence ${online ? "on" : "off"}`}>
+              <span
+                class={`presence ${online ? "on" : "off"}`}
+                title={
+                  online
+                    ? "Connected to the local bus core; this is not a running measurement"
+                    : "Reconnecting to the local bus core"
+                }
+              >
                 <span class="dot" />
-                {online ? "live" : "reconnecting"}
+                {online ? "connected" : "reconnecting"}
               </span>
               {recordActive && <span class="rec-badge">REC</span>}
             </h1>
