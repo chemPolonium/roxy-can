@@ -3411,24 +3411,6 @@ body.row-resizing {
   stroke-linejoin: round;
 }
 
-.signal-menu {
-  min-width: 170px;
-}
-
-.signal-menu-sep {
-  height: 1px;
-  margin: 3px 4px;
-  background: var(--line-soft);
-}
-
-.signal-menu .signal-menu-remove {
-  color: var(--error);
-}
-
-.signal-menu button.on {
-  color: var(--accent);
-}
-
 .rate-chart,
 .signal-chart {
   display: block;

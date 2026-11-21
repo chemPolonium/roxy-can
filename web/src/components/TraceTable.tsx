@@ -9,6 +9,7 @@ import {
 import type { Frame } from "../types";
 import { copyText } from "../clipboard";
 import { UiIcon } from "./icons";
+import { ContextMenu } from "./ContextMenu";
 import {
   columnWidth,
   fittingTraceColumns,
@@ -349,20 +350,6 @@ export function TraceTable({
     onJumpDone?.();
     // sortedRows is replaced on every poll; the jump itself drives this.
   }, [jump]);
-
-  useEffect(() => {
-    if (!menu) return;
-    const close = () => setMenu(null);
-    const escape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setMenu(null);
-    };
-    window.addEventListener("pointerdown", close);
-    window.addEventListener("keydown", escape);
-    return () => {
-      window.removeEventListener("pointerdown", close);
-      window.removeEventListener("keydown", escape);
-    };
-  }, [menu]);
 
   // A new sort starts at the top; keeping a raw pixel offset would land in
   // the middle of an unrelated order.
@@ -798,105 +785,64 @@ export function TraceTable({
         </table>
       </div>
       {menu && (
-        <div
-          class="trace-menu"
-          style={{
-            left: `${Math.min(menu.x, window.innerWidth - 210)}px`,
-            top: `${Math.min(menu.y, window.innerHeight - 250)}px`,
-          }}
-          onPointerDown={(event) => event.stopPropagation()}
-        >
-          <button
-            type="button"
-            disabled={!onQuery}
-            onClick={() => {
-              onQuery?.(menu.frame.addr || hexId(menu.frame));
-              setMenu(null);
-            }}
-          >
-            Filter this ID
-          </button>
-          <button
-            type="button"
-            onClick={() => {
-              setCursorA(mark(menu.frame));
-              onSetChartCursor?.("A", menu.frame.tUs);
-              setMenu(null);
-            }}
-          >
-            Set cursor A
-          </button>
-          <button
-            type="button"
-            onClick={() => {
-              setCursorB(mark(menu.frame));
-              onSetChartCursor?.("B", menu.frame.tUs);
-              setMenu(null);
-            }}
-          >
-            Set cursor B
-          </button>
-          <button
-            type="button"
-            disabled={!onChartCursor}
-            onClick={() => {
-              onChartCursor?.(menu.frame.tUs);
-              setMenu(null);
-            }}
-          >
-            Place chart cursor
-          </button>
-          <button
-            type="button"
-            disabled={!onShowTime}
-            onClick={() => {
-              onShowTime?.(menu.frame.tUs);
-              setMenu(null);
-            }}
-          >
-            Show at this time
-          </button>
-          <button
-            type="button"
-            disabled={!onAddToChart}
-            onClick={() => {
-              onAddToChart?.(menu.frame);
-              setMenu(null);
-            }}
-          >
-            Add signals to chart
-          </button>
-          <button
-            type="button"
-            disabled={!onWatch}
-            onClick={() => {
-              onWatch?.(menu.frame);
-              setMenu(null);
-            }}
-          >
-            Watch in Monitor
-          </button>
-          <button
-            type="button"
-            disabled={!onTrigger || menu.frame.kind === "eth"}
-            title="Add a trigger rule watched at this address"
-            onClick={() => {
-              onTrigger?.(menu.frame);
-              setMenu(null);
-            }}
-          >
-            Trigger on this frame
-          </button>
-          <button
-            type="button"
-            onClick={() => {
-              copyText(rowText(menu.frame));
-              setMenu(null);
-            }}
-          >
-            Copy row
-          </button>
-        </div>
+        <ContextMenu
+          x={Math.min(menu.x, window.innerWidth - 210)}
+          y={Math.min(menu.y, window.innerHeight - 250)}
+          label="Trace row actions"
+          items={[
+            {
+              label: "Filter this ID",
+              disabled: !onQuery,
+              onSelect: () =>
+                onQuery?.(menu.frame.addr || hexId(menu.frame)),
+            },
+            {
+              label: "Set cursor A",
+              onSelect: () => {
+                setCursorA(mark(menu.frame));
+                onSetChartCursor?.("A", menu.frame.tUs);
+              },
+            },
+            {
+              label: "Set cursor B",
+              onSelect: () => {
+                setCursorB(mark(menu.frame));
+                onSetChartCursor?.("B", menu.frame.tUs);
+              },
+            },
+            {
+              label: "Place chart cursor",
+              disabled: !onChartCursor,
+              onSelect: () => onChartCursor?.(menu.frame.tUs),
+            },
+            {
+              label: "Show at this time",
+              disabled: !onShowTime,
+              onSelect: () => onShowTime?.(menu.frame.tUs),
+            },
+            {
+              label: "Add signals to chart",
+              disabled: !onAddToChart,
+              onSelect: () => onAddToChart?.(menu.frame),
+            },
+            {
+              label: "Watch in Monitor",
+              disabled: !onWatch,
+              onSelect: () => onWatch?.(menu.frame),
+            },
+            {
+              label: "Trigger on this frame",
+              title: "Add a trigger rule watched at this address",
+              disabled: !onTrigger || menu.frame.kind === "eth",
+              onSelect: () => onTrigger?.(menu.frame),
+            },
+            {
+              label: "Copy row",
+              onSelect: () => copyText(rowText(menu.frame)),
+            },
+          ]}
+          onClose={() => setMenu(null)}
+        />
       )}
       </div>
     </>

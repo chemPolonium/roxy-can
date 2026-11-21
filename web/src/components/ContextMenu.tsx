@@ -3,10 +3,11 @@ import { useEffect, useRef } from "preact/hooks";
 
 export interface ContextMenuItem {
   label: string;
-  onSelect: () => void;
+  onSelect?: () => void;
   danger?: boolean;
   disabled?: boolean;
   separator?: boolean;
+  title?: string;
 }
 
 interface Props {
@@ -34,20 +35,23 @@ export function ContextMenu({
   onClose,
 }: Props) {
   const menuRef = useRef<HTMLDivElement>(null);
+  const closeRef = useRef(onClose);
+  closeRef.current = onClose;
 
   useEffect(() => {
+    const close = () => closeRef.current();
     const enabled = () =>
       [...(menuRef.current?.querySelectorAll<HTMLButtonElement>(
         "button:not(:disabled)",
       ) ?? [])];
     enabled()[0]?.focus();
-    const close = (event: MouseEvent) => {
-      if (!menuRef.current?.contains(event.target as Node)) onClose();
+    const outside = (event: MouseEvent) => {
+      if (!menuRef.current?.contains(event.target as Node)) close();
     };
     const key = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         event.preventDefault();
-        onClose();
+        close();
         return;
       }
       const list = enabled();
@@ -76,16 +80,16 @@ export function ContextMenu({
                 : (active - 1 + list.length) % list.length;
       list[index]?.focus();
     };
-    const scroll = () => onClose();
-    document.addEventListener("mousedown", close);
+    const scroll = () => close();
+    document.addEventListener("mousedown", outside);
     document.addEventListener("keydown", key);
     window.addEventListener("scroll", scroll, true);
     return () => {
-      document.removeEventListener("mousedown", close);
+      document.removeEventListener("mousedown", outside);
       document.removeEventListener("keydown", key);
       window.removeEventListener("scroll", scroll, true);
     };
-  }, [onClose, focusKey]);
+  }, [focusKey]);
 
   return (
     <div
@@ -95,6 +99,7 @@ export function ContextMenu({
       aria-label={label}
       style={{ top: `${y}px`, left: `${x}px` }}
       onPointerDown={(event) => event.stopPropagation()}
+      onContextMenu={(event) => event.preventDefault()}
     >
       {children ??
         items.map((item) =>
@@ -107,8 +112,9 @@ export function ContextMenu({
               role="menuitem"
               class={item.danger ? "danger" : undefined}
               disabled={item.disabled}
+              title={item.title}
               onClick={() => {
-                item.onSelect();
+                item.onSelect?.();
                 onClose();
               }}
             >

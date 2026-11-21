@@ -1970,7 +1970,7 @@ export function PagePanel({
         tag === "INPUT" ||
         tag === "TEXTAREA" ||
         tag === "SELECT" ||
-        document.querySelector(".modal-backdrop, .trace-menu, .app-menu")
+        document.querySelector(".modal-backdrop, .trace-menu, .row-menu, .app-menu")
       ) {
         return;
       }

@@ -8,6 +8,7 @@ import {
 } from "../chartScale";
 import { palette, type Theme } from "../theme";
 import { triggerDownload } from "../download";
+import { ContextMenu } from "./ContextMenu";
 
 const GUTTER = 108;
 const AXIS_H = 18;
@@ -730,27 +731,6 @@ export function SignalChart({
     const frac = clamp((clientX - rect.left - GUTTER) / plotW, 0, 1);
     return start + frac * (end - start);
   };
-
-  useEffect(() => {
-    if (!laneMenu) return;
-    const close = (event: PointerEvent) => {
-      if (
-        !(event.target instanceof Element) ||
-        !event.target.closest(".signal-menu")
-      ) {
-        setLaneMenu(null);
-      }
-    };
-    const escape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setLaneMenu(null);
-    };
-    window.addEventListener("pointerdown", close);
-    window.addEventListener("keydown", escape);
-    return () => {
-      window.removeEventListener("pointerdown", close);
-      window.removeEventListener("keydown", escape);
-    };
-  }, [laneMenu]);
 
   useEffect(() => {
     yMemoryRef.current.clear();
@@ -1737,111 +1717,65 @@ export function SignalChart({
         </div>
       )}
       {laneMenu && menuSignal && (
-        <div
-          class="trace-menu signal-menu"
-          style={{
-            left: `${Math.min(laneMenu.x, window.innerWidth - 190)}px`,
-            top: `${Math.min(laneMenu.y, window.innerHeight - 340)}px`,
-          }}
-          onPointerDown={(event) => event.stopPropagation()}
-          onContextMenu={(event) => event.preventDefault()}
-        >
-          <button
-            type="button"
-            onClick={() => {
-              onSignalAction(menuSignal.key, "monitor");
-              setLaneMenu(null);
-            }}
-          >
-            Watch in Monitor
-          </button>
-          <button
-            type="button"
-            onClick={() => {
-              onSignalAction(menuSignal.key, "data");
-              setLaneMenu(null);
-            }}
-          >
-            Watch in Data
-          </button>
-          <button
-            type="button"
-            onClick={() => {
-              onSignalAction(menuSignal.key, "state");
-              setLaneMenu(null);
-            }}
-          >
-            Watch in State
-          </button>
-          <button
-            type="button"
-            disabled={!onTriggerSignal}
-            title="Add a trigger rule watched at this signal"
-            onClick={() => {
-              onTriggerSignal?.(menuSignal.key);
-              setLaneMenu(null);
-            }}
-          >
-            Trigger on this signal
-          </button>
-          <div class="signal-menu-sep" />
-          <button
-            type="button"
-            disabled={laneMenu.index === 0}
-            onClick={() => {
-              onReorder(menuSignal.key, laneMenu.index - 1);
-              setLaneMenu(null);
-            }}
-          >
-            Move up
-          </button>
-          <button
-            type="button"
-            disabled={laneMenu.index === series.length - 1}
-            onClick={() => {
-              onReorder(menuSignal.key, laneMenu.index + 1);
-              setLaneMenu(null);
-            }}
-          >
-            Move down
-          </button>
-          <div class="signal-menu-sep" />
-          {(
-            [
-              ["auto", "Y: Auto", "Fit the values visible in the time window"],
+        <ContextMenu
+          x={Math.min(laneMenu.x, window.innerWidth - 190)}
+          y={Math.min(laneMenu.y, window.innerHeight - 340)}
+          label="Signal lane actions"
+          items={[
+            {
+              label: "Watch in Monitor",
+              onSelect: () => onSignalAction(menuSignal.key, "monitor"),
+            },
+            {
+              label: "Watch in Data",
+              onSelect: () => onSignalAction(menuSignal.key, "data"),
+            },
+            {
+              label: "Watch in State",
+              onSelect: () => onSignalAction(menuSignal.key, "state"),
+            },
+            {
+              label: "Trigger on this signal",
+              title: "Add a trigger rule watched at this signal",
+              disabled: !onTriggerSignal,
+              onSelect: () => onTriggerSignal?.(menuSignal.key),
+            },
+            { label: "sep-watch", separator: true },
+            {
+              label: "Move up",
+              disabled: laneMenu.index === 0,
+              onSelect: () => onReorder(menuSignal.key, laneMenu.index - 1),
+            },
+            {
+              label: "Move down",
+              disabled: laneMenu.index === series.length - 1,
+              onSelect: () => onReorder(menuSignal.key, laneMenu.index + 1),
+            },
+            { label: "sep-order", separator: true },
+            ...(
               [
-                "memory",
-                "Y: Memory",
-                "Remember every value seen in this run; the range only grows",
-              ],
-              ["dbc", "Y: DBC range", "Use the declared communication min/max"],
-            ] as const
-          ).map(([mode, label, hint]) => (
-            <button
-              type="button"
-              key={mode}
-              class={menuYMode === mode ? "on" : ""}
-              title={hint}
-              onClick={() => {
-                onYMode?.(menuSignal.key, mode);
-                setLaneMenu(null);
-              }}
-            >
-              {menuYMode === mode ? "✓ " : ""}
-              {label}
-            </button>
-          ))}
-          <button
-            type="button"
-            class="signal-menu-remove"
-            onClick={() => {
-              onSignalAction(menuSignal.key, "remove");
-              setLaneMenu(null);
-            }}
-          >
-            Remove from chart
-          </button>
-        </div>
+                ["auto", "Y: Auto", "Fit the values visible in the time window"],
+                [
+                  "memory",
+                  "Y: Memory",
+                  "Remember every value seen in this run; the range only grows",
+                ],
+                ["dbc", "Y: DBC range", "Use the declared communication min/max"],
+              ] as const
+            ).map(([mode, label, hint]) => ({
+              label: `${menuYMode === mode ? "✓ " : ""}${label}`,
+              title: hint,
+              onSelect: () => onYMode?.(menuSignal.key, mode),
+            })),
+            { label: "sep-y", separator: true },
+            {
+              label: "Remove from chart",
+              danger: true,
+              onSelect: () => onSignalAction(menuSignal.key, "remove"),
+            },
+          ]}
+          onClose={() => setLaneMenu(null)}
+        />
       )}
     </div>
   );
