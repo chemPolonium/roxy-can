@@ -1754,6 +1754,13 @@ export function App() {
     }
   };
 
+  // Shortcuts are registered once per dependency change; this keeps Ctrl+S on
+  // the current Panel book instead of the render that installed the listener.
+  const saveProjectRef = useRef(saveProject);
+  saveProjectRef.current = saveProject;
+  const saveProjectAsRef = useRef(saveProjectAs);
+  saveProjectAsRef.current = saveProjectAs;
+
   const handleDroppedFile = async (file: File) => {
     const name = file.name.toLowerCase();
     try {
@@ -2062,11 +2069,11 @@ export function App() {
         input?.focus();
       } else if (mod && event.shiftKey && key === "s") {
         event.preventDefault();
-        void saveProjectAs();
+        void saveProjectAsRef.current();
       } else if (mod && key === "s") {
         event.preventDefault();
-        if (state?.projectPath) void saveProject(null);
-        else void saveProjectAs();
+        if (state?.projectPath) void saveProjectRef.current(null);
+        else void saveProjectAsRef.current();
       } else if (mod && key === "o") {
         event.preventDefault();
         void openProjectPicker();
