@@ -1675,7 +1675,7 @@ body.col-resizing {
   overflow: hidden;
   color: #cdd8e4;
   font-family: "Cascadia Mono", Consolas, "Courier New", monospace;
-  font-size: clamp(12px, 26cqh, 28px);
+  font-size: clamp(12px, min(68cqh, 25cqw), 72px);
   font-weight: 600;
   line-height: 1;
   text-overflow: ellipsis;
