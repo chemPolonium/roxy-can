@@ -17,13 +17,11 @@ import {
   importPanelFile,
   movePanelPage,
   movePanelWidget,
-  mergeProjectPanels,
   panelBookFromProject,
   panelFileName,
   panelFrameProblem,
   panelSetpointTarget,
   panelWidgetSpec,
-  parsePanelBook,
   parsePanelHex,
   parsePanelPage,
   parseSysVarRef,
@@ -503,35 +501,7 @@ describe("panel page", () => {
     ).toMatchObject({ kind: "setpoint", target: "signal", step: 10 });
   });
 
-  it("parses and manages a page book", () => {
-    expect(parsePanelBook(undefined)).toBeNull();
-    expect(parsePanelBook({ pages: [] })).toBeNull();
-
-    const parsed = parsePanelBook({
-      activeId: "p2",
-      pages: [
-        { id: "p1", name: "Overview", width: 160, height: 90, widgets: [] },
-        { id: "p2", name: "Test", width: 120, height: 80, widgets: [] },
-      ],
-    });
-    expect(parsed?.activeId).toBe("p2");
-    expect(parsed?.pages.map((page) => page.name)).toEqual(["Overview", "Test"]);
-
-    const fallback = parsePanelBook({
-      activeId: "missing",
-      pages: [{ id: "p1", name: "One", widgets: [] }],
-    });
-    expect(fallback?.activeId).toBe("p1");
-
-    const deduped = parsePanelBook({
-      pages: [
-        { id: "same", name: "Same", widgets: [] },
-        { id: "same", name: "Same", widgets: [] },
-      ],
-    });
-    expect(deduped?.pages.map((page) => page.id)).toEqual(["same", "page2"]);
-    expect(deduped?.pages.map((page) => page.name)).toEqual(["Same", "Same 2"]);
-
+  it("adds and manages page tabs", () => {
     const book = defaultPanelBook();
     const added = addPanelPage(book);
     expect(added.book.pages).toHaveLength(2);
@@ -856,22 +826,6 @@ describe("panel page", () => {
     ).toContain("belongs to Send message");
     expect(errorOf(fileOf([], 1000, 90))).toContain("Canvas must be");
     expect("error" in importPanelFile(fileOf([]))).toBe(false);
-  });
-
-  it("merges project pages without duplicating names", () => {
-    const book = defaultPanelBook();
-    const page = book.pages[0];
-    const document = JSON.parse(exportPanelFile(page));
-    expect(mergeProjectPanels(book, [document]).pages).toHaveLength(
-      book.pages.length,
-    );
-
-    const renamed = {
-      ...document,
-      page: { ...document.page, name: "Bench" },
-    };
-    const merged = mergeProjectPanels(book, [renamed, "not a page"]);
-    expect(merged.pages.some((entry) => entry.name === "Bench")).toBe(true);
   });
 
   it("owns project pages instead of inheriting the local book", () => {

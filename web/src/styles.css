@@ -1119,9 +1119,8 @@ select:disabled {
   --ctl-h: 24px;
 }
 
-/* One control height across every panel head: tabs, toolbar buttons,
-   filters and the chart icon would otherwise differ by a few pixels. */
-.panel-head .tabs button,
+/* One control height across every panel head: toolbar buttons, filters and
+   the chart icon would otherwise differ by a few pixels. */
 .panel-head .mini,
 .panel-head > button,
 .panel-head select,

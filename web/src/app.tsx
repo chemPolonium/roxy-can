@@ -856,57 +856,60 @@ export function App() {
 
   // Keep the backend copy warm so a save carries the current tabs, cursors,
   // splitters and Trace columns.
+  const workspaceView = useMemo(
+    () => ({
+      shellMode,
+      dock,
+      overlay: signalOverlay,
+      signalView,
+      cursors: chartCursors,
+      traceColumns,
+      messageColumns,
+      statsColumns,
+      readSignals,
+      filters: {
+        monitor: monitorFilter,
+        data: dataFilter,
+        message: messageFilter,
+        trace: traceFilter,
+        signals: signalsFilter,
+        state: stateFilter,
+        stats: statsFilter,
+      },
+      filterLibrary,
+    }),
+    [
+      shellMode,
+      dock,
+      signalOverlay,
+      signalView,
+      chartCursors,
+      traceColumns,
+      messageColumns,
+      statsColumns,
+      readSignals,
+      monitorFilter,
+      dataFilter,
+      messageFilter,
+      traceFilter,
+      signalsFilter,
+      stateFilter,
+      statsFilter,
+      filterLibrary,
+    ],
+  );
+
   useEffect(() => {
     if (!workspaceHydrated || !state) return;
     const timer = window.setTimeout(() => {
       void sendCommand({
         type: "set_web_workspace",
         rev: state.workspaceRev ?? 0,
-        workspace: {
-          shellMode,
-          dock,
-          overlay: signalOverlay,
-          signalView,
-          cursors: chartCursors,
-          traceColumns,
-          messageColumns,
-          statsColumns,
-          readSignals,
-          filters: {
-            monitor: monitorFilter,
-            data: dataFilter,
-            message: messageFilter,
-            trace: traceFilter,
-            signals: signalsFilter,
-            state: stateFilter,
-            stats: statsFilter,
-          },
-          filterLibrary,
-        },
+        workspace: workspaceView,
       }).catch(() => {});
     }, 350);
     return () => window.clearTimeout(timer);
-  }, [
-    workspaceHydrated,
-    shellMode,
-    dock,
-    signalOverlay,
-    signalView,
-    chartCursors,
-    traceColumns,
-    messageColumns,
-    statsColumns,
-    readSignals,
-    monitorFilter,
-    dataFilter,
-    messageFilter,
-    traceFilter,
-    signalsFilter,
-    stateFilter,
-    statsFilter,
-    filterLibrary,
-    state?.workspaceRev,
-  ]);
+  }, [workspaceHydrated, state?.workspaceRev, workspaceView]);
 
   // A reference decoded by the core replaces the CSV reference; clearing it
   // in the core (or loading a new log) bumps the revision.
@@ -1695,41 +1698,28 @@ export function App() {
     sendCommand({
       type: "set_web_workspace",
       rev: state?.workspaceRev ?? 0,
-      workspace: {
-        shellMode,
-        dock,
-        overlay: signalOverlay,
-        signalView,
-        cursors: chartCursors,
-        traceColumns,
-        readSignals,
-        filters: {
-          monitor: monitorFilter,
-          data: dataFilter,
-          message: messageFilter,
-          trace: traceFilter,
-          signals: signalsFilter,
-          state: stateFilter,
-          stats: statsFilter,
-        },
-        filterLibrary,
-      },
+      workspace: workspaceView,
     });
 
   const projectPanels = () =>
     panelBook.pages.map((page) => JSON.parse(exportPanelFile(page)) as unknown);
 
-  const saveProject = async (path: string | null) => {
+  const writeProject = async (path: string | null) => {
     // Flush the current view before the file is written; the debounced sync
     // may still be waiting and would otherwise save the previous workspace.
     await pushWorkspace().catch(() => {});
-    if (await run({ type: "save_project", path, panels: projectPanels() })) {
-      setPanelDirty(false);
-    }
+    const saved = await run({
+      type: "save_project",
+      path,
+      panels: projectPanels(),
+    });
+    if (saved) setPanelDirty(false);
+    return saved;
   };
 
+  const saveProject = (path: string | null) => writeProject(path);
+
   const saveProjectAs = async () => {
-    await pushWorkspace().catch(() => {});
     const base = (state?.project || "roxy-can").replace(/\.rxproj$/i, "");
     const path = await pickHost({
       mode: "save",
@@ -1738,12 +1728,7 @@ export function App() {
       initialPath: projectFolder,
       initialName: `${base}.rxproj`,
     });
-    if (
-      path &&
-      (await run({ type: "save_project", path, panels: projectPanels() }))
-    ) {
-      setPanelDirty(false);
-    }
+    if (path) await writeProject(path);
   };
 
   // Shortcuts are registered once per dependency change; this keeps Ctrl+S on

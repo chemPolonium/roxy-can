@@ -1345,33 +1345,6 @@ export function parsePanelPage(raw: unknown): PanelPage | null {
   };
 }
 
-export function parsePanelBook(raw: unknown): PanelBook | null {
-  if (!raw || typeof raw !== "object") return null;
-  const value = raw as Record<string, unknown>;
-  const source = Array.isArray(value.pages) ? value.pages : [];
-  const pages: PanelPage[] = [];
-  const ids = new Set<string>();
-  const names = new Set<string>();
-  for (const entry of source.slice(0, 50)) {
-    const page = parsePanelPage(entry);
-    if (!page) continue;
-    let id = page.id;
-    let n = pages.length + 1;
-    while (ids.has(id)) id = `page${n++}`;
-    let name = page.name;
-    let suffix = 2;
-    while (names.has(name)) name = `${page.name} ${suffix++}`;
-    ids.add(id);
-    names.add(name);
-    pages.push({ ...page, id, name });
-  }
-  if (pages.length === 0) return null;
-  const wanted = typeof value.activeId === "string" ? value.activeId : "";
-  const activeId = pages.some((page) => page.id === wanted)
-    ? wanted
-    : pages[0].id;
-  return { version: 1, activeId, pages };
-}
 
 export const PANEL_FILE_FORMAT = "roxy-can.panel-page";
 export const PANEL_FILE_VERSION = 1;
@@ -1541,30 +1514,6 @@ export function addPanelPageFromFile(
   };
 }
 
-/// Merges `.rxpanel` documents stored in a project file into the current
-/// book. The project is the source for its pages: a same-name page is
-/// replaced in place (keeping its tab id), and malformed documents are
-/// skipped.
-export function mergeProjectPanels(
-  book: PanelBook,
-  documents: unknown[],
-): PanelBook {
-  let next = book;
-  for (const raw of documents) {
-    const parsed = importPanelFile(raw);
-    if ("error" in parsed) continue;
-    const at = next.pages.findIndex((page) => page.name === parsed.page.name);
-    if (at >= 0) {
-      const pages = next.pages.slice();
-      pages[at] = { ...parsed.page, id: next.pages[at].id };
-      next = { ...next, pages };
-      continue;
-    }
-    next = addPanelPageFromFile(next, parsed.page).book;
-  }
-  return next;
-}
-
 /// The project owns its Panel pages: this ignores the local book and starts
 /// from the documents in the project file. An empty list is one empty page.
 export function panelBookFromProject(documents: unknown[]): PanelBook {
@@ -1708,7 +1657,12 @@ export function pastePanelWidget(
         }
       : {}),
     ...(widget.kind === "value"
-      ? { source: widget.source, digits: widget.digits, cuts: widget.cuts, colors: widget.colors }
+      ? {
+          source: widget.source,
+          digits: widget.digits,
+          cuts: widget.cuts,
+          colors: widget.colors,
+        }
       : {}),
     ...(widget.kind === "toggle" ? { sysvar: widget.sysvar } : {}),
     ...(widget.kind === "setpoint"

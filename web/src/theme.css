@@ -241,15 +241,6 @@
   color: #526174;
 }
 
-[data-theme="light"] .tabs button:hover {
-  background: #eef2f7;
-}
-
-[data-theme="light"] .tabs button.on {
-  background: #e3eefc;
-  color: #1f2937;
-}
-
 [data-theme="light"] .activity .clock {
   color: #8a95a5;
 }
