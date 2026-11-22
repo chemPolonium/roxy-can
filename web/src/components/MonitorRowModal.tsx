@@ -69,7 +69,7 @@ export function MonitorRowModal({ row, theme, onApply, onClose }: Props) {
             ))}
           </div>
           <CutColorEditor
-            label="Bands"
+            label="Color cuts"
             cuts={cuts}
             colors={bands}
             palette={colors}

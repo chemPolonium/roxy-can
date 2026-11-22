@@ -2115,6 +2115,12 @@ body.col-resizing {
   font-size: 11px;
 }
 
+.cut-editor-input::-webkit-inner-spin-button,
+.cut-editor-input::-webkit-outer-spin-button {
+  margin: 0;
+  appearance: none;
+}
+
 /* Wins over button.mini's padding and block display, which would squeeze the
    glyph out of an 18px box. */
 .cut-editor-row button.cut-editor-remove {
@@ -3361,29 +3367,6 @@ body.row-resizing {
 
 .signal-chart.cursor-hover {
   cursor: ew-resize;
-}
-
-.tabs {
-  display: flex;
-  gap: 2px;
-}
-
-.tabs button {
-  padding: 2px 8px;
-  border: 0;
-  border-radius: 3px;
-  background: transparent;
-  color: var(--muted);
-  font-size: 11px;
-}
-
-.tabs button:hover {
-  background: #1a222c;
-}
-
-.tabs button.on {
-  background: #1b2836;
-  color: #dce7f5;
 }
 
 .activity {
@@ -7538,12 +7521,17 @@ body:has(.cm-tooltip-autocomplete) .script-signature {
 .variables-tabs {
   display: flex;
   flex: 0 0 auto;
-  gap: 2px;
   padding: 6px 12px 0;
   border-bottom: 1px solid var(--line);
 }
 
-.variables-tabs button {
+.ui-tabs {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 2px;
+}
+
+.ui-tabs button {
   padding: 5px 10px;
   border: 0;
   border-bottom: 2px solid transparent;
@@ -7553,12 +7541,12 @@ body:has(.cm-tooltip-autocomplete) .script-signature {
   font-size: 10.5px;
 }
 
-.variables-tabs button:hover:not(:disabled) {
+.ui-tabs button:hover:not(:disabled) {
   background: transparent;
   color: inherit;
 }
 
-.variables-tabs button.on {
+.ui-tabs button.on {
   border-bottom-color: var(--accent);
   color: inherit;
 }

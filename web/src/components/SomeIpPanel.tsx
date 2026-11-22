@@ -3,6 +3,7 @@ import { Fragment } from "preact";
 import { useMemo, useState } from "preact/hooks";
 import type { SomeIpEvent, SomeIpService, SomeIpSubscription } from "../types";
 import { groupSomeIpServices } from "../someipView";
+import { Tabs } from "./Tabs";
 import { copyText } from "../clipboard";
 import { sdServiceStatuses } from "../sdView";
 import { EmptyState } from "./EmptyState";
@@ -152,34 +153,17 @@ export function SomeIpPanel({
   return (
     <div class="panel-list">
       <div class="panel-filter-row">
-        <button
-          type="button"
-          class={view === "events" ? "mini on" : "mini"}
-          onClick={() => setView("events")}
-        >
-          Events
-        </button>
-        <button
-          type="button"
-          class={view === "services" ? "mini on" : "mini"}
-          onClick={() => setView("services")}
-        >
-          Services
-        </button>
-        <button
-          type="button"
-          class={view === "availability" ? "mini on" : "mini"}
-          onClick={() => setView("availability")}
-        >
-          Availability
-        </button>
-        <button
-          type="button"
-          class={view === "database" ? "mini on" : "mini"}
-          onClick={() => setView("database")}
-        >
-          Database
-        </button>
+        <Tabs
+          value={view}
+          onChange={setView}
+          label="SOME/IP view"
+          options={[
+            { value: "events", label: "Events" },
+            { value: "services", label: "Services" },
+            { value: "availability", label: "Availability" },
+            { value: "database", label: "Database" },
+          ]}
+        />
         <PanelFilterInput
           value={query}
           placeholder="Filter service, method, instance, eventgroup…"

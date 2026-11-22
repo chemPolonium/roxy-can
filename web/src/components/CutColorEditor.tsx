@@ -83,6 +83,7 @@ export function CutColorEditor({
                 <NumberField
                   value={cuts[index]}
                   className="cut-editor-input"
+                  ariaLabel="Cut"
                   onFocus={() => onFocus?.()}
                   onCommit={(value) => setCut(index, value)}
                 />

@@ -83,19 +83,26 @@ export function BusStatsPanel({
             <Spark points={bus.loadHistory} theme={theme} />
           </header>
           <div class="busstat-rows">
-            {bus.rows.map((row) => (
-              <div
-                class="busstat-row"
-                key={row.label}
-                title={`${row.label}: ${row.current} · min ${row.min} · max ${row.max} · avg ${row.avg}`}
-              >
-                <span class="busstat-label">{row.label}</span>
-                <strong class="busstat-current">{row.current}</strong>
-                <span class="busstat-range">
-                  min {row.min} · max {row.max} · avg {row.avg}
-                </span>
-              </div>
-            ))}
+            {bus.rows.map((row) => {
+              const hasRange = [row.min, row.max, row.avg].some(
+                (value) => value !== "-",
+              );
+              return (
+                <div
+                  class="busstat-row"
+                  key={row.label}
+                  title={`${row.label}: ${row.current} · min ${row.min} · max ${row.max} · avg ${row.avg}`}
+                >
+                  <span class="busstat-label">{row.label}</span>
+                  <strong class="busstat-current">{row.current}</strong>
+                  {hasRange && (
+                    <span class="busstat-range">
+                      min {row.min} · max {row.max} · avg {row.avg}
+                    </span>
+                  )}
+                </div>
+              );
+            })}
           </div>
         </section>
       ))}

@@ -1,5 +1,6 @@
 import { useEffect, useState } from "preact/hooks";
 import { ModalHeader } from "./ModalHeader";
+import { Tabs } from "./Tabs";
 import type { SysVar } from "../types";
 import type { DerivedDef, DerivedReference } from "../derived";
 import { DerivedPanel } from "./DerivedPanel";
@@ -208,25 +209,16 @@ export function VariablesModal({
           <span>{vars.length} values · {derived.length} computed</span>
         </ModalHeader>
 
-        <div class="variables-tabs" role="tablist">
-          <button
-            type="button"
-            role="tab"
-            aria-selected={tab === "values"}
-            class={tab === "values" ? "on" : ""}
-            onClick={() => setTab("values")}
-          >
-            System variables
-          </button>
-          <button
-            type="button"
-            role="tab"
-            aria-selected={tab === "computed"}
-            class={tab === "computed" ? "on" : ""}
-            onClick={() => setTab("computed")}
-          >
-            Computed channels
-          </button>
+        <div class="variables-tabs">
+          <Tabs
+            value={tab}
+            onChange={setTab}
+            label="Variables view"
+            options={[
+              { value: "values", label: "System variables" },
+              { value: "computed", label: "Computed channels" },
+            ]}
+          />
         </div>
 
         {tab === "computed" ? (
