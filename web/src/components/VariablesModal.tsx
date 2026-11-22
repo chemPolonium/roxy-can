@@ -1,4 +1,5 @@
 import { useEffect, useState } from "preact/hooks";
+import { ModalHeader } from "./ModalHeader";
 import type { SysVar } from "../types";
 import type { DerivedDef, DerivedReference } from "../derived";
 import { DerivedPanel } from "./DerivedPanel";
@@ -203,17 +204,9 @@ export function VariablesModal({
         aria-label="Variables"
         onMouseDown={(event) => event.stopPropagation()}
       >
-        <header class="modal-head">
-          <h2>Variables</h2>
-          <div class="picker-head-right">
-            <span>
-              {vars.length} values · {derived.length} computed
-            </span>
-            <button type="button" onClick={onClose}>
-              Close
-            </button>
-          </div>
-        </header>
+        <ModalHeader title="Variables" onClose={onClose}>
+          <span>{vars.length} values · {derived.length} computed</span>
+        </ModalHeader>
 
         <div class="variables-tabs" role="tablist">
           <button

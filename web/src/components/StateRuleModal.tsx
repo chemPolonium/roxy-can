@@ -6,6 +6,7 @@ import {
   nextCut,
   rangeText,
 } from "../bandCuts";
+import { ModalHeader } from "./ModalHeader";
 
 interface Props {
   signal: string;
@@ -81,12 +82,7 @@ export function StateRuleModal({
         aria-label="State bands"
         onMouseDown={(event) => event.stopPropagation()}
       >
-        <header class="modal-head">
-          <h2>State bands — {signal}</h2>
-          <button type="button" onClick={onClose}>
-            Close
-          </button>
-        </header>
+        <ModalHeader title={`State bands — ${signal}`} onClose={onClose} />
         <div class="state-rule-body">
           <p class="hint">
             Ascending cut points split the value axis; every band carries its

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "preact/hooks";
+import { ModalHeader } from "./ModalHeader";
 import { lazy, Suspense } from "preact/compat";
 import {
   fetchDebug,
@@ -1740,18 +1741,12 @@ export function ScriptsModal({
         aria-label="Node scripts"
         onMouseDown={(event) => event.stopPropagation()}
       >
-        <header class="modal-head">
-          <h2>Node Scripts</h2>
-          <div class="picker-head-right">
-            <span>{scripts.length} scripts</span>
-            <button type="button" onClick={() => setNewOpen((open) => !open)}>
-              + New script
-            </button>
-            <button type="button" onClick={onClose}>
-              Close
-            </button>
-          </div>
-        </header>
+        <ModalHeader title="Node Scripts" onClose={onClose}>
+          <span>{scripts.length} scripts</span>
+          <button type="button" onClick={() => setNewOpen((open) => !open)}>
+            + New script
+          </button>
+        </ModalHeader>
 
         {newOpen && (
           <form

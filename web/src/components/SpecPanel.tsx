@@ -1,5 +1,6 @@
 import type { ComponentChildren } from "preact";
-import { useEffect, useState } from "preact/hooks";
+import { useState } from "preact/hooks";
+import { NumberField } from "./NumberField";
 import type { SpecRow } from "../types";
 import { UiIcon } from "./icons";
 import { EmptyState } from "./EmptyState";
@@ -33,32 +34,16 @@ function NumCommit({
   onCommit: (value: number) => void;
   title: string;
 }) {
-  const [text, setText] = useState(String(value));
-  const [editing, setEditing] = useState(false);
-  useEffect(() => {
-    if (!editing) setText(String(value));
-  }, [value, editing]);
-  const commit = () => {
-    setEditing(false);
-    const parsed = Number(text);
-    if (Number.isFinite(parsed)) {
-      const next = Math.min(max, Math.max(min, Math.round(parsed)));
-      setText(String(next));
-      if (next !== value) onCommit(next);
-    } else {
-      setText(String(value));
-    }
-  };
   return (
     <label title={title}>
-      <input
-        value={text}
-        inputMode="numeric"
-        onFocus={() => setEditing(true)}
-        onInput={(event) => setText((event.target as HTMLInputElement).value)}
-        onBlur={commit}
-        onKeyDown={(event) => {
-          if (event.key === "Enter") (event.target as HTMLInputElement).blur();
+      <NumberField
+        value={value}
+        min={min}
+        max={max}
+        round
+        ariaLabel={title}
+        onCommit={(next) => {
+          if (next !== value) onCommit(next);
         }}
       />
       {suffix}

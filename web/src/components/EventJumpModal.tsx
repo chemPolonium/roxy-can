@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "preact/hooks";
 import type { SignalSeries } from "../types";
 import { conditionEvents } from "../derived";
+import { ModalHeader } from "./ModalHeader";
 
 export function EventJumpModal({
   series,
@@ -47,12 +48,7 @@ export function EventJumpModal({
         aria-label="Signal events"
         onMouseDown={(event) => event.stopPropagation()}
       >
-        <header class="modal-head">
-          <h2>Signal events</h2>
-          <button type="button" onClick={onClose}>
-            Close
-          </button>
-        </header>
+        <ModalHeader title="Signal events" onClose={onClose} />
         <div class="event-body">
           <p class="hint">
             Find rising edges of a condition, for example{" "}

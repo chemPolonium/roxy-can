@@ -9,6 +9,7 @@ import type {
 import { HostPathPick, fileBrowserOpen } from "./FileBrowser";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { ContextMenu } from "./ContextMenu";
+import { ModalHeader } from "./ModalHeader";
 import { uploadFile } from "../api";
 
 interface Props {
@@ -702,14 +703,12 @@ export function BusesModal({
           void dropDescription(file);
         }}
       >
-        <header class="modal-head">
-          <h2>Buses</h2>
-          <div class="picker-head-right">
-            <span>
-              {buses.length} bus{buses.length === 1 ? "" : "es"} ·{" "}
-              {attachedCount} attached
-            </span>
-            <input
+        <ModalHeader title="Buses" onClose={onClose}>
+          <span>
+            {buses.length} bus{buses.length === 1 ? "" : "es"} ·{" "}
+            {attachedCount} attached
+          </span>
+          <input
               class="bus-filter"
               type="search"
               value={busQuery}
@@ -756,11 +755,7 @@ export function BusesModal({
                 onClose={() => setAddOpen(false)}
               />
             )}
-            <button type="button" onClick={onClose}>
-              Close
-            </button>
-          </div>
-        </header>
+        </ModalHeader>
 
         {buses.length > 0 && (
           <section class="buses-clusters" aria-label="Buses">

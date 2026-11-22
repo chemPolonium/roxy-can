@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "preact/hooks";
 import { FilePick } from "./FilePick";
 import { checkTriggers } from "../triggerCheck";
 import { MenuButton } from "./MenuButton";
+import { ModalHeader } from "./ModalHeader";
 import { GroupedSelect } from "./GroupedSelect";
 import type { GroupedOption } from "../groupedOptions";
 import type {
@@ -1224,14 +1225,12 @@ export function TriggersModal({
         aria-label="Triggers"
         onMouseDown={(event) => event.stopPropagation()}
       >
-        <header class="modal-head">
-          <h2>Triggers</h2>
-          <div class="picker-head-right">
-            <span>
-              {triggers.length} rules ·{" "}
-              {triggers.filter((trigger) => trigger.enabled).length} enabled
-            </span>
-            <MenuButton
+        <ModalHeader title="Triggers" onClose={onClose}>
+          <span>
+            {triggers.length} rules ·{" "}
+            {triggers.filter((trigger) => trigger.enabled).length} enabled
+          </span>
+          <MenuButton
               label="Add rule ▾"
               buttonClass="primary"
               menuClass="app-menu-trig"
@@ -1323,11 +1322,7 @@ export function TriggersModal({
                 </>
               )}
             </MenuButton>
-            <button type="button" onClick={onClose}>
-              Close
-            </button>
-          </div>
-        </header>
+        </ModalHeader>
 
         <details class="trig-defaults">
           <summary>

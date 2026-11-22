@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "preact/hooks";
+import { ModalHeader } from "./ModalHeader";
 import type {
   Catalog,
   CatalogChannel,
@@ -308,19 +309,13 @@ export function SignalPicker({
         aria-label="Signal selection"
         onMouseDown={(event) => event.stopPropagation()}
       >
-        <header class="modal-head">
-          <h2>{title}</h2>
-          <div class="picker-head-right">
-            <span>
-              {read
-                ? `${selected.size} plotted · ${read.size} read`
-                : `${selected.size} selected`}
-            </span>
-            <button type="button" onClick={onClose}>
-              Close
-            </button>
-          </div>
-        </header>
+        <ModalHeader title={title} onClose={onClose}>
+          <span>
+            {read
+              ? `${selected.size} plotted · ${read.size} read`
+              : `${selected.size} selected`}
+          </span>
+        </ModalHeader>
         <div class="picker-tools">
           <input
             type="search"

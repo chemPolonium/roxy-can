@@ -6,6 +6,7 @@ import {
   waitForDownload,
 } from "../download";
 import { fileBrowserOpen, useFileBrowser } from "./FileBrowser";
+import { ModalHeader } from "./ModalHeader";
 
 interface Props {
   initialKind: string;
@@ -92,12 +93,7 @@ export function ExportModal({
         aria-label="Export"
         onMouseDown={(event) => event.stopPropagation()}
       >
-        <header class="modal-head">
-          <h2>Export</h2>
-          <button type="button" onClick={onClose}>
-            Close
-          </button>
-        </header>
+        <ModalHeader title="Export" onClose={onClose} />
         <div class="export-body">
           <label>
             Content

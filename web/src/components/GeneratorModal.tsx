@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "preact/hooks";
+import { ModalHeader } from "./ModalHeader";
 import type {
   Bus,
   Catalog,
@@ -912,17 +913,9 @@ export function GeneratorModal({
         aria-label="Interactive generator"
         onMouseDown={(event) => event.stopPropagation()}
       >
-        <header class="modal-head">
-          <h2>Interactive Generator</h2>
-          <div class="picker-head-right">
-            <span>
-              {entries.length} entries · {active} on
-            </span>
-            <button type="button" onClick={onClose}>
-              Close
-            </button>
-          </div>
-        </header>
+        <ModalHeader title="Interactive Generator" onClose={onClose}>
+          <span>{entries.length} entries · {active} on</span>
+        </ModalHeader>
         <div class="gen-body">
           {buses.map((bus) => (
             <BusGroup

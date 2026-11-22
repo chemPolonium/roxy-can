@@ -55,6 +55,7 @@ import { CursorAnalysis } from "./components/CursorAnalysis";
 import { ColumnsMenu } from "./components/ColumnsMenu";
 import { CommandPalette } from "./components/CommandPalette";
 import { ContextMenu } from "./components/ContextMenu";
+import { ModalHeader } from "./components/ModalHeader";
 import { MenuButton } from "./components/MenuButton";
 import type { PaletteCommand } from "./components/CommandPalette";
 import { DataPanel } from "./components/DataPanel";
@@ -6380,12 +6381,10 @@ export function App() {
             aria-label={sessionView === "record" ? "Recording" : "Replay"}
             onMouseDown={(event) => event.stopPropagation()}
           >
-            <header class="modal-head">
-              <h2>{sessionView === "record" ? "Recording" : "Replay"}</h2>
-              <button type="button" onClick={() => setSessionOpen(false)}>
-                Close
-              </button>
-            </header>
+            <ModalHeader
+              title={sessionView === "record" ? "Recording" : "Replay"}
+              onClose={() => setSessionOpen(false)}
+            />
             <div class="session-body">
               {sessionView === "record" && (
                 <section class="session-task">

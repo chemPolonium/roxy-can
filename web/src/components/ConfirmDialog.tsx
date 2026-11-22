@@ -1,5 +1,6 @@
 import type { ComponentChildren } from "preact";
 import { useEffect } from "preact/hooks";
+import { ModalHeader } from "./ModalHeader";
 
 interface Props {
   title: string;
@@ -42,12 +43,7 @@ export function ConfirmDialog({
         aria-label={title}
         onMouseDown={(event) => event.stopPropagation()}
       >
-        <header class="modal-head">
-          <h2>{title}</h2>
-          <button type="button" onClick={onClose}>
-            Close
-          </button>
-        </header>
+        <ModalHeader title={title} onClose={onClose} />
         <div class="confirm-body">{message}</div>
         <footer class="confirm-actions">
           <button type="button" onClick={onClose}>

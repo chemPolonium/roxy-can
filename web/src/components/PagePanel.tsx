@@ -5,7 +5,6 @@ import {
   PAGE_MAX_W,
   PAGE_MIN_H,
   PAGE_MIN_W,
-  PANEL_MAX_CUTS,
   PANEL_WIDGET_KINDS,
   activePanelPage,
   addPanelWidget,
@@ -52,8 +51,9 @@ import {
 } from "../panelBinding";
 import { palette, type Theme } from "../theme";
 import { copyText } from "../clipboard";
-import { addCutBand, removeCutBand } from "../bandCuts";
 import { ContextMenu } from "./ContextMenu";
+import { CutColorEditor } from "./CutColorEditor";
+import { NumberField } from "./NumberField";
 import { PaletteSwatches } from "./PaletteSwatches";
 import type { SomeIpFieldDef, SomeIpService } from "../types";
 
@@ -1244,167 +1244,6 @@ function SetpointControl({
   );
 }
 
-function DraftNumberInput({
-  value,
-  label,
-  placeholder,
-  onFocus,
-  onCommit,
-}: {
-  value: number;
-  label?: string;
-  placeholder?: string;
-  onFocus: () => void;
-  onCommit: (value: number) => void;
-}) {
-  const [draft, setDraft] = useState(() => String(value));
-  const [editing, setEditing] = useState(false);
-  useEffect(() => {
-    if (!editing) setDraft(String(value));
-  }, [value, editing]);
-  const commit = () => {
-    setEditing(false);
-    const parsed = Number(draft);
-    if (draft.trim() === "" || !Number.isFinite(parsed)) {
-      setDraft(String(value));
-      return;
-    }
-    onCommit(parsed);
-  };
-  return (
-    <input
-      class={label}
-      type="number"
-      step="any"
-      value={draft}
-      placeholder={placeholder}
-      onFocus={() => {
-        setEditing(true);
-        onFocus();
-      }}
-      onInput={(event) => setDraft((event.target as HTMLInputElement).value)}
-      onBlur={commit}
-      onKeyDown={(event) => {
-        if (event.key === "Enter") {
-          (event.target as HTMLInputElement).blur();
-        } else if (event.key === "Escape") {
-          setDraft(String(value));
-          (event.target as HTMLInputElement).blur();
-        }
-      }}
-    />
-  );
-}
-
-function BandsField({
-  label,
-  cuts,
-  colors,
-  palette,
-  onFocus,
-  onChange,
-}: {
-  label: string;
-  cuts: number[];
-  colors: number[];
-  palette: string[];
-  onFocus: () => void;
-  onChange: (cuts: number[], colors: number[]) => void;
-}) {
-  const full = cuts.length >= PANEL_MAX_CUTS;
-  const bandColor = (index: number) => colors[index] ?? 0;
-  const setColor = (index: number, slot: number) => {
-    const next = Array.from({ length: cuts.length + 1 }, (_, at) =>
-      at === index ? slot : bandColor(at),
-    );
-    onChange(cuts, next);
-  };
-  const setCut = (index: number, value: number) => {
-    const next = cuts.slice();
-    next[index] = value;
-    if (next.some((cut, at) => at > 0 && cut <= next[at - 1])) return;
-    onChange(next, colors);
-  };
-  const addCut = () => {
-    const next = addCutBand(cuts, colors, (cuts.length + 1) % palette.length);
-    onChange(next.cuts, next.colors);
-  };
-  const removeCut = (index: number) => {
-    const next = removeCutBand(cuts, colors, index);
-    onChange(next.cuts, next.colors);
-  };
-  const range = (index: number) => {
-    const lo = index === 0 ? null : cuts[index - 1];
-    const hi = index === cuts.length ? null : cuts[index];
-    if (lo === null && hi === null) return "all values";
-    if (lo === null) return `< ${hi}`;
-    if (hi === null) return `≥ ${lo}`;
-    return `${lo} – ${hi}`;
-  };
-  return (
-    <div class="page-bands">
-      <div class="page-bands-title">
-        <span>{label}</span>
-        <span>{cuts.length} {cuts.length === 1 ? "cut" : "cuts"}</span>
-      </div>
-      {cuts.length === 0 && (
-        <span class="page-bands-empty">
-          No cuts: the value keeps its normal colour.
-        </span>
-      )}
-      {Array.from({ length: cuts.length + 1 }, (_, index) => (
-        <div class="page-band-row" key={index}>
-          <span class="page-band-range">{range(index)}</span>
-          <PaletteSwatches
-            colors={palette}
-            value={bandColor(index)}
-            onFocus={onFocus}
-            onChange={(slot) => setColor(index, slot)}
-          />
-          {index < cuts.length && (
-            <>
-              <span class="page-band-cut">
-                ≤
-                <DraftNumberInput
-                  value={cuts[index]}
-                  label="page-band-limit"
-                  onFocus={onFocus}
-                  onCommit={(value) => setCut(index, value)}
-                />
-              </span>
-              <button
-                type="button"
-                class="mini page-band-remove"
-                title="Remove cut"
-                aria-label="Remove cut"
-                onClick={() => {
-                  onFocus();
-                  removeCut(index);
-                }}
-              >
-                ×
-              </button>
-            </>
-          )}
-        </div>
-      ))}
-      <div class="page-band-add">
-        <button
-          type="button"
-          class="mini"
-          disabled={full}
-          title="Add a value cut"
-          onClick={() => {
-            onFocus();
-            addCut();
-          }}
-        >
-          + Cut
-        </button>
-      </div>
-    </div>
-  );
-}
 function meterColor(
   value: number | null,
   cuts: number[] | undefined,
@@ -2276,7 +2115,7 @@ export function PagePanel({
     }
     if (fieldSpec.kind === "cuts") {
       return (
-        <BandsField
+        <CutColorEditor
           label={fieldSpec.label}
           cuts={
             widget.kind === "value" ||
@@ -2380,7 +2219,7 @@ export function PagePanel({
       return (
         <label>
           {fieldSpec.label}
-          <DraftNumberInput
+          <NumberField
             value={Number.isFinite(numeric) ? numeric : 0}
             placeholder={fieldSpec.placeholder}
             onFocus={pushHistory}

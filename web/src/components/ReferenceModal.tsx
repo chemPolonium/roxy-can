@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "preact/hooks";
 import { HostPathPick, fileBrowserOpen } from "./FileBrowser";
+import { ModalHeader } from "./ModalHeader";
 
 export interface ReferenceColumns {
   [label: string]: [number, number][];
@@ -102,12 +103,7 @@ export function ReferenceModal({
         aria-label="Reference run"
         onMouseDown={(event) => event.stopPropagation()}
       >
-        <header class="modal-head">
-          <h2>Reference run</h2>
-          <button type="button" onClick={onClose}>
-            Close
-          </button>
-        </header>
+        <ModalHeader title="Reference run" onClose={onClose} />
         <div class="reference-body">
           <p class="hint">
             Overlay a previous run on the Signals chart. The file is the

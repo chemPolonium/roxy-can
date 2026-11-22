@@ -1,4 +1,5 @@
 import { useEffect } from "preact/hooks";
+import { ModalHeader } from "./ModalHeader";
 
 interface Props {
   onClose: () => void;
@@ -40,12 +41,7 @@ export function HelpModal({ onClose }: Props) {
         aria-label="Help"
         onMouseDown={(event) => event.stopPropagation()}
       >
-        <header class="modal-head">
-          <h2>Roxy CAN</h2>
-          <button type="button" onClick={onClose}>
-            Close
-          </button>
-        </header>
+        <ModalHeader title="Roxy CAN" onClose={onClose} />
         <div class="help-body">
           <p class="hint">
             Roxy CAN is a CAN / FlexRay / Ethernet simulation and analysis tool

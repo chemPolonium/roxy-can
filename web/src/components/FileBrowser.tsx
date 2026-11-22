@@ -15,6 +15,7 @@ import {
 } from "../api";
 import type { FsEntry, FsList } from "../types";
 import { ContextMenu } from "./ContextMenu";
+import { ModalHeader } from "./ModalHeader";
 
 export interface FilePickOptions {
   mode: "file" | "folder" | "save";
@@ -386,19 +387,17 @@ function FileBrowser({
         aria-label={title ?? (mode === "folder" ? "Choose folder" : "Choose file")}
         onMouseDown={(event) => event.stopPropagation()}
       >
-        <header class="modal-head">
-          <h2>
-            {title ??
-              (mode === "folder"
-                ? "Choose folder"
-                : mode === "save"
-                  ? "Save file"
-                  : "Choose file")}
-          </h2>
-          <button type="button" onClick={() => onClose(null)}>
-            Close
-          </button>
-        </header>
+        <ModalHeader
+          title={
+            title ??
+            (mode === "folder"
+              ? "Choose folder"
+              : mode === "save"
+                ? "Save file"
+                : "Choose file")
+          }
+          onClose={() => onClose(null)}
+        />
         <div class="file-browser-toolbar">
           <button
             type="button"

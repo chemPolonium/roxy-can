@@ -2060,52 +2060,33 @@ body.col-resizing {
   font-size: 9.5px;
 }
 
-.page-bands {
+.cut-editor {
   display: flex;
   flex-direction: column;
   gap: 4px;
 }
 
-.page-bands-title {
+.cut-editor-head {
   display: flex;
   justify-content: space-between;
   color: var(--muted);
   font-size: 10px;
 }
 
-.page-bands-empty {
+.cut-editor-empty {
   color: var(--muted);
   font-size: 9.5px;
   line-height: 1.35;
 }
 
-.palette-swatches {
-  display: inline-flex;
-  flex: 1 1 auto;
-  gap: 3px;
-}
-
-.palette-swatch {
-  flex: 0 0 13px;
-  width: 13px;
-  height: 13px;
-  padding: 0;
-  border: 1px solid transparent;
-}
-
-.palette-swatch.on {
-  outline: 1px solid var(--text);
-  outline-offset: 1px;
-}
-
-.page-band-row {
+.cut-editor-row {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 3px 4px;
 }
 
-.page-band-range {
+.cut-editor-range {
   flex: 0 0 56px;
   overflow: hidden;
   color: var(--muted);
@@ -2114,7 +2095,7 @@ body.col-resizing {
   white-space: nowrap;
 }
 
-.page-band-cut {
+.cut-editor-limit {
   display: inline-flex;
   flex: 0 0 64px;
   align-items: center;
@@ -2125,7 +2106,7 @@ body.col-resizing {
   font-size: 10px;
 }
 
-.page-band-row .page-band-limit {
+.cut-editor-input {
   flex: 1 1 auto;
   width: 0;
   min-width: 0;
@@ -2136,7 +2117,7 @@ body.col-resizing {
 
 /* Wins over button.mini's padding and block display, which would squeeze the
    glyph out of an 18px box. */
-.page-band-row button.page-band-remove {
+.cut-editor-row button.cut-editor-remove {
   display: inline-flex;
   flex: 0 0 18px;
   align-items: center;
@@ -2147,24 +2128,20 @@ body.col-resizing {
   color: var(--muted);
 }
 
-.page-band-remove svg {
-  width: 11px;
-  height: 11px;
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 1.4;
-  stroke-linecap: round;
+.cut-editor-remove:hover {
+  color: var(--text);
 }
 
-.page-band-remove:hover {
-  color: #d8e0ea;
-}
-
-.page-band-add {
+.cut-editor-actions {
   display: flex;
   gap: 4px;
 }
 
+.cut-editor-error {
+  margin: 0;
+  color: var(--error);
+  font-size: 9.5px;
+}
 .page-frame {
   display: flex;
   flex-direction: column;
@@ -3508,7 +3485,7 @@ body.row-resizing {
     .picker-name
   ):not(.grouped-select-option):not(
     .monitor-style-button
-  ):not(.monitor-band-remove),
+  ),
 .modal-backdrop > :not(.palette) select,
 .modal-backdrop
   > :not(.palette)
@@ -3612,14 +3589,6 @@ body.row-resizing {
   border: 1px solid #2b3542;
   border-radius: 6px;
   box-shadow: 0 20px 60px rgb(0 0 0 / 55%);
-}
-
-.picker-head-right {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  color: var(--muted);
-  font-size: 10.5px;
 }
 
 .picker-tools {
@@ -5339,6 +5308,15 @@ button.mini.on {
   border-bottom: 1px solid var(--line);
 }
 
+.modal-head-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 10.5px;
+}
+
 .modal-head h2 {
   margin: 0;
   font-size: 12.5px;
@@ -6452,38 +6430,6 @@ button.danger:hover:not(:disabled) {
   min-width: 26px;
   height: 20px;
   padding: 0 5px;
-}
-
-.monitor-band-edit {
-  display: grid;
-  grid-template-columns: 132px 104px 1fr 22px;
-  align-items: center;
-  gap: 6px;
-  padding: 2px 0;
-}
-
-.monitor-band-cut {
-  display: inline-flex;
-  align-items: center;
-  gap: 3px;
-  color: var(--muted);
-  font-size: 10px;
-  white-space: nowrap;
-}
-
-.monitor-band-cut input {
-  width: 74px;
-  padding: 1px 4px;
-  font-size: 10px;
-}
-
-.state-band-edit input.invalid,
-.monitor-band-cut input.invalid {
-  border-color: var(--error);
-}
-
-.monitor-cut-error {
-  margin: 0;
 }
 
 /* Data: value/raw/min-avg-max plus a database-scaled bar. Cards instead of
@@ -8483,5 +8429,3 @@ body:has(.cm-tooltip-autocomplete) .script-signature {
   font-size: 10.5px;
   line-height: 1.35;
 }
-
-
