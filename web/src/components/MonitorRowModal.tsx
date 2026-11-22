@@ -2,11 +2,14 @@ import { useEffect, useState } from "preact/hooks";
 import type { MonitorRow } from "../types";
 import { palette, type Theme } from "../theme";
 import {
+  addCutBand,
   cutError,
   cutIsInvalid,
-  nextCut,
+  fitBandColors,
   rangeText,
+  removeCutBand,
 } from "../bandCuts";
+import { PaletteSwatches } from "./PaletteSwatches";
 
 interface Props {
   row: MonitorRow;
@@ -15,19 +18,13 @@ interface Props {
   onClose: () => void;
 }
 
-function fitColors(colors: number[], count: number): number[] {
-  const next = colors.slice(0, count);
-  while (next.length < count) next.push(next[next.length - 1] ?? 0);
-  return next;
-}
-
 /** Right-click a Monitor row: decimals, cut points and one color per band. */
 export function MonitorRowModal({ row, theme, onApply, onClose }: Props) {
   const colors = palette(theme).monitors;
   const [digits, setDigits] = useState(row.digits);
   const [cuts, setCuts] = useState(() => row.cuts.map(String));
   const [bands, setBands] = useState(() =>
-    fitColors(row.colors, row.cuts.length + 1),
+    fitBandColors(row.colors, row.cuts.length + 1),
   );
 
   useEffect(() => {
@@ -57,12 +54,18 @@ export function MonitorRowModal({ row, theme, onApply, onClose }: Props) {
     });
   };
   const addCut = () => {
-    setCuts((old) => [...old, nextCut(old)]);
-    setBands((old) => [...old, old[old.length - 1] ?? 0]);
+    const next = addCutBand(
+      cuts.map(Number),
+      bands,
+      bands[bands.length - 1] ?? 0,
+    );
+    setCuts(next.cuts.map(String));
+    setBands(next.colors);
   };
   const removeCut = (cutIndex: number) => {
-    setCuts((old) => old.filter((_, index) => index !== cutIndex));
-    setBands((old) => old.filter((_, index) => index !== cutIndex + 1));
+    const next = removeCutBand(cuts.map(Number), bands, cutIndex);
+    setCuts(next.cuts.map(String));
+    setBands(next.colors);
   };
 
   return (
@@ -130,26 +133,12 @@ export function MonitorRowModal({ row, theme, onApply, onClose }: Props) {
                     </>
                   )}
                 </label>
-                <span
-                  class="monitor-swatches"
-                  role="group"
-                  aria-label="Band color"
-                >
-                  {colors.map((color, slot) => (
-                    <button
-                      key={slot}
-                      type="button"
-                      class={`monitor-swatch ${
-                        (bands[index] ?? 0) === slot ? "on" : ""
-                      }`}
-                      style={{ background: color }}
-                      title={`Use palette color ${slot + 1}`}
-                      aria-label={`Palette color ${slot + 1}`}
-                      aria-pressed={(bands[index] ?? 0) === slot}
-                      onClick={() => setBandColor(index, slot)}
-                    />
-                  ))}
-                </span>
+                <PaletteSwatches
+                  colors={colors}
+                  value={bands[index] ?? 0}
+                  compact
+                  onChange={(slot) => setBandColor(index, slot)}
+                />
                 {index > 0 ? (
                   <button
                     type="button"
@@ -187,26 +176,12 @@ export function MonitorRowModal({ row, theme, onApply, onClose }: Props) {
                   </>
                 )}
               </label>
-              <span
-                class="monitor-swatches"
-                role="group"
-                aria-label="Band color"
-              >
-                {colors.map((color, slot) => (
-                  <button
-                    key={slot}
-                    type="button"
-                    class={`monitor-swatch ${
-                      (bands[cuts.length] ?? 0) === slot ? "on" : ""
-                    }`}
-                    style={{ background: color }}
-                    title={`Use palette color ${slot + 1}`}
-                    aria-label={`Palette color ${slot + 1}`}
-                    aria-pressed={(bands[cuts.length] ?? 0) === slot}
-                    onClick={() => setBandColor(cuts.length, slot)}
-                  />
-                ))}
-              </span>
+              <PaletteSwatches
+                colors={colors}
+                value={bands[cuts.length] ?? 0}
+                compact
+                onChange={(slot) => setBandColor(cuts.length, slot)}
+              />
               {cuts.length > 0 ? (
                 <button
                   type="button"
@@ -245,7 +220,7 @@ export function MonitorRowModal({ row, theme, onApply, onClose }: Props) {
               class="primary"
               disabled={!!error}
               onClick={() =>
-                onApply(digits, parsed, fitColors(bands, cuts.length + 1))
+                onApply(digits, parsed, fitBandColors(bands, cuts.length + 1))
               }
             >
               Apply

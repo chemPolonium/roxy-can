@@ -52,7 +52,9 @@ import {
 } from "../panelBinding";
 import { palette, type Theme } from "../theme";
 import { copyText } from "../clipboard";
+import { addCutBand, removeCutBand } from "../bandCuts";
 import { ContextMenu } from "./ContextMenu";
+import { PaletteSwatches } from "./PaletteSwatches";
 import type { SomeIpFieldDef, SomeIpService } from "../types";
 
 interface DragState {
@@ -1324,17 +1326,12 @@ function BandsField({
     onChange(next, colors);
   };
   const addCut = () => {
-    const last = cuts[cuts.length - 1] ?? 0;
-    const next = Array.from({ length: cuts.length + 2 }, (_, at) =>
-      at <= cuts.length ? bandColor(at) : (at % palette.length),
-    );
-    onChange([...cuts, last + 1], next);
+    const next = addCutBand(cuts, colors, (cuts.length + 1) % palette.length);
+    onChange(next.cuts, next.colors);
   };
   const removeCut = (index: number) => {
-    onChange(
-      cuts.filter((_, at) => at !== index),
-      Array.from({ length: cuts.length }, (_, at) => bandColor(at > index ? at + 1 : at)),
-    );
+    const next = removeCutBand(cuts, colors, index);
+    onChange(next.cuts, next.colors);
   };
   const range = (index: number) => {
     const lo = index === 0 ? null : cuts[index - 1];
@@ -1358,22 +1355,12 @@ function BandsField({
       {Array.from({ length: cuts.length + 1 }, (_, index) => (
         <div class="page-band-row" key={index}>
           <span class="page-band-range">{range(index)}</span>
-          <span class="page-band-swatches">
-            {palette.map((color, slot) => (
-              <button
-                type="button"
-                key={slot}
-                class={`page-band-swatch ${bandColor(index) === slot ? "on" : ""}`}
-                style={{ background: color }}
-                aria-label={`Palette colour ${slot + 1}`}
-                aria-pressed={bandColor(index) === slot}
-                onClick={() => {
-                  onFocus();
-                  setColor(index, slot);
-                }}
-              />
-            ))}
-          </span>
+          <PaletteSwatches
+            colors={palette}
+            value={bandColor(index)}
+            onFocus={onFocus}
+            onChange={(slot) => setColor(index, slot)}
+          />
           {index < cuts.length && (
             <>
               <span class="page-band-cut">
@@ -2315,22 +2302,12 @@ export function PagePanel({
       const current =
         widget.kind === "lamp" ? widget.color : 0;
       return (
-        <span class="page-band-swatches">
-          {monitorColors.map((color, slot) => (
-            <button
-              type="button"
-              key={slot}
-              class={`page-band-swatch ${current === slot ? "on" : ""}`}
-              style={{ background: color }}
-              aria-label={`Palette colour ${slot + 1}`}
-              aria-pressed={current === slot}
-              onClick={() => {
-                pushHistory();
-                update({ color: slot });
-              }}
-            />
-          ))}
-        </span>
+        <PaletteSwatches
+          colors={monitorColors}
+          value={current}
+          onFocus={pushHistory}
+          onChange={(slot) => update({ color: slot })}
+        />
       );
     }
     if (fieldSpec.kind === "select") {

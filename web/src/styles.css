@@ -2079,6 +2079,25 @@ body.col-resizing {
   line-height: 1.35;
 }
 
+.palette-swatches {
+  display: inline-flex;
+  flex: 1 1 auto;
+  gap: 3px;
+}
+
+.palette-swatch {
+  flex: 0 0 13px;
+  width: 13px;
+  height: 13px;
+  padding: 0;
+  border: 1px solid transparent;
+}
+
+.palette-swatch.on {
+  outline: 1px solid var(--text);
+  outline-offset: 1px;
+}
+
 .page-band-row {
   display: flex;
   flex-wrap: wrap;
@@ -2093,25 +2112,6 @@ body.col-resizing {
   font-size: 9.5px;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.page-band-swatches {
-  display: inline-flex;
-  flex: 1 1 86px;
-  gap: 3px;
-}
-
-.page-band-swatch {
-  flex: 0 0 13px;
-  width: 13px;
-  height: 13px;
-  padding: 0;
-  border: 1px solid transparent;
-}
-
-.page-band-swatch.on {
-  outline: 1px solid var(--text);
-  outline-offset: 1px;
 }
 
 .page-band-cut {
@@ -3506,7 +3506,7 @@ body.row-resizing {
     .description-remove
   ):not(.picker-message-toggle):not(.picker-frame-action):not(
     .picker-name
-  ):not(.grouped-select-option):not(.monitor-swatch):not(
+  ):not(.grouped-select-option):not(
     .monitor-style-button
   ):not(.monitor-band-remove),
 .modal-backdrop > :not(.palette) select,
@@ -6486,36 +6486,6 @@ button.danger:hover:not(:disabled) {
   margin: 0;
 }
 
-.monitor-band-edit .monitor-swatches {
-  justify-self: end;
-}
-
-.monitor-band-remove {
-  width: 20px;
-  height: 20px;
-  padding: 0;
-}
-
-.monitor-swatches {
-  display: inline-flex;
-  flex: 0 0 auto;
-  align-items: center;
-  gap: 2px;
-}
-
-.monitor-swatch {
-  width: 14px;
-  height: 14px;
-  padding: 0;
-  border: 1px solid var(--line);
-  border-radius: 50%;
-}
-
-.monitor-swatch.on {
-  outline: 2px solid var(--accent);
-  outline-offset: 1px;
-}
-
 /* Data: value/raw/min-avg-max plus a database-scaled bar. Cards instead of
    a wide table so the right column stays readable at 1024 px. */
 .data-list {
@@ -8513,3 +8483,5 @@ body:has(.cm-tooltip-autocomplete) .script-signature {
   font-size: 10.5px;
   line-height: 1.35;
 }
+
+

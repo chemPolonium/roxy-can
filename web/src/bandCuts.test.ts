@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { cutError, cutIsInvalid, nextCut, rangeText } from "./bandCuts";
+import {
+  addCutBand,
+  cutError,
+  cutIsInvalid,
+  fitBandColors,
+  nextCut,
+  rangeText,
+  removeCutBand,
+} from "./bandCuts";
 
 describe("band cut helpers", () => {
   it("labels every band around ascending cuts", () => {
@@ -27,5 +35,19 @@ describe("band cut helpers", () => {
     expect(nextCut([])).toBe("0");
     expect(nextCut(["10", "20"])).toBe("21");
     expect(nextCut(["10", "oops"])).toBe("0");
+  });
+
+  it("keeps one palette slot per band when cuts are added or removed", () => {
+    expect(fitBandColors([], 3)).toEqual([0, 0, 0]);
+    expect(fitBandColors([2], 3)).toEqual([2, 2, 2]);
+    expect(addCutBand([], [], 1)).toEqual({ cuts: [0], colors: [0, 1] });
+    expect(addCutBand([10], [2, 3], 4)).toEqual({
+      cuts: [10, 11],
+      colors: [2, 3, 4],
+    });
+    expect(removeCutBand([10, 20], [2, 3, 4], 0)).toEqual({
+      cuts: [20],
+      colors: [2, 4],
+    });
   });
 });
