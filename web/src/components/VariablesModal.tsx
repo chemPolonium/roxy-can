@@ -429,6 +429,7 @@ export function VariablesModal({
                   }
                 />
               </label>
+            </div>
             <div class="sv-labels">
               <div class="sv-labels-head">
                 <span>Label sets</span>
@@ -491,9 +492,10 @@ export function VariablesModal({
                     </button>
                   </div>
                   {labelSet.entries.map((entry, entryIndex) => (
-                    <div class="sv-label-row" key={entryIndex}>
-                      <input
-                        class="sv-label-value"
+                    <div class="sv-label-entry" key={entryIndex}>
+                      <div class="sv-label-entry-main">
+                        <input
+                          class="sv-label-value"
                         value={entry.value}
                         inputMode="decimal"
                         placeholder="value"
@@ -542,7 +544,10 @@ export function VariablesModal({
                           });
                         }}
                       />
-                      <PaletteSwatches
+                      </div>
+                      <div class="sv-label-entry-colors">
+                        <span class="sv-label-color-label">Colour</span>
+                        <PaletteSwatches
                         colors={monitorColors}
                         value={entry.color ?? 0}
                         compact
@@ -613,6 +618,7 @@ export function VariablesModal({
                       >
                         ×
                       </button>
+                      </div>
                     </div>
                   ))}
                   <div>
@@ -666,7 +672,6 @@ export function VariablesModal({
                   + Label set
                 </button>
               </div>
-            </div>
             </div>
             <div class="sv-form-foot">
               {checked?.error ? (

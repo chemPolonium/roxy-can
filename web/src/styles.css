@@ -7628,7 +7628,9 @@ body:has(.cm-tooltip-autocomplete) .script-signature {
 
 .sv-form {
   flex: 0 0 auto;
+  width: calc(100% - 24px);
   max-height: 46vh;
+  box-sizing: border-box;
   margin: 8px 12px;
   padding: 8px;
   overflow: auto;
@@ -7666,6 +7668,7 @@ body:has(.cm-tooltip-autocomplete) .script-signature {
 .sv-labels {
   display: flex;
   flex-direction: column;
+  width: 100%;
   gap: 4px;
   margin-top: 8px;
   padding-top: 7px;
@@ -7681,31 +7684,67 @@ body:has(.cm-tooltip-autocomplete) .script-signature {
   letter-spacing: 0.05em;
 }
 
-.sv-label-row {
+.sv-label-entry {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 5px 0;
+  border-top: 1px solid #1a2b3d;
+}
+
+.sv-label-entry-main {
   display: grid;
-  grid-template-columns: 72px minmax(0, 1fr) auto 22px 22px;
+  grid-template-columns: 72px minmax(0, 1fr);
   gap: 5px;
   align-items: center;
+}
+
+.sv-label-entry-main input {
+  width: 100%;
+  min-width: 0;
+}
+
+.sv-label-entry-colors {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+}
+
+.sv-label-color-label {
+  flex: 0 0 40px;
+  color: var(--muted);
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.sv-label-entry-colors .palette-swatches {
+  flex: 0 0 auto;
+  width: max-content;
+  flex-wrap: nowrap;
 }
 
 .sv-label-set {
   display: flex;
   flex-direction: column;
   gap: 4px;
-  padding: 6px;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 7px;
   border: 1px solid #223649;
   border-radius: 3px;
 }
 
 .sv-label-set-head {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto 22px;
   align-items: center;
   gap: 6px;
 }
 
 .sv-label-set-name {
-  flex: 1 1 auto;
-  width: 0;
+  width: 100%;
   min-width: 0;
 }
 
@@ -7717,12 +7756,6 @@ body:has(.cm-tooltip-autocomplete) .script-signature {
   font-size: 9.5px;
   white-space: nowrap;
 }
-
-.sv-label-row input {
-  width: 100%;
-  min-width: 0;
-}
-
 .sv-value-cell {
   display: flex;
   flex-direction: column;
