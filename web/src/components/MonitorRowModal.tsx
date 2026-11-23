@@ -1,22 +1,17 @@
 import { useEffect, useState } from "preact/hooks";
-import type { BandSet, MonitorRow } from "../types";import { palette, type Theme } from "../theme";
-import { validateBands } from "../bands";
-import { BandEditor } from "./BandEditor";
+import type { BandSet, MonitorRow } from "../types";
 import { ModalHeader } from "./ModalHeader";
 
 interface Props {
   row: MonitorRow;
-  theme: Theme;
   bandSets: BandSet[];
   onApply: (digits: number, bands: MonitorRow["bands"], bandSetId: string | null) => void;
   onClose: () => void;
 }
 
 /** Right-click a Monitor row: decimals and colour bands. */
-export function MonitorRowModal({ row, theme, bandSets, onApply, onClose }: Props) {
-  const colors = palette(theme).monitors;
+export function MonitorRowModal({ row, bandSets, onApply, onClose }: Props) {
   const [digits, setDigits] = useState(row.digits);
-  const [bands, setBands] = useState(row.bands);
   const [bandSetId, setBandSetId] = useState(row.bandSetId ?? "");
 
   useEffect(() => {
@@ -27,7 +22,7 @@ export function MonitorRowModal({ row, theme, bandSets, onApply, onClose }: Prop
     return () => window.removeEventListener("keydown", close);
   }, [onClose]);
 
-  const error = validateBands(bands);
+  const error = "";
 
   return (
     <div class="modal-backdrop" onMouseDown={onClose}>
@@ -56,8 +51,6 @@ export function MonitorRowModal({ row, theme, bandSets, onApply, onClose }: Prop
               onChange={(event) => {
                 const id = (event.target as HTMLSelectElement).value;
                 setBandSetId(id);
-                const set = bandSets.find((entry) => entry.id === id);
-                if (set) setBands(set.bands);
               }}
             >
               <option value="">No bands</option>
@@ -84,13 +77,6 @@ export function MonitorRowModal({ row, theme, bandSets, onApply, onClose }: Prop
               </button>
             ))}
           </div>
-          {!bandSetId && (
-            <BandEditor
-              bands={bands}
-              colors={colors}
-              onChange={setBands}
-            />
-          )}
           {error && <span class="sv-error">{error}</span>}
           <div class="state-rule-actions">
             <span class="spacer" />
@@ -98,7 +84,7 @@ export function MonitorRowModal({ row, theme, bandSets, onApply, onClose }: Prop
               type="button"
               class="primary"
               disabled={!!error}
-              onClick={() => onApply(digits, bands, bandSetId || null)}
+              onClick={() => onApply(digits, row.bands, bandSetId || null)}
             >
               Apply
             </button>

@@ -6313,7 +6313,6 @@ export function App() {
       {monitorStyle && (
         <MonitorRowModal
           row={monitorStyle}
-          theme={theme}
           bandSets={state?.bandSets ?? []}
           onApply={(digits, bands, bandSetId) => {
             void run({
@@ -6333,7 +6332,6 @@ export function App() {
         <StateRuleModal
           signal={`${stateRule.name} · ${stateRule.bus}`}
           rule={stateRule.rule}
-          theme={theme}
           bandSets={state?.bandSets ?? []}
           onApply={(bands, bandSetId) => {
             void run({
@@ -6373,7 +6371,6 @@ export function App() {
               ? { bands: derivedRule.bands, bandSetId: derivedRule.bandSetId }
               : null
           }
-          theme={theme}
           bandSets={state?.bandSets ?? []}
           onApply={(bands, bandSetId) => {
             saveDerived(

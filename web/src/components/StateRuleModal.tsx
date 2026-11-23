@@ -1,15 +1,11 @@
 import { useEffect, useState } from "preact/hooks";
 import type { BandSet, StateRule } from "../types";
 import type { Band } from "../bands";
-import { validateBands } from "../bands";
-import { palette, type Theme } from "../theme";
-import { BandEditor } from "./BandEditor";
 import { ModalHeader } from "./ModalHeader";
 
 interface Props {
   signal: string;
   rule: StateRule | null;
-  theme: Theme;
   bandSets: BandSet[];
   onApply: (bands: Band[], bandSetId: string | null) => void;
   onClear: () => void;
@@ -19,19 +15,14 @@ interface Props {
 export function StateRuleModal({
   signal,
   rule,
-  theme,
   bandSets,
   onApply,
   onClear,
   onClose,
 }: Props) {
-  const [bands, setBands] = useState<Band[]>(
-    rule?.bands?.length
-      ? rule.bands
-      : [{ upper: null, inclusive: false, text: "all" }],
-  );
-  const colors = palette(theme).monitors;
   const [bandSetId, setBandSetId] = useState(rule?.bandSetId ?? "");
+  const bands =
+    bandSets.find((set) => set.id === bandSetId)?.bands ?? rule?.bands ?? [];
   useEffect(() => {
     const close = (event: KeyboardEvent) => {
       if (event.key === "Escape") onClose();
@@ -39,7 +30,7 @@ export function StateRuleModal({
     window.addEventListener("keydown", close);
     return () => window.removeEventListener("keydown", close);
   }, [onClose]);
-  const error = validateBands(bands);
+  const error = "";
   return (
     <div class="modal-backdrop" onMouseDown={onClose}>
       <div
@@ -63,8 +54,6 @@ export function StateRuleModal({
                 onChange={(event) => {
                   const id = (event.target as HTMLSelectElement).value;
                   setBandSetId(id);
-                  const set = bandSets.find((entry) => entry.id === id);
-                  if (set) setBands(set.bands);
                 }}
               >
                 <option value="">Inline / none</option>
@@ -75,9 +64,6 @@ export function StateRuleModal({
                 ))}
               </select>
             </label>
-            {!bandSetId && (
-              <BandEditor bands={bands} colors={colors} onChange={setBands} />
-            )}
           </div>
           <div class="state-rule-actions">
             <button type="button" onClick={onClear}>
