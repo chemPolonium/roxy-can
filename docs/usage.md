@@ -196,7 +196,7 @@ roxy-can -h                               完整帮助
 - 顶栏的 **Standard / 页名** 就是模式与页面切换：Standard 一项，后面每个 Panel 页各一项（一页是 `Standard | Overview`，两页就是 `Standard | Overview | Page 2`，共三个标签）。点击页名进入 Panel 并切到该页；键盘 ←/→ 切换（Home/End 到首尾）。页签放不下时出现左右箭头，自动跟随当前页滚动。画布上方不再另放页签。顶栏页名后的 **+** 新建一页并直接进入编辑。右键顶栏的 Panel 页名，或聚焦页名后按 **Shift+F10**，打开页面菜单（Rename page / Duplicate page / Move To / Import page… / Export page / Delete page；至少保留一页），菜单内 ↑/↓/Home/End 移动焦点；**Move To** 里按“第几个”把页重排；重命名在页签里就地输入。**含控件的页删除要再点一次确认**（空页直接删），避免误删后撤销不回来。每页有自己的画幅尺寸和控件，切换页面会清空选区、撤销历史和剪贴板，但保留 Edit 模式。
 - 顶栏 **Standard / 页名** 进入操作页：固定画布默认 **1280×720**，始终显示 **8px 网格线**；画幅 W×H 在未选中控件时显示于右侧 Panel 属性，按 8px 取整，缩小到会把控件挤出画布时会拒绝；窗口不够大时画布出现滚动条，不缩放、不重排。控件尺寸变化时按钮/数值的字号与内边距按控件大小自适应，长标签省略显示，不需要手工调字号。
 - 顶栏 **Edit / Done**（Panel 模式下占用 Standard 里 Layout 的位置）进入/退出编辑：右侧 **Properties** 栏常驻（栏头显示当前控件类型或 Panel），点控件显示控件属性，点空白显示 **Panel** 属性（画幅 W×H 与控件数），切换选区时画布宽度不变。**+ Add** 菜单添加 Button / Value / Bar / Gauge / Lamp / Toggle / Setpoint，拖动控件移动、拖右下角缩放，位置和尺寸实时吸附网格；最小尺寸按类型，重叠允许落点，但画布顶部会警告并把重叠控件标红，移动或缩放不因重叠被阻止。编辑时控件不触发动作。Panel 页面属于工程：打开或新建工程会整体替换当前页面书，空工程从一张空白 Overview 开始；页面只随工程文件保存，不再复用上一个工程的本地页面。
-- 选中控件后右侧属性栏按类型编辑：**Button** 的 **On click** 二选一、互斥——**Send message**（一次发一条 CAN / FlexRay / Ethernet / SOME/IP 报文；CAN 可填 raw 或目录报文，目录报文与 FR/ETH 已知帧可按物理值编码；FR 有可写端口时经硬件发出，否则注入本会话，ETH/SOME/IP 有实时口时从端口发出，否则只注入本会话；SOME/IP 按 service/method 列出 ARXML 字段，数字/字符串/枚举分别输入，没有描述时退回 `name=value`，union 用 `name.$selector`）或 **Script action**（动作名 + 可选数值参数）；**Value** 填 Source（信号 key、`derived:Name` 或 `sysvar:ns::name`）与小数位，只读显示实时值；**Bar / Gauge** 填 Source、最小值/最大值与小数位，按比例填充并同样可用 **Color cuts**；**Lamp** 填 Source、点亮阈值（Lit at or above）与点亮颜色，源值达到阈值时亮起；**Toggle** 填系统变量名，显示 ON/OFF 并写 1/0（选中的 Label set 有文字/颜色时显示对应值）。**Setpoint** 先选 Target（SysVar 或信号），再填目标、小数位与步进（Step），输入后按 Enter/失焦写入，按对应后端的量程夹取，并可带值触发同名脚本动作。**Color cuts** 在所有只读控件上一致：按升序添加 cut 点，并为每个区间从 Monitor 同一套调色板选颜色；值落在哪一段就用该段颜色，只改数字/填充颜色、不改卡片底色。Lamp 的点亮颜色也从同一调色板选，不再使用 OK / Warning / Critical 这类语义色名。属性栏里的 **Duplicate** 与 **Delete** 复制/删除控件。
+- 选中控件后右侧属性栏按类型编辑：**Button** 的 **On click** 二选一、互斥——**Send message**（一次发一条 CAN / FlexRay / Ethernet / SOME/IP 报文；CAN 可填 raw 或目录报文，目录报文与 FR/ETH 已知帧可按物理值编码；FR 有可写端口时经硬件发出，否则注入本会话，ETH/SOME/IP 有实时口时从端口发出，否则只注入本会话；SOME/IP 按 service/method 列出 ARXML 字段，数字/字符串/枚举分别输入，没有描述时退回 `name=value`，union 用 `name.$selector`）或 **Script action**（动作名 + 可选数值参数）；**Value** 填 Source（信号 key、`derived:Name` 或 `sysvar:ns::name`）与小数位，只读显示实时值；**Bar / Gauge** 填 Source、最小值/最大值与小数位，按比例填充并同样可用 **Bands**；**Lamp** 填 Source、点亮阈值（Lit at or above）与点亮颜色，源值达到阈值时亮起；**Toggle** 填系统变量名，显示 ON/OFF 并写 1/0（选中的 Bands 有文字/颜色时显示对应值）。**Setpoint** 先选 Target（SysVar 或信号），再填目标、小数位与步进（Step），输入后按 Enter/失焦写入，按对应后端的量程夹取，并可带值触发同名脚本动作。**Bands** 在所有只读控件上一致：每段设置 `<` / `≤` 上限，并为该段从 Monitor 同一套调色板选颜色；值落在哪一段就用该段颜色和文字，只改数字/填充颜色、不改卡片底色。Lamp 的点亮颜色也从同一调色板选，不再使用 OK / Warning / Critical 这类语义色名。属性栏里的 **Duplicate** 与 **Delete** 复制/删除控件。
 - 页面文件：右键顶栏页名 → **Export page** 把当前页下载成 `.rxpanel`（带格式与版本，不含控件 id），右键顶栏页名 → **Import page…** 在浏览器里读取文件并作为新页面追加（名称自动去重）。导入严格校验画幅、控件类型与最小尺寸；重叠允许导入，进入编辑后会标红并显示警告。任何一项校验不合格都给出提示且不改动现有页面。
 - 编辑快捷键：**Ctrl+C / Ctrl+V** 复制粘贴（自动找空位并选中副本），**Ctrl+Z** 撤销、**Ctrl+Shift+Z** 或 **Ctrl+Y** 重做（工具条右侧是 ↶ / ↷ 图标按钮），**Delete** 删除选中控件。不做手动微调与对齐工具，位置和尺寸都吸附网格。
 - 控件会表达可用性：未测量时写信号/发报文的按钮禁用，写信号的 Setpoint 也要求测量在跑；脚本动作只在有运行中的同名处理器时可用；未知总线/帧、未知 SysVar 或未绑定的控件显示占位并提示原因。
@@ -210,7 +210,7 @@ roxy-can -h                               完整帮助
 - 页眉 FilterBar 按 Signal / Bus / Frame 等条件过滤状态带；只影响显示，不取消订阅；条件随工程保存，命名 filter 复用 Signal 族。
 - Signals 页的 lane 菜单或 Data 页里**右键任一信号**即可加入 State Tracker。
 - 恒定贴实时边缘（回放中跟随播放头）；时间窗 5 秒到 30 分钟预设；**Min ms** 把更短的区段并入前一段（0 = 全部显示）。
-- 默认模式取 VAL_ 值表标签（显示枚举名而非数字）；每个状态可固定颜色，未固定的按会话槽位自动配色。自定义模式按切分点分区间，每区间自定义名字与颜色。
+- 默认模式取 VAL_ 值表标签（显示枚举名而非数字）；每个状态可固定颜色，未固定的按会话槽位自动配色。自定义模式用 `<` / `≤` 区段，每段自定义名字与颜色。
 - 可见状态只有 {0,1} 时自动画成二进制方波。
 - **Export CSV** 导出当前窗口的区段表（总线、信号、起止秒、时长、标签），与屏幕所画一致。
 
@@ -239,7 +239,7 @@ roxy-can -h                               完整帮助
 ## 系统变量
 
 - **Setup → Variables…**：CANoe 式命名空间变量。表里列 namespace、name、实时值（行内可改）、Init、Min、Max、单位/备注。定义随工程保存。
-- **Label sets**：变量可挂多套命名标签，每套里的条目可选 `text`、`color` 或两者都有。例如 `Status` 只给“正常 / 部件出错”，`Color` 只给调色板颜色，`Status + color` 两者都有。Panel 的 Value / Toggle / Setpoint / Bar / Gauge / Lamp 在属性栏 **Labels** 里选一套；默认用标记为 default 的那套，也可以选 **No labels**。文字缺失时回退数字，颜色缺失时回退 cut/默认色；脚本、触发器、曲线和统计继续使用数值。
+- **Bands**：变量可挂多套命名区段，每段是一个 `<` 或 `≤` 的上限，最后一段无上限；每段可选 `text`、`color` 或两者都有。例如 `Status` 给“正常 / 部件出错”，`Color` 只给调色板颜色。Panel 的 Value / Toggle / Setpoint / Bar / Gauge / Lamp 在属性栏 **Bands** 里选一套；默认用标记为 default 的那套，也可以选 **No bands**。文字缺失时回退数字，颜色缺失时回退默认色；脚本、触发器、曲线和统计继续使用数值。旧工程的 cut/color 和 cut/name 会在加载时转换成 Bands。
 - 脚本用 `sys_get("ns::name")` / `sys_set("ns::name", v)` 读写系统变量；信号用 `报文名.信号名`（非标识符名字用 `报文名["信号 名"]`）读取。写入被夹在界限内；引用未定义的变量/报文/信号在节点启动时报出来。
 - 每个变量发布为一条可观测流，信号树里按 namespace 分组。
 - 每次开始测量所有变量回到声明的初值。值为数值型；改名 = 删旧 + 建新，脚本引用不会自动跟随。

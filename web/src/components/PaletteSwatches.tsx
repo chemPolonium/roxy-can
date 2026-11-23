@@ -1,6 +1,6 @@
 interface Props {
   colors: string[];
-  value: number;
+  value: number | null;
   onChange: (slot: number) => void;
   onFocus?: () => void;
   label?: string;
@@ -26,11 +26,17 @@ export function PaletteSwatches({
         <button
           key={slot}
           type="button"
-          class={`palette-swatch ${Math.abs(value) % colors.length === slot ? "on" : ""}`}
+          class={`palette-swatch ${
+            value != null && Math.abs(value) % colors.length === slot
+              ? "on"
+              : ""
+          }`}
           style={{ background: color }}
           title={`Use palette colour ${slot + 1}`}
           aria-label={`${label} ${slot + 1}`}
-          aria-pressed={Math.abs(value) % colors.length === slot}
+          aria-pressed={
+            value != null && Math.abs(value) % colors.length === slot
+          }
           onClick={() => {
             onFocus?.();
             onChange(slot);

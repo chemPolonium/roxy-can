@@ -682,15 +682,29 @@ pub struct DataWindow {
 /// the band takes a stable palette slot like auto-colored values do.
 #[derive(Clone)]
 pub struct StateRule {
-    pub cuts: Vec<f64>,
-    pub names: Vec<String>,
-    pub colors: Vec<Option<[f32; 3]>>,
+    pub bands: Vec<crate::band::Band>,
 }
 
 impl StateRule {
     /// The band index holding `v`.
     pub fn band(&self, v: f64) -> usize {
-        self.cuts.partition_point(|&c| c <= v)
+        crate::band::band_index(&self.bands, v).unwrap_or(self.bands.len())
+    }
+
+    pub fn label(&self, index: usize) -> String {
+        self.bands
+            .get(index)
+            .map(|band| band.text.clone())
+            .filter(|text| !text.is_empty())
+            .unwrap_or_else(|| format!("band {index}"))
+    }
+
+    pub fn color(&self, index: usize) -> usize {
+        self.bands
+            .get(index)
+            .and_then(|band| band.color)
+            .map(usize::from)
+            .unwrap_or(index % 8)
     }
 }
 

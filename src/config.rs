@@ -251,9 +251,25 @@ pub struct StateOverrideCfg {
 /// `None` color means automatic.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct RuleCfg {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub bands: Vec<crate::band::Band>,
+    /// Legacy v0.40 cut/name/color representation, read on load only.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub cuts: Vec<f64>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub names: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub colors: Vec<Option<[f32; 3]>>,
+}
+
+impl RuleCfg {
+    fn bands(&self) -> Vec<crate::band::Band> {
+        if !self.bands.is_empty() {
+            self.bands.clone()
+        } else {
+            crate::band::from_cuts(&self.cuts, &[], &self.names)
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -303,10 +319,12 @@ pub struct MonitorRowCfg {
     pub label: String,
     #[serde(default = "digits_default")]
     pub digits: usize,
-    /// Ascending value cuts; `colors` has one palette slot per band.
-    #[serde(default)]
+    /// Ordered bands; legacy cuts/colors are read only for old projects.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub bands: Vec<crate::band::Band>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub cuts: Vec<f64>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub colors: Vec<usize>,
     // Legacy single-threshold rule, read for old projects and rewritten as
     // bands on the next save. New projects leave these at their defaults.
@@ -326,21 +344,6 @@ fn is_zero_f64(value: &f64) -> bool {
 
 fn is_zero_usize(value: &usize) -> bool {
     *value == 0
-}
-
-/// A project may predate the cut editor or have been hand-edited. Keep one
-/// palette slot per resulting band and drop non-finite/duplicate cuts.
-fn normalize_monitor_bands(cuts: &mut Vec<f64>, colors: &mut Vec<usize>) {
-    cuts.retain(|cut| cut.is_finite());
-    cuts.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-    cuts.dedup_by(|a, b| *a == *b);
-    if colors.is_empty() {
-        colors.push(0);
-    }
-    colors.truncate(cuts.len() + 1);
-    while colors.len() < cuts.len() + 1 {
-        colors.push(*colors.last().unwrap_or(&0));
-    }
 }
 
 fn digits_default() -> usize {
@@ -953,8 +956,9 @@ impl ProjectSettings {
                         signal: r.key.name().to_string(),
                         label: r.label.clone(),
                         digits: r.digits,
-                        cuts: r.cuts.clone(),
-                        colors: r.colors.clone(),
+                        bands: r.bands.clone(),
+                        cuts: Vec::new(),
+                        colors: Vec::new(),
                         rule_on: false,
                         rising: false,
                         threshold: 0.0,
@@ -988,9 +992,10 @@ impl ProjectSettings {
                                 visible: s.visible,
                                 y_mode: s.y_mode.to_u8(),
                                 state_rule: w.rules.get(&s.key).map(|r| RuleCfg {
-                                    cuts: r.cuts.clone(),
-                                    names: r.names.clone(),
-                                    colors: r.colors.clone(),
+                                    bands: r.bands.clone(),
+                                    cuts: Vec::new(),
+                                    names: Vec::new(),
+                                    colors: Vec::new(),
                                 }),
                                 state_overrides: w.overrides.get(&s.key).map(|m| {
                                     m.iter()
@@ -1185,22 +1190,22 @@ impl ProjectSettings {
                         signal: &m.signal,
                     }
                     .key(&maps, m.ch, m.id, m.ext);
-                    // Old projects carry one threshold and one color; turn
-                    // that into a cut so the new editor owns the setting.
-                    let (mut cuts, mut colors) = if !m.cuts.is_empty() {
-                        (m.cuts, m.colors)
+                    // Old projects carry cuts/colors or one threshold/color;
+                    // convert them once so every editor reads bands.
+                    let bands = if !m.bands.is_empty() {
+                        m.bands
+                    } else if !m.cuts.is_empty() {
+                        crate::band::from_cuts(&m.cuts, &m.colors, &[])
                     } else if m.rule_on {
-                        (vec![m.threshold], vec![m.color, m.color])
+                        crate::band::from_cuts(&[m.threshold], &[m.color, m.color], &[])
                     } else {
-                        (Vec::new(), vec![m.color])
+                        vec![crate::band::Band::final_band(Some(m.color as u8))]
                     };
-                    normalize_monitor_bands(&mut cuts, &mut colors);
                     crate::app::MonitorRow {
                         key,
                         label: m.label,
                         digits: m.digits,
-                        cuts,
-                        colors,
+                        bands,
                     }
                 })
                 .collect();
@@ -1216,11 +1221,7 @@ impl ProjectSettings {
                     if let Some(r) = &cfg.state_rule {
                         rules.insert(
                             s.key.clone(),
-                            crate::observe::StateRule {
-                                cuts: r.cuts.clone(),
-                                names: r.names.clone(),
-                                colors: r.colors.clone(),
-                            },
+                            crate::observe::StateRule { bands: r.bands() },
                         );
                     }
                     if let Some(list) = &cfg.state_overrides {
@@ -1662,8 +1663,21 @@ mod tests {
         app.set_win_signal(crate::workspace::PopupTarget::Monitor, key, true);
         assert_eq!(app.monitor_view.rows.len(), 1, "the row was added");
         app.monitor_view.rows[0].digits = 2;
-        app.monitor_view.rows[0].cuts = vec![10.0, 87.5];
-        app.monitor_view.rows[0].colors = vec![1, 3, 5];
+        app.monitor_view.rows[0].bands = vec![
+            crate::band::Band {
+                upper: Some(10.0),
+                inclusive: false,
+                text: String::new(),
+                color: Some(1),
+            },
+            crate::band::Band {
+                upper: Some(87.5),
+                inclusive: false,
+                text: String::new(),
+                color: Some(3),
+            },
+            crate::band::Band::final_band(Some(5)),
+        ];
         app.monitor_view.columns = 2;
 
         let json = serde_json::to_string(&ProjectV2::from_app(&app, None)).unwrap();
@@ -1686,10 +1700,10 @@ mod tests {
             "the round trip keeps a standard-class CAN key"
         );
         assert_eq!(r.key.name(), "EngineStatus");
-        assert_eq!(
-            (r.digits, r.cuts.clone(), r.colors.clone()),
-            (2, vec![10.0, 87.5], vec![1, 3, 5])
-        );
+        assert_eq!(r.bands.len(), 3);
+        assert_eq!(r.bands[1].upper, Some(87.5));
+        assert_eq!(r.bands[1].color, Some(3));
+        assert_eq!(r.bands[2].color, Some(5));
         assert_eq!(restored.monitor_view.columns, 2);
     }
 
@@ -1702,6 +1716,7 @@ mod tests {
         app.set_win_signal(crate::workspace::PopupTarget::Monitor, key, true);
         let mut project = ProjectV2::from_app(&app, None);
         let row = &mut project.settings.monitor_rows[0];
+        row.bands.clear();
         row.cuts.clear();
         row.colors.clear();
         row.rule_on = true;
@@ -1714,8 +1729,9 @@ mod tests {
             .unwrap()
             .apply(&mut restored);
         let row = &restored.monitor_view.rows[0];
-        assert_eq!(row.cuts, vec![87.5]);
-        assert_eq!(row.colors, vec![3, 3]);
+        assert_eq!(row.bands[0].upper, Some(87.5));
+        assert_eq!(row.bands[0].color, Some(3));
+        assert_eq!(row.bands[1].color, Some(3));
     }
 
     /// Derived definitions and the observer rows that read them belong to
@@ -1728,6 +1744,7 @@ mod tests {
             name: "Sum".into(),
             unit: "V".into(),
             expression: "[EngineSpeed] + 1".into(),
+            bands: Vec::new(),
             cuts: vec![10.0],
             names: vec!["low".into(), "high".into()],
             sources: Vec::new(),

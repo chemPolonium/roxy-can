@@ -6277,13 +6277,12 @@ export function App() {
         <MonitorRowModal
           row={monitorStyle}
           theme={theme}
-          onApply={(digits, cuts, colors) => {
+          onApply={(digits, bands) => {
             void run({
               type: "configure_monitor",
               key: monitorStyle.key,
               digits,
-              cuts,
-              colors,
+              bands,
             });
             setMonitorStyle(null);
           }}
@@ -6295,7 +6294,8 @@ export function App() {
         <StateRuleModal
           signal={`${stateRule.name} · ${stateRule.bus}`}
           rule={stateRule.rule}
-          onApply={(cuts, names) => {
+          theme={theme}
+          onApply={(bands) => {
             void run({
               type: "set_state_rule",
               kind: stateRule.kind,
@@ -6304,8 +6304,7 @@ export function App() {
               ext: stateRule.ext,
               frame: stateRule.frame,
               name: stateRule.name,
-              cuts,
-              names,
+              bands,
             });
             setStateRule(null);
           }}
@@ -6329,15 +6328,16 @@ export function App() {
         <StateRuleModal
           signal={`${derivedRule.name} · Derived`}
           rule={
-            derivedRule.cuts.length > 0
-              ? { cuts: derivedRule.cuts, names: derivedRule.names }
+            derivedRule.bands.length > 0
+              ? { bands: derivedRule.bands }
               : null
           }
-          onApply={(cuts, names) => {
+          theme={theme}
+          onApply={(bands) => {
             saveDerived(
               derivedDefs.map((definition) =>
                 definition.id === derivedRule.id
-                  ? { ...definition, cuts, names }
+                  ? { ...definition, bands }
                   : definition,
               ),
             );
@@ -6347,7 +6347,7 @@ export function App() {
             saveDerived(
               derivedDefs.map((definition) =>
                 definition.id === derivedRule.id
-                  ? { ...definition, cuts: [], names: [] }
+                  ? { ...definition, bands: [] }
                   : definition,
               ),
             );

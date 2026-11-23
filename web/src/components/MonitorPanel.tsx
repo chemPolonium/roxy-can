@@ -1,6 +1,7 @@
 import type { ComponentChildren } from "preact";
 import { useState } from "preact/hooks";
 import type { MonitorRow } from "../types";
+import { bandAt, bandIndex } from "../bands";
 import { palette, type Theme } from "../theme";
 import { rowPathWithoutName } from "../signalRows";
 import { ContextMenu } from "./ContextMenu";
@@ -20,10 +21,8 @@ interface Props {
 }
 
 /// The band holding `value`: the number of cuts at or below it.
-export function monitorBand(value: number, cuts: number[]): number {
-  let index = 0;
-  while (index < cuts.length && value >= cuts[index]) index += 1;
-  return index;
+export function monitorBand(value: number, bands: MonitorRow["bands"]): number {
+  return bandIndex(bands, value) ?? 0;
 }
 
 export function MonitorPanel({
@@ -110,9 +109,9 @@ export function MonitorPanel({
     <div class="monitor-host">
       <div class={`monitor-list ${columns >= 2 ? "two-col" : ""}`}>
         {rows.map((row) => {
-          const base = colorAt(row.colors[0] ?? 0);
-          const band = row.cuts.length ? monitorBand(row.value, row.cuts) : 0;
-          const active = colorAt(row.colors[band] ?? row.colors[0] ?? 0);
+          const base = colorAt(bandAt(row.bands, row.value)?.color ?? 0);
+          const active = colorAt(bandAt(row.bands, row.value)?.color ?? 0);
+          const state = bandAt(row.bands, row.value)?.text;
           return (
             <div
               class={`monitor-row ${
@@ -196,10 +195,12 @@ export function MonitorPanel({
                   class="monitor-value"
                   style={{
                     color:
-                      row.hasValue && row.cuts.length ? active : undefined,
+                      row.hasValue ? active : undefined,
                   }}
                 >
-                  {row.hasValue ? row.value.toFixed(row.digits) : "—"}
+                  {row.hasValue
+                    ? (state ?? row.value.toFixed(row.digits))
+                    : "—"}
                   {row.hasValue && row.unit && <em>{row.unit}</em>}
                 </strong>
               </div>

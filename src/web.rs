@@ -528,45 +528,60 @@ fn checked_label_sets(
         if !seen_names.insert(set.name.clone()) {
             return Err(format!("duplicate label set name \"{}\"", set.name));
         }
-        if set.entries.len() > 64 {
-            return Err("at most 64 labels are allowed per set".into());
+        if set.bands.len() > 64 {
+            return Err("at most 64 bands are allowed per set".into());
         }
-        let mut entries = Vec::with_capacity(set.entries.len());
-        for mut entry in set.entries {
-            if !entry.value.is_finite() {
-                return Err("label values must be finite numbers".into());
+        let mut bands = Vec::with_capacity(set.bands.len());
+        for mut band in set.bands {
+            if let Some(upper) = band.upper
+                && !upper.is_finite()
+            {
+                return Err("band bounds must be finite numbers".into());
             }
-            entry.text = entry.text.trim().to_string();
-            if entry.text.chars().count() > 80 {
-                return Err("label text is limited to 80 characters".into());
+            band.text = band.text.trim().to_string();
+            if band.text.chars().count() > 80 {
+                return Err("band text is limited to 80 characters".into());
             }
-            if let Some(color) = entry.color
+            if let Some(color) = band.color
                 && color > 63
             {
-                return Err("label color slot must be 0–63".into());
+                return Err("band color slot must be 0–63".into());
             }
-            if entry.text.is_empty() && entry.color.is_none() {
-                continue;
-            }
-            entries.push(entry);
+            bands.push(band);
         }
-        entries.sort_by(|a, b| a.value.total_cmp(&b.value));
-        if entries
-            .windows(2)
-            .any(|pair| pair[0].value == pair[1].value)
-        {
+        if bands.is_empty() {
             return Err(format!(
-                "label values must be unique in set \"{}\"",
+                "label set \"{}\" needs at least one band",
                 set.name
             ));
         }
-        if entries.is_empty() {
+        if bands.last().is_some_and(|band| band.upper.is_some()) {
             return Err(format!(
-                "label set \"{}\" needs at least one label",
+                "label set \"{}\" needs an open-ended final band",
                 set.name
             ));
         }
-        set.entries = entries;
+        bands.sort_by(|a, b| match (a.upper, b.upper) {
+            (Some(left), Some(right)) => left
+                .total_cmp(&right)
+                .then_with(|| a.inclusive.cmp(&b.inclusive)),
+            (Some(_), None) => std::cmp::Ordering::Less,
+            (None, Some(_)) => std::cmp::Ordering::Greater,
+            (None, None) => std::cmp::Ordering::Equal,
+        });
+        for pair in bands.windows(2) {
+            if pair[0].upper == pair[1].upper && pair[0].inclusive == pair[1].inclusive {
+                return Err(format!("duplicate band bound in set \"{}\"", set.name));
+            }
+        }
+        let open = bands.iter().filter(|band| band.upper.is_none()).count();
+        if open != 1 {
+            return Err(format!(
+                "label set \"{}\" needs exactly one open-ended band",
+                set.name
+            ));
+        }
+        set.bands = bands;
         if set.is_default {
             defaults += 1;
         }
@@ -586,15 +601,11 @@ fn checked_label_sets(
 /// Applies the editable parts of a Monitor row (not its signal). The row is
 /// UI/project state, so the web edit lands in place; only adding/removing a
 /// signal touches the bus.
-/// Applies the Monitor row editor. Bands stay atomic: a bad cut or color
-/// list leaves the previous row untouched. `key` is the canonical `sig:`
-/// spelling, so derived rows (whose parsed name is empty) match by id.
 fn edit_monitor_row(
     app: &mut App,
     key: &str,
     digits: Option<usize>,
-    cuts: Option<Vec<f64>>,
-    colors: Option<Vec<usize>>,
+    bands: Option<Vec<crate::band::Band>>,
 ) -> Result<(), String> {
     let Some(row) = app
         .monitor_view
@@ -604,25 +615,42 @@ fn edit_monitor_row(
     else {
         return Err("monitor row not found".to_string());
     };
-    let next_cuts = cuts.unwrap_or_else(|| row.cuts.clone());
-    if next_cuts.iter().any(|cut| !cut.is_finite()) {
-        return Err("monitor cuts must be finite numbers".to_string());
-    }
-    if next_cuts.windows(2).any(|pair| pair[1] <= pair[0]) {
-        return Err("monitor cuts must be strictly ascending".to_string());
-    }
-    let mut next_colors = colors.unwrap_or_else(|| row.colors.clone());
-    if next_colors.is_empty() {
-        next_colors.push(0);
-    }
-    if next_colors.len() != next_cuts.len() + 1 {
-        return Err("monitor colors need one entry per band".to_string());
+    if let Some(bands) = bands {
+        if bands.is_empty() {
+            return Err("monitor needs at least one band".to_string());
+        }
+        for band in &bands {
+            if band.upper.is_some_and(|upper| !upper.is_finite()) {
+                return Err("monitor bands must be finite".to_string());
+            }
+            if band.color.is_some_and(|color| color > 63) {
+                return Err("monitor color slot must be 0–63".to_string());
+            }
+        }
+        if bands.last().is_some_and(|band| band.upper.is_some()) {
+            return Err("monitor needs an open-ended final band".to_string());
+        }
+        for pair in bands.windows(2) {
+            match (pair[0].upper, pair[1].upper) {
+                (Some(left), Some(right)) if right < left => {
+                    return Err("monitor bands must be ordered".to_string());
+                }
+                (Some(left), Some(right))
+                    if left == right && pair[0].inclusive == pair[1].inclusive =>
+                {
+                    return Err("monitor bands need unique bounds".to_string());
+                }
+                (Some(left), Some(right)) if left == right && pair[0].inclusive => {
+                    return Err("at one bound, < must come before ≤".to_string());
+                }
+                _ => {}
+            }
+        }
+        row.bands = bands;
     }
     if let Some(digits) = digits {
         row.digits = digits.min(3);
     }
-    row.cuts = next_cuts;
-    row.colors = next_colors;
     Ok(())
 }
 
@@ -1098,27 +1126,14 @@ fn chart_move(app: &mut App, store: &mut SignalStore, key: &SigKey, to: usize) {
 
 /// Replaces a State row's custom value-definition bands. Cuts are sorted
 /// and deduplicated; names are padded so every band has a label.
-fn set_state_rule(app: &mut App, key: &SigKey, cuts: Vec<f64>, names: Vec<String>) {
+fn set_state_rule(app: &mut App, key: &SigKey, bands: Vec<crate::band::Band>) {
     let Some(window) = app.state_trackers.first_mut() else {
         app.fail("state rule needs a State Tracker window");
         return;
     };
-    let mut cuts: Vec<f64> = cuts.into_iter().filter(|value| value.is_finite()).collect();
-    cuts.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-    cuts.dedup_by(|a, b| (*a - *b).abs() < f64::EPSILON);
-    let mut names = names;
-    names.truncate(cuts.len() + 1);
-    while names.len() < cuts.len() + 1 {
-        names.push(format!("state {}", names.len()));
-    }
-    window.rules.insert(
-        key.clone(),
-        crate::observe::StateRule {
-            colors: vec![None; cuts.len() + 1],
-            cuts,
-            names,
-        },
-    );
+    window
+        .rules
+        .insert(key.clone(), crate::observe::StateRule { bands });
 }
 
 fn clear_state_rule(app: &mut App, key: &SigKey) {
@@ -1283,10 +1298,7 @@ fn state_bands_custom(
     }
     let label_of = |v: f64| {
         let band = rule.band(v);
-        rule.names
-            .get(band)
-            .cloned()
-            .unwrap_or_else(|| format!("band {band}"))
+        rule.label(band)
     };
     let mut bands = Vec::new();
     let mut open: Option<(usize, usize)> = None;
@@ -1298,12 +1310,8 @@ fn state_bands_custom(
                 bands.push(WebStateBand {
                     start: start as f64 / COLS as f64,
                     end: i as f64 / COLS as f64,
-                    label: rule
-                        .names
-                        .get(open_band)
-                        .cloned()
-                        .unwrap_or_else(|| format!("band {open_band}")),
-                    color: open_band % 8,
+                    label: rule.label(open_band),
+                    color: rule.color(open_band),
                 });
                 open = band.map(|band| (band, i));
             }
@@ -1314,12 +1322,8 @@ fn state_bands_custom(
         bands.push(WebStateBand {
             start: start as f64 / COLS as f64,
             end: 1.0,
-            label: rule
-                .names
-                .get(open_band)
-                .cloned()
-                .unwrap_or_else(|| format!("band {open_band}")),
-            color: open_band % 8,
+            label: rule.label(open_band),
+            color: rule.color(open_band),
         });
     }
     let current = last.map(label_of).unwrap_or_else(|| "-".to_string());
@@ -2529,8 +2533,7 @@ enum WebCommand {
     ConfigureMonitor {
         key: String,
         digits: Option<usize>,
-        cuts: Option<Vec<f64>>,
-        colors: Option<Vec<usize>>,
+        bands: Option<Vec<crate::band::Band>>,
     },
     /// One or two Monitor rows per line.
     SetMonitorColumns {
@@ -2601,8 +2604,7 @@ enum WebCommand {
         ext: bool,
         frame: Option<String>,
         name: String,
-        cuts: Vec<f64>,
-        names: Vec<String>,
+        bands: Vec<crate::band::Band>,
     },
     ClearStateRule {
         kind: String,
@@ -3629,13 +3631,8 @@ fn app_loop(
                         app.set_win_signal(crate::workspace::PopupTarget::Monitor, key, false);
                     }
                 }
-                WebCommand::ConfigureMonitor {
-                    key,
-                    digits,
-                    cuts,
-                    colors,
-                } => {
-                    if let Err(error) = edit_monitor_row(&mut app, &key, digits, cuts, colors) {
+                WebCommand::ConfigureMonitor { key, digits, bands } => {
+                    if let Err(error) = edit_monitor_row(&mut app, &key, digits, bands) {
                         app.fail(error);
                     }
                 }
@@ -3787,14 +3784,13 @@ fn app_loop(
                     ext,
                     frame,
                     name,
-                    cuts,
-                    names,
+                    bands,
                 } => {
                     let Some(key) = command_key(&app, &kind, ch, id, ext, frame, name) else {
                         app.fail(format!("unknown signal kind: {kind}"));
                         continue;
                     };
-                    set_state_rule(&mut app, &key, cuts, names);
+                    set_state_rule(&mut app, &key, bands);
                 }
                 WebCommand::ClearStateRule {
                     kind,
@@ -6366,8 +6362,7 @@ struct WebMonitorRow {
     has_value: bool,
     unit: String,
     digits: usize,
-    cuts: Vec<f64>,
-    colors: Vec<usize>,
+    bands: Vec<crate::band::Band>,
 }
 
 #[derive(Clone, Default, Serialize)]
@@ -6403,8 +6398,7 @@ struct WebDerivedDef {
     name: String,
     unit: String,
     expression: String,
-    cuts: Vec<f64>,
-    names: Vec<String>,
+    bands: Vec<crate::band::Band>,
     sources: Vec<crate::derived::DerivedSource>,
     #[serde(skip_serializing_if = "Option::is_none")]
     error: Option<String>,
@@ -6422,8 +6416,7 @@ struct WebStateBand {
 #[derive(Clone, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct WebStateRule {
-    cuts: Vec<f64>,
-    names: Vec<String>,
+    bands: Vec<crate::band::Band>,
 }
 
 #[derive(Clone, Default, Serialize)]
@@ -7494,8 +7487,7 @@ fn build_state(app: &App, series: &VecDeque<WebSeriesPoint>, fps: f64) -> WebSta
                         current,
                         bands,
                         rule: rule.map(|rule| WebStateRule {
-                            cuts: rule.cuts.clone(),
-                            names: rule.names.clone(),
+                            bands: rule.bands.clone(),
                         }),
                     }
                 })
@@ -7569,8 +7561,7 @@ fn build_state(app: &App, series: &VecDeque<WebSeriesPoint>, fps: f64) -> WebSta
                 has_value,
                 unit,
                 digits: row.digits,
-                cuts: row.cuts.clone(),
-                colors: row.colors.clone(),
+                bands: row.bands.clone(),
             }
         })
         .collect();
@@ -8014,8 +8005,7 @@ fn build_state(app: &App, series: &VecDeque<WebSeriesPoint>, fps: f64) -> WebSta
                 name: def.name.clone(),
                 unit: def.unit.clone(),
                 expression: def.expression.clone(),
-                cuts: def.cuts.clone(),
-                names: def.names.clone(),
+                bands: def.state_bands(),
                 sources: def.sources.clone(),
                 error: app
                     .snap
@@ -8504,24 +8494,32 @@ mod tests {
                 id: "status".into(),
                 name: "Status".into(),
                 is_default: true,
-                entries: vec![
-                    crate::bus::SysVarLabelEntry {
-                        value: 1.0,
-                        text: " Fault ".into(),
-                        color: Some(2),
-                    },
-                    crate::bus::SysVarLabelEntry {
-                        value: 0.0,
+                bands: vec![
+                    crate::band::Band {
+                        upper: Some(1.0),
+                        inclusive: false,
                         text: "Normal".into(),
                         color: Some(1),
+                    },
+                    crate::band::Band {
+                        upper: Some(1.0),
+                        inclusive: true,
+                        text: "Fault".into(),
+                        color: Some(2),
+                    },
+                    crate::band::Band {
+                        upper: None,
+                        inclusive: false,
+                        text: String::new(),
+                        color: None,
                     },
                 ],
             }],
         )
         .expect("labels");
-        assert_eq!(labeled.label_sets[0].entries[0].value, 0.0);
-        assert_eq!(labeled.label_sets[0].entries[1].text, "Fault");
-        assert_eq!(labeled.label_sets[0].entries[1].color, Some(2));
+        assert_eq!(labeled.label_sets[0].bands[0].text, "Normal");
+        assert_eq!(labeled.label_sets[0].bands[1].text, "Fault");
+        assert_eq!(labeled.label_sets[0].bands[1].color, Some(2));
         assert!(
             checked_sysvar(
                 "Demo".into(),
@@ -8535,15 +8533,23 @@ mod tests {
                     id: "bad".into(),
                     name: "Bad".into(),
                     is_default: true,
-                    entries: vec![
-                        crate::bus::SysVarLabelEntry {
-                            value: 1.0,
+                    bands: vec![
+                        crate::band::Band {
+                            upper: Some(1.0),
+                            inclusive: false,
                             text: "A".into(),
                             color: None,
                         },
-                        crate::bus::SysVarLabelEntry {
-                            value: 1.0,
+                        crate::band::Band {
+                            upper: Some(1.0),
+                            inclusive: false,
                             text: "B".into(),
+                            color: None,
+                        },
+                        crate::band::Band {
+                            upper: None,
+                            inclusive: false,
+                            text: String::new(),
                             color: None,
                         },
                     ],
@@ -8736,29 +8742,54 @@ mod tests {
             &mut app,
             &series_key(&key),
             Some(2),
-            Some(vec![87.5]),
-            Some(vec![3, 5]),
+            Some(vec![
+                crate::band::Band {
+                    upper: Some(87.5),
+                    inclusive: false,
+                    text: String::new(),
+                    color: Some(3),
+                },
+                crate::band::Band::final_band(Some(5)),
+            ]),
         )
         .unwrap();
         let state = build_state(&app, &VecDeque::new(), 0.0);
         let row = &state.monitor[0];
         assert_eq!(row.digits, 2);
-        assert_eq!(row.cuts, vec![87.5]);
-        assert_eq!(row.colors, vec![3, 5]);
+        assert_eq!(row.bands[0].upper, Some(87.5));
+        assert_eq!(row.bands[0].color, Some(3));
+        assert_eq!(row.bands[1].color, Some(5));
 
         assert!(
             edit_monitor_row(
                 &mut app,
                 &series_key(&key),
                 None,
-                Some(vec![10.0, 5.0]),
-                None,
+                Some(vec![
+                    crate::band::Band {
+                        upper: Some(10.0),
+                        inclusive: false,
+                        text: String::new(),
+                        color: Some(1),
+                    },
+                    crate::band::Band {
+                        upper: Some(5.0),
+                        inclusive: false,
+                        text: String::new(),
+                        color: Some(2),
+                    },
+                    crate::band::Band::final_band(Some(0)),
+                ]),
             )
             .is_err(),
-            "descending cuts are rejected"
+            "descending bands are rejected"
         );
         let state = build_state(&app, &VecDeque::new(), 0.0);
-        assert_eq!(state.monitor[0].cuts, vec![87.5], "a failed edit is atomic");
+        assert_eq!(
+            state.monitor[0].bands[0].upper,
+            Some(87.5),
+            "a failed edit is atomic"
+        );
 
         app.set_win_signal(crate::workspace::PopupTarget::Monitor, key, false);
         app.settle();
@@ -9190,9 +9221,20 @@ mod tests {
     #[test]
     fn state_custom_bands_use_cut_names() {
         let rule = crate::observe::StateRule {
-            cuts: vec![1.0],
-            names: vec!["low".to_string(), "high".to_string()],
-            colors: vec![None, None],
+            bands: vec![
+                crate::band::Band {
+                    upper: Some(1.0),
+                    inclusive: false,
+                    text: "low".to_string(),
+                    color: None,
+                },
+                crate::band::Band {
+                    upper: None,
+                    inclusive: false,
+                    text: "high".to_string(),
+                    color: None,
+                },
+            ],
         };
         let (current, bands) =
             state_bands_custom(Some(0.0), &[(10_000, 0.0), (20_000, 2.0)], 0, 40_000, &rule);
@@ -9213,13 +9255,31 @@ mod tests {
         set_state_rule(
             &mut app,
             &key,
-            vec![1000.0, 5000.0],
-            vec!["idle".into(), "cruise".into(), "fast".into()],
+            vec![
+                crate::band::Band {
+                    upper: Some(1000.0),
+                    inclusive: false,
+                    text: "idle".into(),
+                    color: None,
+                },
+                crate::band::Band {
+                    upper: Some(5000.0),
+                    inclusive: false,
+                    text: "cruise".into(),
+                    color: None,
+                },
+                crate::band::Band {
+                    upper: None,
+                    inclusive: false,
+                    text: "fast".into(),
+                    color: None,
+                },
+            ],
         );
         let state = build_state(&app, &VecDeque::new(), 0.0);
         let rule = state.state_rows[0].rule.as_ref().expect("rule saved");
-        assert_eq!(rule.cuts, vec![1000.0, 5000.0]);
-        assert_eq!(rule.names[2], "fast");
+        assert_eq!(rule.bands[1].upper, Some(5000.0));
+        assert_eq!(rule.bands[2].text, "fast");
 
         clear_state_rule(&mut app, &key);
         let state = build_state(&app, &VecDeque::new(), 0.0);
@@ -9947,6 +10007,7 @@ mod tests {
             name: "Double".into(),
             unit: "rpm".into(),
             expression: "[EngineSpeed] * 2".into(),
+            bands: Vec::new(),
             cuts: vec![1000.0],
             names: vec!["low".into(), "high".into()],
             sources: Vec::new(),

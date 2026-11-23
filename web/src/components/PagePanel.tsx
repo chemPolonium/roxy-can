@@ -39,12 +39,10 @@ import {
   clampPanelNumber,
   filterPanelOptions,
   findPanelSysVar,
-  panelBandIndex,
   panelGaugeArc,
   panelLampLit,
   panelMeterRatio,
-  panelSysVarEntry,
-  panelSysVarLabel,
+  panelLabelSet,
   panelWidgetCapability,
   resolvePanelSource,
   someIpMemberFor,
@@ -52,10 +50,11 @@ import {
   type PanelFrameDef,
   type PanelView,
 } from "../panelBinding";
+import { bandAt, bandsFromCuts, type Band } from "../bands";
+import { BandEditor } from "./BandEditor";
 import { palette, type Theme } from "../theme";
 import { copyText } from "../clipboard";
 import { ContextMenu } from "./ContextMenu";
-import { CutColorEditor } from "./CutColorEditor";
 import { NumberField } from "./NumberField";
 import { PaletteSwatches } from "./PaletteSwatches";
 import type { SomeIpFieldDef, SomeIpService, SysVar } from "../types";
@@ -115,6 +114,34 @@ function panelWidgetSysVar(
       : undefined;
   }
   return undefined;
+}
+
+function panelWidgetBands(widget: PanelWidget, view: PanelView): Band[] {
+  if (widget.kind === "value" || widget.kind === "toggle" || widget.kind === "setpoint") {
+    const variable = panelWidgetSysVar(widget, view);
+    if (variable) {
+      return panelLabelSet(variable, widget.labelSet)?.bands ?? [];
+    }
+    if (widget.kind === "value") {
+      return widget.bands ?? bandsFromCuts(widget.cuts, widget.colors);
+    }
+    return [];
+  }
+  if (widget.kind === "bar" || widget.kind === "gauge") {
+    const variable = panelWidgetSysVar(widget, view);
+    if (variable) {
+      return panelLabelSet(variable, widget.labelSet)?.bands ?? [];
+    }
+    return widget.bands ?? bandsFromCuts(widget.cuts, widget.colors);
+  }
+  if (widget.kind === "lamp") {
+    const variable = panelWidgetSysVar(widget, view);
+    if (variable) {
+      return panelLabelSet(variable, widget.labelSet)?.bands ?? [];
+    }
+    return widget.bands ?? [];
+  }
+  return [];
 }
 
 const EMPTY_HISTORY: History = { past: [], future: [] };
@@ -1279,18 +1306,6 @@ function SetpointControl({
   );
 }
 
-function meterColor(
-  value: number | null,
-  cuts: number[] | undefined,
-  colors: number[] | undefined,
-  palette: string[],
-): string {
-  const index = panelBandIndex(value, cuts);
-  return index === null
-    ? "var(--accent)"
-    : palette[Math.abs(colors?.[index] ?? 0) % palette.length];
-}
-
 function GaugeView({
   widget,
   value,
@@ -1908,33 +1923,12 @@ export function PagePanel({
     const capability = capabilityOf(widget);
     if (widget.kind === "value") {
       const resolved = resolvePanelSource(widget.source, view);
-      const variable = widget.source.trim().startsWith("sysvar:")
-        ? findPanelSysVar(
-            widget.source.trim().slice("sysvar:".length),
-            view,
-          )
-        : undefined;
-      const state = panelSysVarLabel(
-        variable,
-        resolved.value,
-        widget.labelSet,
-      );
-      const labelEntry = panelSysVarEntry(
-        variable,
-        resolved.value,
-        widget.labelSet,
-      );
-      const band = capability.enabled
-        ? panelBandIndex(resolved.value, widget.cuts)
-        : null;
+      const entry = bandAt(panelWidgetBands(widget, view), resolved.value);
+      const state = entry?.text || null;
       const color =
-        labelEntry?.color != null
-          ? monitorColors[Math.abs(labelEntry.color) % monitorColors.length]
-          : band === null
-            ? undefined
-            : monitorColors[
-                Math.abs(widget.colors?.[band] ?? 0) % monitorColors.length
-              ];
+        entry?.color != null
+          ? monitorColors[Math.abs(entry.color) % monitorColors.length]
+          : undefined;
       return (
         <div
           class={`page-value ${capability.enabled ? "" : "missing"}`}
@@ -1988,11 +1982,9 @@ export function PagePanel({
       }
       const variable = findPanelSysVar(widget.sysvar, view);
       const disabled = editing || !capability.enabled;
-      const state = panelSysVarLabel(
-        variable,
-        variable?.value ?? null,
-        widget.labelSet,
-      );
+      const state =
+        bandAt(panelWidgetBands(widget, view), variable?.value ?? null)?.text ||
+        null;
       return (
         <SysVarSetpointControl
           widget={widget}
@@ -2013,10 +2005,9 @@ export function PagePanel({
     if (widget.kind === "toggle") {
       const variable = findPanelSysVar(widget.sysvar, view);
       const on = (variable?.value ?? 0) !== 0;
-      const entry = panelSysVarEntry(
-        variable,
+      const entry = bandAt(
+        panelWidgetBands(widget, view),
         variable?.value ?? null,
-        widget.labelSet,
       );
       const state = entry?.text || null;
       const color =
@@ -2048,15 +2039,10 @@ export function PagePanel({
     }
     if (widget.kind === "lamp") {
       const resolved = resolvePanelSource(widget.source, view);
-      const variable = panelWidgetSysVar(widget, view);
-      const labelEntry = panelSysVarEntry(
-        variable,
-        resolved.value,
-        widget.labelSet,
-      );
+      const entry = bandAt(panelWidgetBands(widget, view), resolved.value);
       const color =
-        labelEntry?.color != null
-          ? monitorColors[Math.abs(labelEntry.color) % monitorColors.length]
+        entry?.color != null
+          ? monitorColors[Math.abs(entry.color) % monitorColors.length]
           : monitorColors[Math.abs(widget.color) % monitorColors.length];
       const lit = capability.enabled && panelLampLit(widget, resolved.value);
       return (
@@ -2067,8 +2053,7 @@ export function PagePanel({
           title={
             capability.enabled
               ? `${widget.source} · ${
-                  panelSysVarLabel(variable, resolved.value, widget.labelSet) ??
-                  formatPanelValue(resolved.value, 1)
+                  entry?.text || formatPanelValue(resolved.value, 1)
                 }`
               : capability.reason
           }
@@ -2092,22 +2077,12 @@ export function PagePanel({
     }
     if (widget.kind === "bar") {
       const resolved = resolvePanelSource(widget.source, view);
-      const variable = panelWidgetSysVar(widget, view);
-      const labelEntry = panelSysVarEntry(
-        variable,
-        resolved.value,
-        widget.labelSet,
-      );
-      const state = labelEntry?.text || null;
+      const entry = bandAt(panelWidgetBands(widget, view), resolved.value);
+      const state = entry?.text || null;
       const color =
-        labelEntry?.color != null
-          ? monitorColors[Math.abs(labelEntry.color) % monitorColors.length]
-          : meterColor(
-              resolved.value,
-              widget.cuts,
-              widget.colors,
-              monitorColors,
-            );
+        entry?.color != null
+          ? monitorColors[Math.abs(entry.color) % monitorColors.length]
+          : "var(--accent)";
       const ratio = capability.enabled
         ? panelMeterRatio(resolved.value, widget.min, widget.max)
         : null;
@@ -2144,21 +2119,11 @@ export function PagePanel({
     }
     if (widget.kind === "gauge") {
       const resolved = resolvePanelSource(widget.source, view);
-      const variable = panelWidgetSysVar(widget, view);
-      const labelEntry = panelSysVarEntry(
-        variable,
-        resolved.value,
-        widget.labelSet,
-      );
+      const entry = bandAt(panelWidgetBands(widget, view), resolved.value);
       const color =
-        labelEntry?.color != null
-          ? monitorColors[Math.abs(labelEntry.color) % monitorColors.length]
-          : meterColor(
-              resolved.value,
-              widget.cuts,
-              widget.colors,
-              monitorColors,
-            );
+        entry?.color != null
+          ? monitorColors[Math.abs(entry.color) % monitorColors.length]
+          : "var(--accent)";
       return (
         <div
           class={`page-gauge ${capability.enabled ? "" : "missing"}`}
@@ -2169,7 +2134,7 @@ export function PagePanel({
             widget={widget}
             value={resolved.value}
             unit={resolved.unit}
-            state={labelEntry?.text || null}
+            state={entry?.text || null}
             color={color}
           />
         </div>
@@ -2236,30 +2201,6 @@ export function PagePanel({
         />
       );
     }
-    if (fieldSpec.kind === "cuts") {
-      return (
-        <CutColorEditor
-          label={fieldSpec.label}
-          cuts={
-            widget.kind === "value" ||
-            widget.kind === "bar" ||
-            widget.kind === "gauge"
-              ? widget.cuts ?? []
-              : []
-          }
-          colors={
-            widget.kind === "value" ||
-            widget.kind === "bar" ||
-            widget.kind === "gauge"
-              ? widget.colors ?? []
-              : []
-          }
-          palette={monitorColors}
-          onFocus={pushHistory}
-          onChange={(cuts, colors) => update({ cuts, colors })}
-        />
-      );
-    }
     if (fieldSpec.kind === "color") {
       const current =
         widget.kind === "lamp" ? widget.color : 0;
@@ -2269,6 +2210,30 @@ export function PagePanel({
           value={current}
           onFocus={pushHistory}
           onChange={(slot) => update({ color: slot })}
+        />
+      );
+    }
+    if (fieldSpec.kind === "bands") {
+      if (
+        widget.kind !== "value" &&
+        widget.kind !== "lamp" &&
+        widget.kind !== "bar" &&
+        widget.kind !== "gauge"
+      ) {
+        return null;
+      }
+      const variable = panelWidgetSysVar(widget, view);
+      if (variable && variable.labelSets.length > 0) return null;
+      return (
+        <BandEditor
+          bands={
+            widget.bands ??
+            (widget.kind === "lamp"
+              ? []
+              : bandsFromCuts(widget.cuts, widget.colors))
+          }
+          colors={monitorColors}
+          onChange={(bands) => update({ bands })}
         />
       );
     }
@@ -2289,7 +2254,7 @@ export function PagePanel({
         variable.labelSets[0];
       return (
         <label>
-          Labels
+          Bands
           <select
             value={chosen}
             onFocus={pushHistory}
@@ -2302,7 +2267,7 @@ export function PagePanel({
             }}
           >
             <option value="">Default · {fallback.name}</option>
-            <option value="none">No labels</option>
+            <option value="none">No bands</option>
             {variable.labelSets.map((set) => (
               <option key={set.id} value={set.id}>
                 {set.name}

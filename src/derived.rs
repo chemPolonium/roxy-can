@@ -21,10 +21,14 @@ pub struct DerivedDef {
     #[serde(default)]
     pub unit: String,
     pub expression: String,
-    /// State observer band cuts, ascending. Empty means no bands.
+    /// State observer bands. Empty means no bands; legacy `cuts`/`names`
+    /// are converted on load.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub bands: Vec<crate::band::Band>,
+    /// Legacy state band cuts, ascending.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub cuts: Vec<f64>,
-    /// One name per band (`cuts.len() + 1` when present).
+    /// Legacy one name per band.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub names: Vec<String>,
     /// Reference text -> series key, resolved by the editor against the chart
@@ -36,7 +40,15 @@ pub struct DerivedDef {
 
 impl DerivedDef {
     pub fn has_rule(&self) -> bool {
-        !self.cuts.is_empty()
+        !self.bands.is_empty() || !self.cuts.is_empty()
+    }
+
+    pub fn state_bands(&self) -> Vec<crate::band::Band> {
+        if !self.bands.is_empty() {
+            self.bands.clone()
+        } else {
+            crate::band::from_cuts(&self.cuts, &[], &self.names)
+        }
     }
 }
 
@@ -446,6 +458,7 @@ mod tests {
             name: "Error".into(),
             unit: "km/h".into(),
             expression: "[A] - [B]".into(),
+            bands: Vec::new(),
             cuts: vec![10.0],
             names: vec!["ok".into(), "high".into()],
             sources: Vec::new(),

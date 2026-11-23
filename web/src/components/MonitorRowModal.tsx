@@ -1,25 +1,22 @@
 import { useEffect, useState } from "preact/hooks";
 import type { MonitorRow } from "../types";
 import { palette, type Theme } from "../theme";
-import { cutError, fitBandColors } from "../bandCuts";
-import { CutColorEditor } from "./CutColorEditor";
+import { validateBands } from "../bands";
+import { BandEditor } from "./BandEditor";
 import { ModalHeader } from "./ModalHeader";
 
 interface Props {
   row: MonitorRow;
   theme: Theme;
-  onApply: (digits: number, cuts: number[], colors: number[]) => void;
+  onApply: (digits: number, bands: MonitorRow["bands"]) => void;
   onClose: () => void;
 }
 
-/** Right-click a Monitor row: decimals, cut points and one color per band. */
+/** Right-click a Monitor row: decimals and colour bands. */
 export function MonitorRowModal({ row, theme, onApply, onClose }: Props) {
   const colors = palette(theme).monitors;
   const [digits, setDigits] = useState(row.digits);
-  const [cuts, setCuts] = useState(row.cuts);
-  const [bands, setBands] = useState(() =>
-    fitBandColors(row.colors, row.cuts.length + 1),
-  );
+  const [bands, setBands] = useState(row.bands);
 
   useEffect(() => {
     const close = (event: KeyboardEvent) => {
@@ -29,7 +26,7 @@ export function MonitorRowModal({ row, theme, onApply, onClose }: Props) {
     return () => window.removeEventListener("keydown", close);
   }, [onClose]);
 
-  const error = cutError(cuts);
+  const error = validateBands(bands);
 
   return (
     <div class="modal-backdrop" onMouseDown={onClose}>
@@ -48,9 +45,8 @@ export function MonitorRowModal({ row, theme, onApply, onClose }: Props) {
         />
         <div class="state-rule-body">
           <p class="hint">
-            Right-clicked from Monitor. Cut points split the value axis; each
-            band keeps its own palette color, and the value uses that color
-            while it is inside the band. Values are in {row.unit || "raw units"}.
+            Bands use &lt; or ≤ against an upper bound; the last band is
+            open-ended. Values are in {row.unit || "raw units"}.
           </p>
           <div class="monitor-style-row">
             <span>Decimals</span>
@@ -68,30 +64,19 @@ export function MonitorRowModal({ row, theme, onApply, onClose }: Props) {
               </button>
             ))}
           </div>
-          <CutColorEditor
-            label="Color cuts"
-            cuts={cuts}
-            colors={bands}
-            palette={colors}
-            strict={false}
-            onChange={(nextCuts, nextColors) => {
-              setCuts(nextCuts);
-              setBands(nextColors);
-            }}
-            onClear={() => {
-              setCuts([]);
-              setBands([bands[0] ?? 0]);
-            }}
+          <BandEditor
+            bands={bands}
+            colors={colors}
+            onChange={setBands}
           />
+          {error && <span class="sv-error">{error}</span>}
           <div class="state-rule-actions">
             <span class="spacer" />
             <button
               type="button"
               class="primary"
               disabled={!!error}
-              onClick={() =>
-                onApply(digits, cuts, fitBandColors(bands, cuts.length + 1))
-              }
+              onClick={() => onApply(digits, bands)}
             >
               Apply
             </button>

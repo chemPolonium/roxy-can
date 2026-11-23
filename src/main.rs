@@ -2,6 +2,7 @@ use std::io::IsTerminal;
 
 mod aggregate;
 mod app;
+mod band;
 mod block;
 mod bus;
 mod can;

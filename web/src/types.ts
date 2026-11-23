@@ -1,3 +1,4 @@
+import type { Band } from "./bands";
 export interface ReplayRecording {
   path: string;
   name: string;
@@ -353,17 +354,11 @@ export interface ScriptFunctionHelp {
   usage: string;
 }
 
-export interface SysVarLabelEntry {
-  value: number;
-  text?: string;
-  color?: number;
-}
-
-export interface SysVarLabelSet {
+export interface BandSet {
   id: string;
   name: string;
   isDefault: boolean;
-  entries: SysVarLabelEntry[];
+  bands: Band[];
 }
 
 export interface SysVar {
@@ -375,7 +370,7 @@ export interface SysVar {
   max: number | null;
   unit: string;
   comment: string;
-  labelSets: SysVarLabelSet[];
+  labelSets: BandSet[];
 }
 
 export interface MonitorRow {
@@ -395,9 +390,8 @@ export interface MonitorRow {
   hasValue: boolean;
   unit: string;
   digits: number;
-  /// Ascending cuts; `colors` holds one palette slot per band.
-  cuts: number[];
-  colors: number[];
+  /// Ordered display bands; last band is open-ended.
+  bands: Band[];
 }
 
 export interface DataRow {
@@ -430,8 +424,7 @@ export interface StateBand {
 }
 
 export interface StateRule {
-  cuts: number[];
-  names: string[];
+  bands: Band[];
 }
 
 export interface DerivedSource {
@@ -444,8 +437,7 @@ export interface DerivedDef {
   name: string;
   unit: string;
   expression: string;
-  cuts: number[];
-  names: string[];
+  bands: Band[];
   sources?: DerivedSource[];
   error?: string;
 }
@@ -906,7 +898,7 @@ export type Command =
       max: number | null;
       unit: string;
       comment: string;
-      label_sets: SysVarLabelSet[];
+      label_sets: BandSet[];
       old_namespace: string | null;
       old_name: string | null;
     }
@@ -941,8 +933,7 @@ export type Command =
       type: "configure_monitor";
       key: string;
       digits?: number;
-      cuts?: number[];
-      colors?: number[];
+      bands?: Band[];
     }
   | {
       type: "set_monitor_columns";
@@ -1011,8 +1002,7 @@ export type Command =
       ext: boolean;
       frame?: string;
       name: string;
-      cuts: number[];
-      names: string[];
+      bands: Band[];
     }
   | {
       type: "clear_state_rule";

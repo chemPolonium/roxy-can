@@ -4,9 +4,9 @@ import type {
   SomeIpMember,
   SomeIpService,
   SysVar,
-  SysVarLabelEntry,
-  SysVarLabelSet,
+  BandSet,
 } from "./types";
+import { bandIndex, type Band } from "./bands";
 import {
   panelFrameProblem,
   panelSetpointTarget,
@@ -165,7 +165,7 @@ export function findPanelSysVar(ref: string, view: PanelView): SysVar | undefine
 export function panelLabelSet(
   variable: SysVar | undefined,
   setId?: string | null,
-): SysVarLabelSet | undefined {
+): BandSet | undefined {
   if (!variable || setId === null) return undefined;
   if (setId !== undefined) {
     return variable.labelSets.find((set) => set.id === setId);
@@ -179,11 +179,11 @@ export function panelSysVarEntry(
   variable: SysVar | undefined,
   value: number | null,
   setId?: string | null,
-): SysVarLabelEntry | undefined {
-  if (value === null || !Number.isFinite(value)) return undefined;
-  return panelLabelSet(variable, setId)?.entries.find(
-    (entry) => entry.value === value,
-  );
+): Band | undefined {
+  const bands = panelLabelSet(variable, setId)?.bands;
+  if (!bands) return undefined;
+  const index = bandIndex(bands, value);
+  return index === null ? undefined : bands[index];
 }
 
 export function panelSysVarLabel(

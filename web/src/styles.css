@@ -8570,3 +8570,73 @@ body:has(.cm-tooltip-autocomplete) .script-signature {
   font-size: 10.5px;
   line-height: 1.35;
 }
+
+.palette-swatches {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 3px;
+}
+
+.palette-swatch {
+  width: 15px;
+  height: 15px;
+  min-width: 15px;
+  padding: 0;
+  border: 0;
+  border-radius: 1px;
+}
+
+.palette-swatch.on {
+  outline: 2px solid var(--text);
+  outline-offset: 2px;
+  box-shadow: 0 0 0 1px #10141a;
+}
+
+.band-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.band-editor-head {
+  display: flex;
+  justify-content: space-between;
+  color: var(--muted);
+  font-size: 9.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.band-row {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+}
+
+.band-mode {
+  flex: 0 0 40px;
+  width: 40px;
+  height: 22px;
+  padding: 0 3px;
+  font-size: 10px;
+}
+
+.band-bound {
+  flex: 0 0 78px;
+  width: 78px;
+  height: 22px;
+}
+
+.band-text {
+  flex: 0 1 180px;
+  width: 180px;
+  min-width: 90px;
+  height: 22px;
+}
+
+.band-clear {
+  flex: 0 0 22px;
+}

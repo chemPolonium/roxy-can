@@ -158,7 +158,7 @@ fn compute_segs_win(
     let mut segs = if let Some(rule) = rule {
         state_segments(held, pts, lo_us, hi_us, |v| {
             let b = rule.band(v);
-            (b as u64, rule.names[b].clone())
+            (b as u64, rule.label(b))
         })
     } else {
         state_segments(held, pts, lo_us, hi_us, |v| {

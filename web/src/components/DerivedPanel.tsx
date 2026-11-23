@@ -144,8 +144,7 @@ export function DerivedPanel({
             name: name.trim(),
             unit: unit.trim(),
             expression: expression.trim(),
-            cuts: [],
-            names: [],
+            bands: [],
           },
     );
     resetForm();
@@ -184,7 +183,7 @@ export function DerivedPanel({
                   title="Edit the State threshold bands"
                   onClick={() => onRule(definition)}
                 >
-                  {definition.cuts.length > 0 ? "Bands…" : "Add bands…"}
+                  {definition.bands.length > 0 ? "Bands…" : "Add bands…"}
                 </button>
               )}
               <button

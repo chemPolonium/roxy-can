@@ -2090,6 +2090,7 @@ fn derived_channels_sample_their_subscribed_sources() {
         name: "Sum".into(),
         unit: "V".into(),
         expression: "[A] + [B]".into(),
+        bands: Vec::new(),
         cuts: vec![12.0],
         names: vec!["low".into(), "high".into()],
         sources: Vec::new(),
@@ -7000,9 +7001,20 @@ fn the_state_tracker_round_trips_through_a_project() {
     app.state_trackers[0].rules.insert(
         key.clone(),
         crate::observe::StateRule {
-            cuts: vec![1000.0],
-            names: vec!["low".to_string(), "high".to_string()],
-            colors: vec![Some([0.2, 0.2, 0.8]), None],
+            bands: vec![
+                crate::band::Band {
+                    upper: Some(1000.0),
+                    inclusive: false,
+                    text: "low".to_string(),
+                    color: Some(0),
+                },
+                crate::band::Band {
+                    upper: None,
+                    inclusive: false,
+                    text: "high".to_string(),
+                    color: None,
+                },
+            ],
         },
     );
     // A default-mode override pinned on the signal's second key (the one
@@ -7027,10 +7039,13 @@ fn the_state_tracker_round_trips_through_a_project() {
         .rules
         .get(&key)
         .expect("custom bands ride the project file");
-    assert_eq!(rule.cuts, vec![1000.0]);
-    assert_eq!(rule.names, vec!["low", "high"]);
-    assert_eq!(rule.colors[0], Some([0.2, 0.2, 0.8]));
-    assert_eq!(rule.colors[1], None, "automatic survives the round trip");
+    assert_eq!(rule.bands[0].upper, Some(1000.0));
+    assert_eq!(rule.bands[0].text, "low");
+    assert_eq!(rule.bands[0].color, Some(0));
+    assert_eq!(
+        rule.bands[1].color, None,
+        "automatic survives the round trip"
+    );
     let restored_ov = restored.state_trackers[0]
         .overrides
         .get(&key)
@@ -8221,11 +8236,20 @@ fn sysvars_survive_a_project_roundtrip() {
                 id: "default".to_string(),
                 name: "Default".to_string(),
                 is_default: true,
-                entries: vec![crate::bus::SysVarLabelEntry {
-                    value: 2.5,
-                    text: "Nominal".to_string(),
-                    color: Some(1),
-                }],
+                bands: vec![
+                    crate::band::Band {
+                        upper: Some(2.5),
+                        inclusive: false,
+                        text: "Nominal".to_string(),
+                        color: Some(1),
+                    },
+                    crate::band::Band {
+                        upper: None,
+                        inclusive: false,
+                        text: String::new(),
+                        color: None,
+                    },
+                ],
             }],
             labels: Vec::new(),
         },
@@ -8245,7 +8269,7 @@ fn sysvars_survive_a_project_roundtrip() {
     assert_eq!(v.def.name, "Rate");
     assert_eq!(v.def.unit, "Hz");
     assert_eq!(v.def.init, 2.5);
-    assert_eq!(v.def.label_sets[0].entries[0].text, "Nominal");
+    assert_eq!(v.def.label_sets[0].bands[0].text, "Nominal");
     assert_eq!(v.value, 2.5, "value starts at init");
 }
 

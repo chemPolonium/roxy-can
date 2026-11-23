@@ -748,19 +748,9 @@ pub struct SysVarLabel {
     pub label: String,
 }
 
-/// One entry in a named display-label set. Text and color are independent:
-/// a set may be text-only, color-only, or both.
-#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
-pub struct SysVarLabelEntry {
-    pub value: f64,
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub text: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub color: Option<u8>,
-}
-
 /// A named view over a numeric system variable. Widgets reference the stable
 /// `id`; the `is_default` set is used when a widget has no explicit choice.
+/// Bands are ordered by upper bound and the last band is open-ended.
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SysVarLabelSet {
@@ -768,7 +758,7 @@ pub struct SysVarLabelSet {
     pub name: String,
     #[serde(default)]
     pub is_default: bool,
-    pub entries: Vec<SysVarLabelEntry>,
+    pub bands: Vec<crate::band::Band>,
 }
 
 /// One system variable definition: CANoe-style namespaced value with
@@ -822,11 +812,12 @@ impl SysVarDef {
             id: "default".to_string(),
             name: "Default".to_string(),
             is_default: true,
-            entries: self
+            bands: self
                 .labels
                 .iter()
-                .map(|label| SysVarLabelEntry {
-                    value: label.value,
+                .map(|label| crate::band::Band {
+                    upper: Some(label.value),
+                    inclusive: true,
                     text: label.label.clone(),
                     color: None,
                 })

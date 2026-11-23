@@ -1,13 +1,11 @@
 import { useEffect, useState } from "preact/hooks";
 import { ModalHeader } from "./ModalHeader";
 import { Tabs } from "./Tabs";
-import type {
-  SysVar,
-  SysVarLabelEntry,
-  SysVarLabelSet,
-} from "../types";
+import type { SysVar } from "../types";
+import type { Band } from "../bands";
+import { bandAt, finalBand, normaliseBands, validateBands } from "../bands";
+import { BandEditor } from "./BandEditor";
 import { palette, type Theme } from "../theme";
-import { PaletteSwatches } from "./PaletteSwatches";
 import type { DerivedDef, DerivedReference } from "../derived";
 import { DerivedPanel } from "./DerivedPanel";
 
@@ -19,7 +17,12 @@ export interface SysVarEdit {
   max: number | null;
   unit: string;
   comment: string;
-  labelSets: SysVarLabelSet[];
+  labelSets: {
+    id: string;
+    name: string;
+    isDefault: boolean;
+    bands: Band[];
+  }[];
   oldNamespace: string | null;
   oldName: string | null;
 }
@@ -39,17 +42,11 @@ interface Props {
   onClose: () => void;
 }
 
-interface DraftLabelEntry {
-  value: string;
-  text: string;
-  color: number | null;
-}
-
 interface DraftLabelSet {
   id: string;
   name: string;
   isDefault: boolean;
-  entries: DraftLabelEntry[];
+  bands: Band[];
 }
 
 interface Draft {
@@ -92,11 +89,7 @@ function editDraft(v: SysVar): Draft {
       id: labelSet.id,
       name: labelSet.name,
       isDefault: labelSet.isDefault,
-      entries: labelSet.entries.map((entry) => ({
-        value: String(entry.value),
-        text: entry.text ?? "",
-        color: entry.color ?? null,
-      })),
+      bands: labelSet.bands,
     })),
   };
 }
@@ -130,67 +123,35 @@ function validate(draft: Draft): { edit?: SysVarEdit; error: string } {
     return { error: `lower bound ${min} is greater than upper bound ${max}` };
   }
   if (draft.labelSets.length > 8) {
-    return { error: "at most 8 label sets are allowed" };
+    return { error: "at most 8 band sets are allowed" };
   }
-  const labelSets: SysVarLabelSet[] = [];
+  const labelSets: {
+    id: string;
+    name: string;
+    isDefault: boolean;
+    bands: Band[];
+  }[] = [];
   const ids = new Set<string>();
   const names = new Set<string>();
   let defaults = 0;
   for (const [labelSetIndex, labelSet] of draft.labelSets.entries()) {
     const id = labelSet.id.trim();
     const setName = labelSet.name.trim();
-    if (!id) return { error: `label set ${labelSetIndex + 1}: id is empty` };
-    if (!setName) return { error: `label set ${labelSetIndex + 1}: name is empty` };
-    if (ids.has(id)) return { error: `label set id "${id}" is duplicated` };
+    if (!id) return { error: `band set ${labelSetIndex + 1}: id is empty` };
+    if (!setName) return { error: `band set ${labelSetIndex + 1}: name is empty` };
+    if (ids.has(id)) return { error: `band set id "${id}" is duplicated` };
     if (names.has(setName)) {
-      return { error: `label set name "${setName}" is duplicated` };
+      return { error: `band set name "${setName}" is duplicated` };
     }
     ids.add(id);
     names.add(setName);
-    const entries: SysVarLabelEntry[] = [];
-    for (const [entryIndex, entry] of labelSet.entries.entries()) {
-      const text = entry.text.trim();
-      if (!entry.value.trim() && !text && entry.color == null) continue;
-      const value = Number(entry.value);
-      if (!entry.value.trim() || !Number.isFinite(value)) {
-        return {
-          error: `${setName}: label ${entryIndex + 1} value must be a number`,
-        };
-      }
-      if (text.length > 80) {
-        return { error: `${setName}: text is limited to 80 characters` };
-      }
-      if (entry.color != null && (!Number.isInteger(entry.color) || entry.color < 0 || entry.color > 63)) {
-        return { error: `${setName}: color slot must be 0–63` };
-      }
-      if (!text && entry.color == null) {
-        return {
-          error: `${setName}: label ${entryIndex + 1} needs text or color`,
-        };
-      }
-      if (entries.some((known) => known.value === value)) {
-        return {
-          error: `${setName}: value ${value} is duplicated`,
-        };
-      }
-      entries.push({
-        value,
-        ...(text ? { text } : {}),
-        ...(entry.color != null ? { color: entry.color } : {}),
-      });
-    }
-    if (entries.length === 0) {
-      return { error: `${setName}: add at least one label` };
-    }
-    if (entries.length > 64) {
-      return { error: `${setName}: at most 64 labels are allowed` };
-    }
-    entries.sort((a, b) => a.value - b.value);
+    const bands = normaliseBands(labelSet.bands);
+    const error = validateBands(bands);
+    if (error) return { error: `${setName}: ${error}` };
     if (labelSet.isDefault) defaults += 1;
-    labelSets.push({ id, name: setName, isDefault: labelSet.isDefault, entries });
-  }
-  if (defaults > 1) {
-    return { error: "only one label set can be the default" };
+    labelSets.push({ id, name: setName, isDefault: labelSet.isDefault, bands });
+  }  if (defaults > 1) {
+    return { error: "only one band set can be the default" };
   }
   if (labelSets.length > 0 && defaults === 0) {
     labelSets[0].isDefault = true;
@@ -222,9 +183,8 @@ function rangeText(v: SysVar): string {
 function currentLabel(v: SysVar): string | null {
   const set =
     v.labelSets?.find((entry) => entry.isDefault) ?? v.labelSets?.[0];
-  const entry = set?.entries.find((candidate) => candidate.value === v.value);
-  if (!entry) return null;
-  return entry.text || (entry.color != null ? `Color ${entry.color + 1}` : null);
+  const band = set ? bandAt(set.bands, v.value) : null;
+  return band?.text || null;
 }
 
 /** Editable live value; polling state refreshes it only while not typing. */
@@ -432,7 +392,7 @@ export function VariablesModal({
             </div>
             <div class="sv-labels">
               <div class="sv-labels-head">
-                <span>Label sets</span>
+                <span>Band sets</span>
                 <span>{draft.labelSets.length}/8</span>
               </div>
               {draft.labelSets.length === 0 && (
@@ -449,7 +409,7 @@ export function VariablesModal({
                       value={labelSet.name}
                       maxLength={40}
                       placeholder="Status"
-                      aria-label={`Label set ${labelSetIndex + 1} name`}
+                      aria-label={`Band set ${labelSetIndex + 1} name`}
                       onInput={(event) => {
                         const name = (event.target as HTMLInputElement).value;
                         set({
@@ -478,8 +438,8 @@ export function VariablesModal({
                     <button
                       type="button"
                       class="mini"
-                      title="Remove label set"
-                      aria-label={`Remove label set ${labelSet.name || labelSetIndex + 1}`}
+                      title="Remove band set"
+                      aria-label={`Remove band set ${labelSet.name || labelSetIndex + 1}`}
                       onClick={() =>
                         set({
                           labelSets: draft.labelSets.filter(
@@ -491,160 +451,18 @@ export function VariablesModal({
                       ×
                     </button>
                   </div>
-                  {labelSet.entries.map((entry, entryIndex) => (
-                    <div class="sv-label-entry" key={entryIndex}>
-                      <div class="sv-label-entry-main">
-                        <input
-                          class="sv-label-value"
-                        value={entry.value}
-                        inputMode="decimal"
-                        placeholder="value"
-                        aria-label={`${labelSet.name || "Set"} label ${entryIndex + 1} value`}
-                        onInput={(event) => {
-                          const value = (event.target as HTMLInputElement).value;
-                          set({
-                            labelSets: draft.labelSets.map((candidate, at) =>
-                              at === labelSetIndex
-                                ? {
-                                    ...candidate,
-                                    entries: candidate.entries.map(
-                                      (item, itemIndex) =>
-                                        itemIndex === entryIndex
-                                          ? { ...item, value }
-                                          : item,
-                                    ),
-                                  }
-                                : candidate,
-                            ),
-                          });
-                        }}
-                      />
-                      <input
-                        class="sv-label-text"
-                        value={entry.text}
-                        maxLength={80}
-                        placeholder="Normal"
-                        aria-label={`${labelSet.name || "Set"} label ${entryIndex + 1} text`}
-                        onInput={(event) => {
-                          const text = (event.target as HTMLInputElement).value;
-                          set({
-                            labelSets: draft.labelSets.map((candidate, at) =>
-                              at === labelSetIndex
-                                ? {
-                                    ...candidate,
-                                    entries: candidate.entries.map(
-                                      (item, itemIndex) =>
-                                        itemIndex === entryIndex
-                                          ? { ...item, text }
-                                          : item,
-                                    ),
-                                  }
-                                : candidate,
-                            ),
-                          });
-                        }}
-                      />
-                      </div>
-                      <div class="sv-label-entry-colors">
-                        <span class="sv-label-color-label">Colour</span>
-                        <PaletteSwatches
-                        colors={monitorColors}
-                        value={entry.color ?? 0}
-                        compact
-                        onChange={(color) =>
-                          set({
-                            labelSets: draft.labelSets.map((candidate, at) =>
-                              at === labelSetIndex
-                                ? {
-                                    ...candidate,
-                                    entries: candidate.entries.map(
-                                      (item, itemIndex) =>
-                                        itemIndex === entryIndex
-                                          ? { ...item, color }
-                                          : item,
-                                    ),
-                                  }
-                                : candidate,
-                            ),
-                          })
-                        }
-                      />
-                      {entry.color != null && (
-                        <button
-                          type="button"
-                          class="mini sv-label-clear"
-                          title="Remove colour"
-                          aria-label="Remove colour"
-                          onClick={() =>
-                            set({
-                              labelSets: draft.labelSets.map((candidate, at) =>
-                                at === labelSetIndex
-                                  ? {
-                                      ...candidate,
-                                      entries: candidate.entries.map(
-                                        (item, itemIndex) =>
-                                          itemIndex === entryIndex
-                                            ? { ...item, color: null }
-                                            : item,
-                                      ),
-                                    }
-                                  : candidate,
-                              ),
-                            })
-                          }
-                        >
-                          ×
-                        </button>
-                      )}
-                      <button
-                        type="button"
-                        class="mini"
-                        title="Remove label"
-                        aria-label="Remove label"
-                        onClick={() =>
-                          set({
-                            labelSets: draft.labelSets.map((candidate, at) =>
-                              at === labelSetIndex
-                                ? {
-                                    ...candidate,
-                                    entries: candidate.entries.filter(
-                                      (_, itemIndex) => itemIndex !== entryIndex,
-                                    ),
-                                  }
-                                : candidate,
-                            ),
-                          })
-                        }
-                      >
-                        ×
-                      </button>
-                      </div>
-                    </div>
-                  ))}
-                  <div>
-                    <button
-                      type="button"
-                      class="mini"
-                      disabled={labelSet.entries.length >= 64}
-                      onClick={() =>
-                        set({
-                          labelSets: draft.labelSets.map((candidate, at) =>
-                            at === labelSetIndex
-                              ? {
-                                  ...candidate,
-                                  entries: [
-                                    ...candidate.entries,
-                                    { value: "", text: "", color: null },
-                                  ],
-                                }
-                              : candidate,
-                          ),
-                        })
-                      }
-                    >
-                      + Label
-                    </button>
-                  </div>
+                  <BandEditor
+                    bands={labelSet.bands}
+                    colors={monitorColors}
+                    label="Bands"
+                    onChange={(bands) =>
+                      set({
+                        labelSets: draft.labelSets.map((candidate, at) =>
+                          at === labelSetIndex ? { ...candidate, bands } : candidate,
+                        ),
+                      })
+                    }
+                  />
                 </div>
               ))}
               <div>
@@ -661,15 +479,15 @@ export function VariablesModal({
                         ...draft.labelSets,
                         {
                           id: `labels${n}`,
-                          name: `Labels ${n}`,
+                          name: `Bands ${n}`,
                           isDefault: draft.labelSets.length === 0,
-                          entries: [{ value: "", text: "", color: null }],
+                          bands: [finalBand()],
                         },
                       ],
                     });
                   }}
                 >
-                  + Label set
+                  + Band set
                 </button>
               </div>
             </div>

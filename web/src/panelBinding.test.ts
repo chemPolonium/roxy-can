@@ -79,16 +79,21 @@ describe("panel bindings", () => {
           id: "status",
           name: "Status",
           isDefault: true,
-          entries: [
-            { value: 0, text: "Normal" },
-            { value: 1, text: "Component A error" },
+          bands: [
+            { upper: 1, inclusive: false, text: "Normal" },
+            { upper: 1, inclusive: true, text: "Component A error" },
+            { upper: null, inclusive: false },
           ],
         },
         {
           id: "color",
           name: "Color",
           isDefault: false,
-          entries: [{ value: 1, color: 2 }],
+          bands: [
+            { upper: 1, inclusive: false, color: 1 },
+            { upper: 1, inclusive: true, color: 2 },
+            { upper: null, inclusive: false, color: 5 },
+          ],
         },
       ],
     };

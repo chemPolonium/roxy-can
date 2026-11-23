@@ -149,16 +149,13 @@ fn direct_folder(path: &str) -> String {
 }
 
 /// One row of the Monitor window: a watched signal, its display name, the
-/// decimals shown, and optional value bands. Ascending `cuts` split the
-/// value axis; band `i` holds `cuts[i-1] <= v < cuts[i]` and takes
-/// `colors[i]` from the Monitor palette. No cuts means normal text.
+/// decimals shown, and optional value bands.
 #[derive(Clone, Debug, PartialEq)]
 pub struct MonitorRow {
     pub key: crate::observe::SigKey,
     pub label: String,
     pub digits: usize,
-    pub cuts: Vec<f64>,
-    pub colors: Vec<usize>,
+    pub bands: Vec<crate::band::Band>,
 }
 
 /// Rows watched by the Monitor panel plus its single/two-column preference.
@@ -187,8 +184,7 @@ impl Default for MonitorRow {
             ),
             label: String::new(),
             digits: 1,
-            cuts: Vec::new(),
-            colors: vec![0],
+            bands: vec![crate::band::Band::final_band(Some(0))],
         }
     }
 }
@@ -881,9 +877,7 @@ impl App {
             return None;
         }
         Some(crate::observe::StateRule {
-            cuts: def.cuts.clone(),
-            names: def.names.clone(),
-            colors: vec![None; def.names.len().max(def.cuts.len() + 1)],
+            bands: def.state_bands(),
         })
     }
 
