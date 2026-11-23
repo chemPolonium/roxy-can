@@ -239,7 +239,7 @@ roxy-can -h                               完整帮助
 ## 系统变量
 
 - **Setup → Variables…**：CANoe 式命名空间变量。表里列 namespace、name、实时值（行内可改）、Init、Min、Max、单位/备注。定义随工程保存。
-- **Bands**：工程可维护多套命名 BandSet，变量和控件通过 id 引用，每段是一个 `<` 或 `≤` 的上限，最后一段无上限；每段可选 `text`、`color` 或两者都有。例如 `Status` 给“正常 / 部件出错”，`Color` 只给调色板颜色。Variables 的 **Band sets** 页统一增删改；Panel 的 Value / Toggle / Setpoint / Bar / Gauge / Lamp 在属性栏 **Bands** 里选一套，也可以选 **No bands**。文字缺失时回退数字，颜色缺失时回退默认色；脚本、触发器、曲线和统计继续使用数值。旧工程的 cut/color 和 cut/name 会在加载时转换成 Bands。
+- **Bands**：工程可维护多套命名 BandSet，变量和控件通过 id 引用，每段是一个 `<` 或 `≤` 的上限，最后一段无上限；每段可选 `text`、`color` 或两者都有。例如 `Status` 给“正常 / 部件出错”，`Color` 只给调色板颜色。Variables 的 **Band sets** 页统一增删改；Panel 的 Value / Toggle / Setpoint / Bar / Gauge / Lamp 在属性栏 **Bands** 里选一套，也可以选 **No bands**。文字缺失时先回退 DBC `VAL_` 标签，再回退数字；颜色缺失时回退默认色；脚本、触发器、曲线和统计继续使用数值。旧工程的 cut/color 和 cut/name 会在加载时转换成 Bands。
 - 脚本用 `sys_get("ns::name")` / `sys_set("ns::name", v)` 读写系统变量；信号用 `报文名.信号名`（非标识符名字用 `报文名["信号 名"]`）读取。写入被夹在界限内；引用未定义的变量/报文/信号在节点启动时报出来。
 - 每个变量发布为一条可观测流，信号树里按 namespace 分组。
 - 每次开始测量所有变量回到声明的初值。值为数值型；改名 = 删旧 + 建新，脚本引用不会自动跟随。

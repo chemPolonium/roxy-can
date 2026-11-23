@@ -343,7 +343,7 @@ export type PanelFieldKey = keyof PanelWidgetPatch;
 export interface PanelFieldSpec {
   key: PanelFieldKey;
   label: string;
-  kind: "text" | "select" | "list" | "digits" | "number" | "bands" | "color" | "frame";
+  kind: "text" | "select" | "list" | "digits" | "number" | "color" | "frame";
   options?: { value: string; label: string }[];
   placeholder?: string;
   maxLength?: number;
@@ -640,7 +640,6 @@ const VALUE_FIELDS: PanelFieldSpec[] = [
   SOURCE_FIELD,
   { key: "digits", label: "Decimals", kind: "digits" },
   { key: "labelSet", label: "Bands", kind: "select" },
-  { key: "bands", label: "Bands", kind: "bands" },
 ];
 
 const TOGGLE_FIELDS: PanelFieldSpec[] = [
@@ -653,7 +652,7 @@ const TOGGLE_FIELDS: PanelFieldSpec[] = [
     listId: "page-sysvars",
     placeholder: "namespace::name",
   },
-  { key: "labelSet", label: "Labels", kind: "select" },
+  { key: "labelSet", label: "Bands", kind: "select" },
 ];
 
 const SETPOINT_FIELDS: PanelFieldSpec[] = [
@@ -684,7 +683,7 @@ const SETPOINT_FIELDS: PanelFieldSpec[] = [
     placeholder: "channel:id:signal",
   },
   { key: "digits", label: "Decimals", kind: "digits" },
-  { key: "labelSet", label: "Labels", kind: "select" },
+  { key: "labelSet", label: "Bands", kind: "select" },
   {
     key: "step",
     label: "Step",
@@ -716,7 +715,6 @@ const LAMP_FIELDS: PanelFieldSpec[] = [
     kind: "color",
   },
   { key: "labelSet", label: "Bands", kind: "select" },
-  { key: "bands", label: "Bands", kind: "bands" },
 ];
 
 const METER_FIELDS: PanelFieldSpec[] = [
@@ -726,7 +724,6 @@ const METER_FIELDS: PanelFieldSpec[] = [
   { key: "max", label: "Maximum", kind: "number", placeholder: "100" },
   { key: "digits", label: "Decimals", kind: "digits" },
   { key: "labelSet", label: "Bands", kind: "select" },
-  { key: "bands", label: "Bands", kind: "bands" },
 ];
 
 const BUTTON_SPEC: PanelWidgetSpec = {

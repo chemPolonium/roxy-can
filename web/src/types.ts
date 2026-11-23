@@ -114,6 +114,7 @@ export interface SignalSeries {
   bus: string;
   unit: string;
   color: number;
+  label?: string | null;
   /** Read-only: subscribe and show at cursors without drawing a lane. */
   read: boolean;
   /** `[seconds, value]`, oldest first. */
@@ -394,6 +395,7 @@ export interface MonitorRow {
   /// Ordered display bands; last band is open-ended.
   bands: Band[];
   bandSetId?: string | null;
+  enumLabel?: string | null;
 }
 
 export interface DataRow {

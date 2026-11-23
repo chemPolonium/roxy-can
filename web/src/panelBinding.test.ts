@@ -117,16 +117,19 @@ describe("panel bindings", () => {
     expect(resolvePanelSource("0:256:EngineSpeed", view)).toEqual({
       value: 900,
       unit: "rpm",
+      label: null,
       known: true,
     });
     expect(resolvePanelSource("derived:speed", view)).toEqual({
       value: 12.5,
       unit: "rpm",
+      label: null,
       known: true,
     });
     expect(resolvePanelSource("sysvar:Bench::Ready", view)).toEqual({
       value: 1,
       unit: "",
+      label: null,
       known: true,
     });
     expect(resolvePanelSource("nope", view).known).toBe(false);
@@ -277,7 +280,7 @@ describe("panel bindings", () => {
       panelValueCapability(value("missing"), resolvePanelSource("missing", view))
         .reason,
     ).toContain("Unknown source");
-    expect(panelValueCapability(value("k"), { value: null, unit: "", known: true }).enabled).toBe(
+    expect(panelValueCapability(value("k"), { value: null, unit: "", label: null, known: true }).enabled).toBe(
       true,
     );
     expect(panelToggleCapability(toggle(""), view).reason).toBe(

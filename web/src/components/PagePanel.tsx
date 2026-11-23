@@ -50,7 +50,6 @@ import {
   type PanelView,
 } from "../panelBinding";
 import { bandAt, bandsFromCuts, type Band } from "../bands";
-import { BandEditor } from "./BandEditor";
 import { palette, type Theme } from "../theme";
 import { copyText } from "../clipboard";
 import { ContextMenu } from "./ContextMenu";
@@ -1915,7 +1914,7 @@ export function PagePanel({
     if (widget.kind === "value") {
       const resolved = resolvePanelSource(widget.source, view);
       const entry = bandAt(panelWidgetBands(widget, view), resolved.value);
-      const state = entry?.text || null;
+      const state = entry?.text || resolved.label || null;
       const color =
         entry?.color != null
           ? monitorColors[Math.abs(entry.color) % monitorColors.length]
@@ -2044,7 +2043,9 @@ export function PagePanel({
           title={
             capability.enabled
               ? `${widget.source} · ${
-                  entry?.text || formatPanelValue(resolved.value, 1)
+                  entry?.text ||
+                  resolved.label ||
+                  formatPanelValue(resolved.value, 1)
                 }`
               : capability.reason
           }
@@ -2069,7 +2070,7 @@ export function PagePanel({
     if (widget.kind === "bar") {
       const resolved = resolvePanelSource(widget.source, view);
       const entry = bandAt(panelWidgetBands(widget, view), resolved.value);
-      const state = entry?.text || null;
+      const state = entry?.text || resolved.label || null;
       const color =
         entry?.color != null
           ? monitorColors[Math.abs(entry.color) % monitorColors.length]
@@ -2125,7 +2126,7 @@ export function PagePanel({
             widget={widget}
             value={resolved.value}
             unit={resolved.unit}
-            state={entry?.text || null}
+            state={entry?.text || resolved.label || null}
             color={color}
           />
         </div>
@@ -2204,30 +2205,6 @@ export function PagePanel({
         />
       );
     }
-    if (fieldSpec.kind === "bands") {
-      if (
-        widget.kind !== "value" &&
-        widget.kind !== "lamp" &&
-        widget.kind !== "bar" &&
-        widget.kind !== "gauge"
-      ) {
-        return null;
-      }
-      const variable = panelWidgetSysVar(widget, view);
-      if (variable && variable.labelSets.length > 0) return null;
-      return (
-        <BandEditor
-          bands={
-            widget.bands ??
-            (widget.kind === "lamp"
-              ? []
-              : bandsFromCuts(widget.cuts, widget.colors))
-          }
-          colors={monitorColors}
-          onChange={(bands) => update({ bands })}
-        />
-      );
-    }
     if (fieldSpec.key === "labelSet") {
       if (!("labelSet" in widget)) return null;
       if (
@@ -2237,10 +2214,17 @@ export function PagePanel({
         return null;
       }
       const variable = panelWidgetSysVar(widget, view);
-      if (!variable || (view.bandSets ?? []).length === 0) return null;
+      const inlineSource =
+        widget.kind === "value" ||
+        widget.kind === "lamp" ||
+        widget.kind === "bar" ||
+        widget.kind === "gauge";
+      if ((!variable && !inlineSource) || (view.bandSets ?? []).length === 0) {
+        return null;
+      }
       const chosen =
         widget.labelSet === null ? "none" : (widget.labelSet ?? "");
-      const fallback = variable.bandSetId
+      const fallback = variable?.bandSetId
         ? view.bandSets?.find((set) => set.id === variable.bandSetId)
         : undefined;
       return (

@@ -73,11 +73,12 @@ export interface PanelWriteTarget {
 export interface PanelSourceValue {
   value: number | null;
   unit: string;
+  label: string | null;
   /// False when the source is empty or names nothing the session knows.
   known: boolean;
 }
 
-const EMPTY: PanelSourceValue = { value: null, unit: "", known: false };
+const EMPTY: PanelSourceValue = { value: null, unit: "", label: null, known: false };
 
 /// Latest value of a signal key, `derived:Name` or `sysvar:ns::name`.
 export function resolvePanelSource(
@@ -95,7 +96,7 @@ export function resolvePanelSource(
         )
       : undefined;
     if (!variable) return EMPTY;
-    return { value: variable.value, unit: variable.unit, known: true };
+    return { value: variable.value, unit: variable.unit, label: null, known: true };
   }
   const series = trimmed.startsWith("derived:")
     ? view.signals.find(
@@ -106,11 +107,17 @@ export function resolvePanelSource(
     : view.signals.find((entry) => entry.key === trimmed);
   if (!series) return EMPTY;
   if (series.points.length === 0) {
-    return { value: null, unit: series.unit, known: true };
+    return {
+      value: null,
+      unit: series.unit,
+      label: series.label ?? null,
+      known: true,
+    };
   }
   return {
     value: series.points[series.points.length - 1][1],
     unit: series.unit,
+    label: series.label ?? null,
     known: true,
   };
 }

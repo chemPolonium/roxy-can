@@ -4854,6 +4854,10 @@ struct SignalSeries {
     bus: String,
     unit: String,
     color: usize,
+    /// Latest DBC `VAL_` label, used as the text fallback when no band names
+    /// the current value.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    label: Option<String>,
     /// True for a signal subscribed only for cursor readout: no lane, but
     /// its history participates in the A/B table.
     read: bool,
@@ -5155,7 +5159,10 @@ impl SignalStore {
             self.last_t = vec![0; signals.len()];
             for (i, signal) in signals.iter().enumerate() {
                 let sub = signal_sub(app, &signal.key);
-                let meta = signal_meta(signal);
+                let mut meta = signal_meta(signal);
+                if let Some(sub) = sub {
+                    meta.label = sub.label.clone();
+                }
                 let mut points = VecDeque::new();
                 if let Some(sub) = sub {
                     let all: Vec<(u64, f64)> = sub.history.iter().copied().collect();
@@ -5178,6 +5185,7 @@ impl SignalStore {
                 continue;
             };
             buffer.meta = signal_meta(signal);
+            buffer.meta.label = sub.label.clone();
             let last = self.last_t.get(i).copied().unwrap_or(0);
             for &(t, value) in sub.history.iter() {
                 if t > last {
@@ -5437,6 +5445,7 @@ fn signal_meta(signal: &SelectedSignal) -> SignalSeries {
         bus: signal.bus.clone(),
         unit: signal.unit.clone(),
         color: signal.color,
+        label: None,
         read: signal.read,
         points: Vec::new(),
     }
@@ -6514,6 +6523,8 @@ struct WebMonitorRow {
     bands: Vec<crate::band::Band>,
     #[serde(skip_serializing_if = "Option::is_none")]
     band_set_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    enum_label: Option<String>,
 }
 
 #[derive(Clone, Default, Serialize)]
@@ -7726,6 +7737,7 @@ fn build_state(app: &App, series: &VecDeque<WebSeriesPoint>, fps: f64) -> WebSta
                     .map(|set| set.bands.clone())
                     .unwrap_or_else(|| row.bands.clone()),
                 band_set_id: row.band_set_id.clone(),
+                enum_label: signal_sub(app, &row.key).and_then(|sub| sub.label.clone()),
             }
         })
         .collect();

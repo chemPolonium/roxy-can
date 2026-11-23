@@ -199,7 +199,7 @@ export function MonitorPanel({
                   }}
                 >
                   {row.hasValue
-                    ? (state ?? row.value.toFixed(row.digits))
+                    ? (state ?? row.enumLabel ?? row.value.toFixed(row.digits))
                     : "—"}
                   {row.hasValue && row.unit && <em>{row.unit}</em>}
                 </strong>
