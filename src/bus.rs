@@ -7740,7 +7740,7 @@ impl BusCore {
                 }
             }
         }
-        let note = wire_note(self.hw.buses.len(), self.hw.live);
+        let note = wire_note(self.hw.attached_count(), self.hw.live);
         *status = if block_notes.is_empty() {
             format!("measuring ({note})")
         } else {

@@ -401,6 +401,12 @@ impl Hardware {
             || !self.eth_ports.is_empty()
     }
 
+    /// Every attached port, regardless of driver or bus kind. The status line
+    /// counts all of them so a FlexRay-only bench is not called "simulation".
+    pub fn attached_count(&self) -> usize {
+        self.buses.len() + self.fr_watches.len() + self.eth_ports.len()
+    }
+
     /// Whether the bus's attachment has FD data-phase params applied.
     pub fn fd(&self, bus: u8) -> bool {
         self.buses.get(&bus).is_some_and(|bh| bh.port.fd())
@@ -805,6 +811,15 @@ impl Hardware {
 mod tests {
     use super::*;
     use crate::can::frame::{CanFrame, Direction, FrameFlags, MAX_CAN_FD_LEN};
+
+    /// The status line counts FlexRay watches too, not just CAN ports.
+    #[test]
+    fn attached_count_includes_flexray_watches() {
+        let mut hw = Hardware::new();
+        hw.attach_mock(0);
+        hw.attach_fr_mock(0, 5);
+        assert_eq!(hw.attached_count(), 2);
+    }
 
     /// A hardware batch keeps the adapter's spacing instead of collapsing
     /// every frame onto the poll instant; frames without a driver time still

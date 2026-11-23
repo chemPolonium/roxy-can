@@ -14,7 +14,7 @@
 
 - **Profile 通道号**：`profiles/*.toml` 的 `[[hw]]` 仍是裸索引，插第二台设备会指错口；改成按设备名匹配，或名字 + 编号双校验、错配整份拒绝。
 - **Vector 拔插验收**：VN1610 的 500 kbit/s / 2 Mbit/s FD 配置与双机对连已通过；物理拔插后的 PnP 复核、其他型号与同型号多台的离线判定待补。
-- **FlexRay 真实帧**：FRLoop 运行时能否被动收到、`ab` 通道偏移尚未坐实。
+- **FlexRay 真实帧**：VN7640 FlexRay RX 口已完成枚举、FIBEX/ARXML 配置打开和 App attach / start / stop 自检；FRLoop 实际收帧、槽/cycle 解码与 `ab` 通道偏移仍未验收。
 - **屏幕验收**：FlexRay 下拉回显、`发送被拒 ×N`、断开后端口是否真正关闭、Vector 设备拔出后的列表刷新。
 
 ## 零散

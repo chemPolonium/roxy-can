@@ -122,5 +122,6 @@ DBC 与 ARXML 都只读：解析出的事实先进统一模型（`Cluster → Ne
 - **Web 界面**用 `npm run build`（TypeScript + Vite）和浏览器实机检查覆盖：主要页面、四种布局、虚拟滚动、曲线抽稀与弹窗交互都要在 1280×800 / 1024×768 下实际打开确认。逻辑测试挡住数据错误，构建挡住类型错误，二者都挡不住的交互问题只能靠这一步。
 - **真实交互**（点击、拖拽、列宽与滚动映射、弹窗里按钮的实际效果）没有完整的自动化测试，只能人工或 CDP 脚本确认：面板级改动要"打开每个页面、切换四种布局、点开每个弹窗"逐一确认。
 - **Vector 台架**用 `ROXY_VECTOR_BENCH=1 cargo test vector_bench_loops -- --ignored --nocapture` 自动跑：两根对连的物理口按经典 500 kbit/s 与 FD 500/2M、5M、8M（64 字节、BRS）双向对发，按帧 id 过滤同一总线上的其他流量；物理拔插仍只能人工。
+- **FlexRay RX 台架**：VN7640 的 FlexRay 口已用最小 ARXML 做过自检：`--vector-probe --fibex` 能解析集群、打开 ch0（`VALID_CLUSTER_CFG`），App 内 attach / start / stop 正常；空载 2 秒 drain 为 0 帧。实际收帧、槽/cycle 解码和 A/B 偏移仍需带流量的台架。
 
 计时类断言都在同机对照（同一轮里先量一个基线再比），不用绝对阈值；缺测试数据的用例必须失败，不许跳过。规矩写在 CI 配置顶部。
