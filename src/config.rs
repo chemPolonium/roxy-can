@@ -350,6 +350,16 @@ fn is_zero_usize(value: &usize) -> bool {
     *value == 0
 }
 
+fn legacy_band_id(sets: &[crate::band::BandSet], kind: &str, seed: usize) -> String {
+    let mut n = seed;
+    loop {
+        let id = format!("legacy:{kind}:{n}");
+        if sets.iter().all(|set| set.id != id) {
+            return id;
+        }
+        n += 1;
+    }
+}
 fn digits_default() -> usize {
     1
 }
@@ -1302,6 +1312,44 @@ impl ProjectSettings {
             def.labels.clear();
         }
         app.band_sets = band_sets;
+        // Promote observer/derived inline bands into the same project library.
+        // The original copy stays on the target until the next save so a
+        // deleted set still has a fallback.
+        for (index, row) in app.monitor_view.rows.iter_mut().enumerate() {
+            if row.band_set_id.is_none() && !row.bands.is_empty() {
+                let id = legacy_band_id(&app.band_sets, "monitor", index);
+                row.band_set_id = Some(id.clone());
+                app.band_sets.push(crate::band::BandSet {
+                    id,
+                    name: format!("Monitor · {}", row.label),
+                    bands: row.bands.clone(),
+                });
+            }
+        }
+        for (window, win) in app.state_trackers.iter_mut().enumerate() {
+            for (slot, (_, rule)) in win.rules.iter_mut().enumerate() {
+                if rule.band_set_id.is_none() && !rule.bands.is_empty() {
+                    let id = legacy_band_id(&app.band_sets, "state", window * 1000 + slot);
+                    rule.band_set_id = Some(id.clone());
+                    app.band_sets.push(crate::band::BandSet {
+                        id,
+                        name: format!("State · {}", rule.label(0)),
+                        bands: rule.bands.clone(),
+                    });
+                }
+            }
+        }
+        for def in &mut app.derived_defs {
+            if def.band_set_id.is_none() && !def.bands.is_empty() {
+                let id = legacy_band_id(&app.band_sets, "derived", 0);
+                def.band_set_id = Some(id.clone());
+                app.band_sets.push(crate::band::BandSet {
+                    id,
+                    name: format!("Derived · {}", def.name),
+                    bands: def.bands.clone(),
+                });
+            }
+        }
         // System variables restore as one Define per entry: existing
         // definitions with the same key are replaced, values start at
         // their declared init.
