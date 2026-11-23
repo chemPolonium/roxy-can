@@ -465,6 +465,7 @@ fn open_project_session(
 /// Validates a system-variable definition coming from the web form. The core
 /// applies the same rules; the host is the boundary, so the web path checks
 /// them again instead of trusting the page.
+#[allow(clippy::too_many_arguments)]
 fn checked_sysvar(
     namespace: String,
     name: String,
@@ -473,6 +474,7 @@ fn checked_sysvar(
     max: Option<f64>,
     unit: String,
     comment: String,
+    labels: Vec<crate::bus::SysVarLabel>,
 ) -> Result<crate::bus::SysVarDef, String> {
     let namespace = namespace.trim().to_string();
     let name = name.trim().to_string();
@@ -487,6 +489,26 @@ fn checked_sysvar(
     {
         return Err(format!("lower bound {lo} is greater than upper bound {hi}"));
     }
+    if labels.len() > 64 {
+        return Err("at most 64 state labels are allowed".into());
+    }
+    let mut labels = labels;
+    for entry in &mut labels {
+        if !entry.value.is_finite() {
+            return Err("state label values must be finite numbers".into());
+        }
+        entry.label = entry.label.trim().to_string();
+        if entry.label.is_empty() {
+            return Err("state labels must not be empty".into());
+        }
+        if entry.label.chars().count() > 80 {
+            return Err("state labels are limited to 80 characters".into());
+        }
+    }
+    labels.sort_by(|a, b| a.value.total_cmp(&b.value));
+    if labels.windows(2).any(|pair| pair[0].value == pair[1].value) {
+        return Err("state label values must be unique".into());
+    }
     Ok(crate::bus::SysVarDef {
         namespace,
         name,
@@ -495,6 +517,7 @@ fn checked_sysvar(
         max,
         unit: unit.trim().to_string(),
         comment: comment.trim().to_string(),
+        labels,
     })
 }
 
@@ -2413,6 +2436,8 @@ enum WebCommand {
         max: Option<f64>,
         unit: String,
         comment: String,
+        #[serde(default)]
+        labels: Vec<crate::bus::SysVarLabel>,
         old_namespace: Option<String>,
         old_name: Option<String>,
     },
@@ -3476,9 +3501,10 @@ fn app_loop(
                     max,
                     unit,
                     comment,
+                    labels,
                     old_namespace,
                     old_name,
-                } => match checked_sysvar(namespace, name, init, min, max, unit, comment) {
+                } => match checked_sysvar(namespace, name, init, min, max, unit, comment, labels) {
                     Ok(def) => {
                         // A rename deletes the old key first: leaving it
                         // would keep a phantom variable scripts could write.
@@ -6420,6 +6446,7 @@ struct WebSysVar {
     max: Option<f64>,
     unit: String,
     comment: String,
+    labels: Vec<crate::bus::SysVarLabel>,
 }
 
 #[derive(Clone, Default, Serialize)]
@@ -7256,6 +7283,7 @@ fn build_state(app: &App, series: &VecDeque<WebSeriesPoint>, fps: f64) -> WebSta
             max: v.def.max,
             unit: v.def.unit.clone(),
             comment: v.def.comment.clone(),
+            labels: v.def.labels.clone(),
         })
         .collect();
 
@@ -8394,10 +8422,55 @@ mod tests {
             Some(500.0),
             " rpm ".into(),
             "target".into(),
+            Vec::new(),
         )
         .expect("valid definition");
         assert_eq!(ok.namespace, "Demo");
         assert_eq!(ok.unit, "rpm");
+        let labeled = checked_sysvar(
+            "Demo".into(),
+            "State".into(),
+            0.0,
+            None,
+            None,
+            String::new(),
+            String::new(),
+            vec![
+                crate::bus::SysVarLabel {
+                    value: 1.0,
+                    label: " Fault ".into(),
+                },
+                crate::bus::SysVarLabel {
+                    value: 0.0,
+                    label: "Normal".into(),
+                },
+            ],
+        )
+        .expect("labels");
+        assert_eq!(labeled.labels[0].value, 0.0);
+        assert_eq!(labeled.labels[1].label, "Fault");
+        assert!(
+            checked_sysvar(
+                "Demo".into(),
+                "Bad".into(),
+                0.0,
+                None,
+                None,
+                String::new(),
+                String::new(),
+                vec![
+                    crate::bus::SysVarLabel {
+                        value: 1.0,
+                        label: "A".into(),
+                    },
+                    crate::bus::SysVarLabel {
+                        value: 1.0,
+                        label: "B".into(),
+                    },
+                ],
+            )
+            .is_err()
+        );
         assert!(
             checked_sysvar(
                 String::new(),
@@ -8406,7 +8479,8 @@ mod tests {
                 None,
                 None,
                 String::new(),
-                String::new()
+                String::new(),
+                Vec::new()
             )
             .is_err()
         );
@@ -8418,7 +8492,8 @@ mod tests {
                 None,
                 None,
                 String::new(),
-                String::new()
+                String::new(),
+                Vec::new()
             )
             .is_err()
         );
@@ -8430,7 +8505,8 @@ mod tests {
                 Some(5.0),
                 Some(1.0),
                 String::new(),
-                String::new()
+                String::new(),
+                Vec::new()
             )
             .is_err()
         );
@@ -8450,6 +8526,7 @@ mod tests {
                 Some(500.0),
                 "rpm".into(),
                 "target speed".into(),
+                Vec::new(),
             )
             .expect("definition"),
         ));

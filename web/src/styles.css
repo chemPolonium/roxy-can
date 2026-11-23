@@ -1706,6 +1706,14 @@ body.col-resizing {
   font-variant-numeric: tabular-nums;
 }
 
+.page-value strong.state {
+  font-family: "Segoe UI", sans-serif;
+  font-size: clamp(11px, min(calc(52cqh - 8px), 7cqw), 22px);
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  font-variant-numeric: normal;
+}
+
 .page-value em {
   flex: 0 0 auto;
   margin-left: auto;
@@ -1918,9 +1926,13 @@ body.col-resizing {
 }
 
 .page-toggle-state {
+  max-width: 65%;
+  overflow: hidden;
   color: var(--muted);
   font-size: 11px;
   letter-spacing: 0.06em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .page-toggle.on .page-toggle-state {
@@ -1984,6 +1996,14 @@ body.col-resizing {
   color: var(--muted);
   font-size: 10px;
   font-style: normal;
+}
+
+.page-setpoint-state {
+  max-width: 55%;
+  overflow: hidden;
+  color: var(--text);
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .page-widget.editing .page-setpoint input {
@@ -7608,8 +7628,10 @@ body:has(.cm-tooltip-autocomplete) .script-signature {
 
 .sv-form {
   flex: 0 0 auto;
+  max-height: 46vh;
   margin: 8px 12px;
   padding: 8px;
+  overflow: auto;
   background: #101a26;
   border: 1px solid #2d5c88;
   border-radius: 4px;
@@ -7639,6 +7661,51 @@ body:has(.cm-tooltip-autocomplete) .script-signature {
 .sv-form-grid input {
   width: 100%;
   min-width: 0;
+}
+
+.sv-labels {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 8px;
+  padding-top: 7px;
+  border-top: 1px solid #1c2d40;
+}
+
+.sv-labels-head {
+  display: flex;
+  justify-content: space-between;
+  color: var(--muted);
+  font-size: 9.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.sv-label-row {
+  display: grid;
+  grid-template-columns: 72px minmax(0, 1fr) 22px;
+  gap: 5px;
+  align-items: center;
+}
+
+.sv-label-row input {
+  width: 100%;
+  min-width: 0;
+}
+
+.sv-value-cell {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.sv-label-preview {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 9px;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .sv-form-foot {

@@ -739,6 +739,15 @@ pub fn wall_us_now() -> u64 {
     (t.num_seconds_from_midnight() as u64) * 1_000_000 + (t.nanosecond() / 1_000) as u64
 }
 
+/// One display label for a numeric system-variable value. Labels are
+/// presentation metadata only: scripts, triggers and observers still use the
+/// numeric value.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct SysVarLabel {
+    pub value: f64,
+    pub label: String,
+}
+
 /// One system variable definition: CANoe-style namespaced value with
 /// optional clamping bounds and display metadata. Also the persisted
 /// form -- the live value stays core-side, the definition is the config.
@@ -757,6 +766,9 @@ pub struct SysVarDef {
     pub unit: String,
     #[serde(default)]
     pub comment: String,
+    /// Display labels keyed by exact numeric value, sorted by value.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub labels: Vec<SysVarLabel>,
 }
 
 impl SysVarDef {

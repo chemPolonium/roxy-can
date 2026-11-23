@@ -2174,6 +2174,7 @@ export function App() {
       max: edit.max,
       unit: edit.unit,
       comment: edit.comment,
+      labels: edit.labels,
       old_namespace: edit.oldNamespace,
       old_name: edit.oldName,
     });

@@ -158,6 +158,15 @@ export function findPanelSysVar(ref: string, view: PanelView): SysVar | undefine
   );
 }
 
+/// Labels are presentation-only; callers keep comparing the numeric value.
+export function panelSysVarLabel(
+  variable: SysVar | undefined,
+  value: number | null,
+): string | null {
+  if (!variable || value === null || !Number.isFinite(value)) return null;
+  return variable.labels.find((entry) => entry.value === value)?.label ?? null;
+}
+
 /// Numeric setpoints clamp into the sysvar's declared bounds.
 export function clampPanelNumber(
   value: number,

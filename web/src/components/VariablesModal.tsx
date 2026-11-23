@@ -1,7 +1,7 @@
 import { useEffect, useState } from "preact/hooks";
 import { ModalHeader } from "./ModalHeader";
 import { Tabs } from "./Tabs";
-import type { SysVar } from "../types";
+import type { SysVar, SysVarLabel } from "../types";
 import type { DerivedDef, DerivedReference } from "../derived";
 import { DerivedPanel } from "./DerivedPanel";
 
@@ -13,6 +13,7 @@ export interface SysVarEdit {
   max: number | null;
   unit: string;
   comment: string;
+  labels: SysVarLabel[];
   oldNamespace: string | null;
   oldName: string | null;
 }
@@ -40,6 +41,7 @@ interface Draft {
   max: string;
   unit: string;
   comment: string;
+  labels: { value: string; label: string }[];
 }
 
 function newDraft(): Draft {
@@ -52,6 +54,7 @@ function newDraft(): Draft {
     max: "",
     unit: "",
     comment: "",
+    labels: [],
   };
 }
 
@@ -65,6 +68,10 @@ function editDraft(v: SysVar): Draft {
     max: v.max == null ? "" : String(v.max),
     unit: v.unit,
     comment: v.comment,
+    labels: (v.labels ?? []).map((entry) => ({
+      value: String(entry.value),
+      label: entry.label,
+    })),
   };
 }
 
@@ -96,6 +103,26 @@ function validate(draft: Draft): { edit?: SysVarEdit; error: string } {
   if (min != null && max != null && min > max) {
     return { error: `lower bound ${min} is greater than upper bound ${max}` };
   }
+  const labels: SysVarLabel[] = [];
+  for (const [index, entry] of draft.labels.entries()) {
+    if (!entry.value.trim() && !entry.label.trim()) continue;
+    const value = Number(entry.value);
+    const label = entry.label.trim();
+    if (!entry.value.trim() || !Number.isFinite(value)) {
+      return { error: `state label ${index + 1}: value must be a number` };
+    }
+    if (!label) {
+      return { error: `state label ${index + 1}: text must not be empty` };
+    }
+    if (labels.some((known) => known.value === value)) {
+      return { error: `state label ${index + 1}: value ${value} is duplicated` };
+    }
+    labels.push({ value, label });
+  }
+  if (labels.length > 64) {
+    return { error: "at most 64 state labels are allowed" };
+  }
+  labels.sort((a, b) => a.value - b.value);
   return {
     error: "",
     edit: {
@@ -106,6 +133,7 @@ function validate(draft: Draft): { edit?: SysVarEdit; error: string } {
       max,
       unit: draft.unit.trim(),
       comment: draft.comment.trim(),
+      labels,
       oldNamespace: draft.editing?.namespace ?? null,
       oldName: draft.editing?.name ?? null,
     },
@@ -117,6 +145,10 @@ function rangeText(v: SysVar): string {
   const lo = v.min == null ? "-" : String(v.min);
   const hi = v.max == null ? "+" : String(v.max);
   return `${lo} .. ${hi}`;
+}
+
+function currentLabel(v: SysVar): string | null {
+  return v.labels?.find((entry) => entry.value === v.value)?.label ?? null;
 }
 
 /** Editable live value; polling state refreshes it only while not typing. */
@@ -320,6 +352,77 @@ export function VariablesModal({
                 />
               </label>
             </div>
+            <div class="sv-labels">
+              <div class="sv-labels-head">
+                <span>State labels</span>
+                <span>{draft.labels.length}/64</span>
+              </div>
+              {draft.labels.length === 0 && (
+                <span class="sv-hint">
+                  Optional: map numeric values to Panel text, e.g. 0 = Normal,
+                  1 = Fault.
+                </span>
+              )}
+              {draft.labels.map((entry, index) => (
+                <div class="sv-label-row" key={index}>
+                  <input
+                    class="sv-label-value"
+                    value={entry.value}
+                    inputMode="decimal"
+                    placeholder="value"
+                    aria-label={`State label ${index + 1} value`}
+                    onInput={(event) => {
+                      const value = (event.target as HTMLInputElement).value;
+                      set({
+                        labels: draft.labels.map((candidate, at) =>
+                          at === index ? { ...candidate, value } : candidate,
+                        ),
+                      });
+                    }}
+                  />
+                  <input
+                    class="sv-label-text"
+                    value={entry.label}
+                    maxLength={80}
+                    placeholder="Normal"
+                    aria-label={`State label ${index + 1} text`}
+                    onInput={(event) => {
+                      const label = (event.target as HTMLInputElement).value;
+                      set({
+                        labels: draft.labels.map((candidate, at) =>
+                          at === index ? { ...candidate, label } : candidate,
+                        ),
+                      });
+                    }}
+                  />
+                  <button
+                    type="button"
+                    class="mini"
+                    title="Remove state label"
+                    aria-label="Remove state label"
+                    onClick={() =>
+                      set({
+                        labels: draft.labels.filter((_, at) => at !== index),
+                      })
+                    }
+                  >
+                    ×
+                  </button>
+                </div>
+              ))}
+              <div>
+                <button
+                  type="button"
+                  class="mini"
+                  disabled={draft.labels.length >= 64}
+                  onClick={() =>
+                    set({ labels: [...draft.labels, { value: "", label: "" }] })
+                  }
+                >
+                  + Add label
+                </button>
+              </div>
+            </div>
             <div class="sv-form-foot">
               {checked?.error ? (
                 <span class="sv-error">{checked.error}</span>
@@ -357,10 +460,15 @@ export function VariablesModal({
                   <strong>{v.name}</strong>
                   <small>{v.namespace}</small>
                 </span>
-                <ValueInput
-                  value={v.value}
-                  onCommit={(value) => onSetValue(v.namespace, v.name, value)}
-                />
+                <div class="sv-value-cell">
+                  <ValueInput
+                    value={v.value}
+                    onCommit={(value) => onSetValue(v.namespace, v.name, value)}
+                  />
+                  {currentLabel(v) && (
+                    <small class="sv-label-preview">{currentLabel(v)}</small>
+                  )}
+                </div>
                 <span class="sv-range" title="writes are clamped to these bounds">
                   {rangeText(v)}
                 </span>

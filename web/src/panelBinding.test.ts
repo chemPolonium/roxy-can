@@ -13,6 +13,7 @@ import {
   panelLampLit,
   panelMeterRatio,
   panelBandIndex,
+  panelSysVarLabel,
   panelValueCapability,
   panelWidgetCapability,
   resolvePanelSource,
@@ -49,6 +50,7 @@ const sysvar = (value: number): SysVar => ({
   max: 1,
   unit: "",
   comment: "",
+  labels: [],
 });
 
 const script = (over: Partial<ScriptInfo>): ScriptInfo => ({
@@ -68,8 +70,21 @@ const script = (over: Partial<ScriptInfo>): ScriptInfo => ({
 });
 
 describe("panel bindings", () => {
-  it("resolves signal, derived and sysvar sources", () => {
-    const view = {
+  it("maps sysvar values to display labels without changing the number", () => {
+    const variable: SysVar = {
+      ...sysvar(1),
+      labels: [
+        { value: 0, label: "Normal" },
+        { value: 1, label: "Component A error" },
+      ],
+    };
+    expect(panelSysVarLabel(variable, 0)).toBe("Normal");
+    expect(panelSysVarLabel(variable, 1)).toBe("Component A error");
+    expect(panelSysVarLabel(variable, 2)).toBeNull();
+    expect(panelSysVarLabel(variable, null)).toBeNull();
+  });
+
+  it("resolves signal, derived and sysvar sources", () => {    const view = {
       signals: [
         series("0:256:EngineSpeed", "EngineSpeed", [
           [0, 800],

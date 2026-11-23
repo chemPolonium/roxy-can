@@ -43,6 +43,7 @@ import {
   panelGaugeArc,
   panelLampLit,
   panelMeterRatio,
+  panelSysVarLabel,
   panelWidgetCapability,
   resolvePanelSource,
   someIpMemberFor,
@@ -102,6 +103,7 @@ function SysVarSetpointControl({
   min,
   max,
   unit,
+  state,
   disabled,
   reason,
   title,
@@ -112,6 +114,7 @@ function SysVarSetpointControl({
   min: number | null;
   max: number | null;
   unit: string;
+  state?: string | null;
   disabled: boolean;
   reason: string;
   title?: string;
@@ -155,7 +158,13 @@ function SysVarSetpointControl({
             }
           }}
         />
-        {unit && <em>{unit}</em>}
+        {state ? (
+          <em class="page-setpoint-state" title={unit || undefined}>
+            {state}
+          </em>
+        ) : (
+          unit && <em>{unit}</em>
+        )}
       </span>
     </div>
   );
@@ -1875,6 +1884,13 @@ export function PagePanel({
     const capability = capabilityOf(widget);
     if (widget.kind === "value") {
       const resolved = resolvePanelSource(widget.source, view);
+      const variable = widget.source.trim().startsWith("sysvar:")
+        ? findPanelSysVar(
+            widget.source.trim().slice("sysvar:".length),
+            view,
+          )
+        : undefined;
+      const state = panelSysVarLabel(variable, resolved.value);
       const band = capability.enabled
         ? panelBandIndex(resolved.value, widget.cuts)
         : null;
@@ -1885,7 +1901,18 @@ export function PagePanel({
       return (
         <div
           class={`page-value ${capability.enabled ? "" : "missing"}`}
-          title={capability.enabled ? widget.source : capability.reason}
+          title={
+            capability.enabled
+              ? `${widget.source}${
+                  state
+                    ? ` · ${state} · value ${formatPanelValue(
+                        resolved.value,
+                        widget.digits,
+                      )}`
+                    : ""
+                }`
+              : capability.reason
+          }
         >
           <span class="page-value-head">
             {widget.label && (
@@ -1894,8 +1921,8 @@ export function PagePanel({
             {resolved.unit && <em>{resolved.unit}</em>}
           </span>
           <span class="page-value-line">
-            <strong style={color ? { color } : undefined}>
-              {formatPanelValue(resolved.value, widget.digits)}
+            <strong class={state ? "state" : undefined} style={color ? { color } : undefined}>
+              {state ?? formatPanelValue(resolved.value, widget.digits)}
             </strong>
           </span>
         </div>
@@ -1924,6 +1951,7 @@ export function PagePanel({
       }
       const variable = findPanelSysVar(widget.sysvar, view);
       const disabled = editing || !capability.enabled;
+      const state = panelSysVarLabel(variable, variable?.value ?? null);
       return (
         <SysVarSetpointControl
           widget={widget}
@@ -1931,8 +1959,10 @@ export function PagePanel({
           min={variable?.min ?? null}
           max={variable?.max ?? null}
           unit={variable?.unit ?? ""}
+          state={state}
           disabled={disabled}
           reason={capability.reason}
+          title={state ? `${widget.sysvar} · ${state}` : widget.sysvar}
           onCommit={(value) => {
             if (!editing && capability.enabled) onSetNumber(widget, value);
           }}
@@ -1942,13 +1972,18 @@ export function PagePanel({
     if (widget.kind === "toggle") {
       const variable = findPanelSysVar(widget.sysvar, view);
       const on = (variable?.value ?? 0) !== 0;
+      const state = panelSysVarLabel(variable, variable?.value ?? null);
       return (
         <button
           type="button"
           class={`page-toggle ${on ? "on" : ""} ${
             capability.enabled ? "" : "disabled"
           }`}
-          title={capability.enabled ? widget.sysvar : capability.reason}
+          title={
+            capability.enabled
+              ? `${widget.sysvar}${state ? ` · ${state}` : ""}`
+              : capability.reason
+          }
           onClick={() => {
             if (!editing && capability.enabled) onToggle(widget, !on);
           }}
@@ -1956,7 +1991,7 @@ export function PagePanel({
           <span class="page-toggle-label">
             {widget.label || widget.sysvar || "Toggle"}
           </span>
-          <span class="page-toggle-state">{on ? "ON" : "OFF"}</span>
+          <span class="page-toggle-state">{state ?? (on ? "ON" : "OFF")}</span>
         </button>
       );
     }

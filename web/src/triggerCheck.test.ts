@@ -89,7 +89,7 @@ describe("trigger checks", () => {
       context({
         buses: [{ index: 0, id: 1, kind: "flexray", name: "FR0", frames: 0, source: "", descriptions: [] }],
         sysvars: [
-          { namespace: "Bench", name: "Ready", value: 0, init: 0, min: null, max: null, unit: "", comment: "" },
+          { namespace: "Bench", name: "Ready", value: 0, init: 0, min: null, max: null, unit: "", comment: "", labels: [] },
         ],
         frTx: [
           {
