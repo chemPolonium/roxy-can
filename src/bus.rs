@@ -672,6 +672,13 @@ pub enum BusCommand {
         name: String,
         value: f64,
     },
+    /// Change only a SysVar's default BandSet binding; the live value and
+    /// definition stay untouched.
+    SetSysVarBandSet {
+        namespace: String,
+        name: String,
+        band_set_id: Option<String>,
+    },
     /// Empties the Write window's ring.
     #[cfg(test)]
     ClearWrite,
@@ -2490,6 +2497,19 @@ impl BusCore {
                 let key = format!("{namespace}::{name}");
                 if !self.sysvar_write(&key, value) {
                     *status = format!("[sysvar] undefined: \"{key}\"");
+                }
+            }
+            BusCommand::SetSysVarBandSet {
+                namespace,
+                name,
+                band_set_id,
+            } => {
+                if let Some((def, _)) = self
+                    .sysvars
+                    .iter_mut()
+                    .find(|(def, _)| def.namespace == namespace && def.name == name)
+                {
+                    def.band_set_id = band_set_id;
                 }
             }
             #[cfg(test)]

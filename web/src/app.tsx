@@ -6080,7 +6080,22 @@ export function App() {
               old_id: oldId,
             })
           }
-          onDeleteBandSet={(id) => void run({ type: "delete_band_set", id })}
+          onDeleteBandSet={(id) => {
+            setPanelBook((book) => ({
+              ...book,
+              pages: book.pages.map((page) => ({
+                ...page,
+                widgets: page.widgets.map((widget) => {
+                  const raw = widget as { labelSet?: string | null };
+                  return raw.labelSet === id
+                    ? ({ ...raw, labelSet: undefined } as typeof widget)
+                    : widget;
+                }),
+              })),
+            }));
+            setPanelDirty(true);
+            void run({ type: "delete_band_set", id });
+          }}
           onSetValue={(namespace, name, value) =>
             void run({ type: "set_sys_var", namespace, name, value })
           }

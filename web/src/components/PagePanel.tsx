@@ -115,12 +115,15 @@ function panelWidgetSysVar(
 }
 
 function panelWidgetBands(widget: PanelWidget, view: PanelView): Band[] {
+  if ("labelSet" in widget) {
+    if (widget.labelSet === null) return [];
+    if (widget.labelSet) {
+      return view.bandSets?.find((set) => set.id === widget.labelSet)?.bands ?? [];
+    }
+  }
   const variable = panelWidgetSysVar(widget, view);
-  if (variable && "labelSet" in widget) {
-    const chosen =
-      widget.labelSet === null
-        ? null
-        : (widget.labelSet ?? variable.bandSetId ?? null);
+  if (variable) {
+    const chosen = variable.bandSetId ?? null;
     return chosen
       ? (view.bandSets?.find((set) => set.id === chosen)?.bands ?? [])
       : [];

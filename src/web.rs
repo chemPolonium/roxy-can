@@ -3698,30 +3698,37 @@ fn app_loop(
                     Err(error) => app.fail(format!("bands: {error}")),
                 },
                 WebCommand::DeleteBandSet { id } => {
-                    let used = app
+                    let unbound: Vec<(String, String)> = app
                         .snap
                         .sysvars
                         .iter()
-                        .any(|v| v.def.band_set_id.as_deref() == Some(id.as_str()))
-                        || app
-                            .monitor_view
-                            .rows
-                            .iter()
-                            .any(|row| row.band_set_id.as_deref() == Some(id.as_str()))
-                        || app.state_trackers.iter().any(|window| {
-                            window
-                                .rules
-                                .values()
-                                .any(|rule| rule.band_set_id.as_deref() == Some(id.as_str()))
-                        })
-                        || app
-                            .derived_defs
-                            .iter()
-                            .any(|def| def.band_set_id.as_deref() == Some(id.as_str()));
-                    if used {
-                        app.fail("bands: set is still in use");
-                    } else {
-                        app.band_sets.retain(|set| set.id != id);
+                        .filter(|def| def.def.band_set_id.as_deref() == Some(id.as_str()))
+                        .map(|def| (def.def.namespace.clone(), def.def.name.clone()))
+                        .collect();
+                    for (namespace, name) in unbound {
+                        app.send(BusCommand::SetSysVarBandSet {
+                            namespace,
+                            name,
+                            band_set_id: None,
+                        });
+                    }
+                    app.band_sets.retain(|set| set.id != id);
+                    for row in &mut app.monitor_view.rows {
+                        if row.band_set_id.as_deref() == Some(id.as_str()) {
+                            row.band_set_id = None;
+                        }
+                    }
+                    for window in &mut app.state_trackers {
+                        for rule in window.rules.values_mut() {
+                            if rule.band_set_id.as_deref() == Some(id.as_str()) {
+                                rule.band_set_id = None;
+                            }
+                        }
+                    }
+                    for def in &mut app.derived_defs {
+                        if def.band_set_id.as_deref() == Some(id.as_str()) {
+                            def.band_set_id = None;
+                        }
                     }
                 }
                 WebCommand::AddMonitor {
