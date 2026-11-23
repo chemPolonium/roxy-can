@@ -17,6 +17,7 @@ import {
   importPanelFile,
   movePanelPage,
   movePanelWidget,
+  overlappingPanelWidgets,
   panelBookFromProject,
   panelFileName,
   panelFrameProblem,
@@ -58,7 +59,7 @@ describe("panel page", () => {
     ]);
   });
 
-  it("keeps valid widgets and rejects malformed or overlapping entries", () => {
+  it("keeps valid widgets and rejects malformed entries", () => {
     const page = parsePanelPage({
       width: 160,
       height: 90,
@@ -105,7 +106,11 @@ describe("panel page", () => {
         },
       ],
     });
-    expect(page?.widgets.map((widget) => widget.id)).toEqual(["ok"]);
+    expect(page?.widgets.map((widget) => widget.id)).toEqual([
+      "ok",
+      "overlap",
+    ]);
+    expect([...overlappingPanelWidgets(page!)]).toEqual(["ok", "overlap"]);
   });
 
   it("clamps stored coordinates into the canvas", () => {
@@ -128,7 +133,7 @@ describe("panel page", () => {
     expect(page?.widgets[0]).toMatchObject({ x: 120, y: 0, w: 40, h: 8 });
   });
 
-  it("snaps moves to cells, clamps size and refuses overlap", () => {
+  it("snaps moves to cells and allows an overlapping drop", () => {
     const page = pageWith([
       {
         id: "start",
@@ -159,7 +164,10 @@ describe("panel page", () => {
     expect(shrunk?.widgets.find((widget) => widget.id === "start")).toMatchObject(
       { w: widgetMinSize("button").w, h: widgetMinSize("button").h },
     );
-    expect(movePanelWidget(page, "start", 80, 8, 20, 6)).toBeNull();
+    const overlap = movePanelWidget(page, "start", 80, 8, 20, 6);
+    expect(overlap?.widgets.find((widget) => widget.id === "start")).toMatchObject(
+      { x: 80, y: 8 },
+    );
     expect(movePanelWidget(page, "start", 200, 8, 20, 6)?.widgets[0].x).toBe(
       140,
     );
@@ -796,13 +804,14 @@ describe("panel page", () => {
       errorOf(fileOf([{ kind: "lamp", x: 0, y: 0, w: 8, h: 4 }])),
     ).toContain("at least 10 × 3");
     expect(
-      errorOf(
-        fileOf([
-          { kind: "button", action: "none", x: 0, y: 0, w: 20, h: 6 },
-          { kind: "lamp", x: 0, y: 0, w: 14, h: 4 },
-        ]),
-      ),
-    ).toContain("overlaps");
+      "error" in
+        importPanelFile(
+          fileOf([
+            { kind: "button", action: "none", x: 0, y: 0, w: 20, h: 6 },
+            { kind: "lamp", x: 0, y: 0, w: 14, h: 4 },
+          ]),
+        ),
+    ).toBe(false);
     expect(
       errorOf(fileOf([{ kind: "button", action: "launch", x: 0, y: 0, w: 20, h: 6 }])),
     ).toContain("unknown action");

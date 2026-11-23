@@ -11,6 +11,7 @@ import {
   duplicatePanelWidget,
   formatPanelValue,
   movePanelWidget,
+  overlappingPanelWidgets,
   panelFrameProblem,
   panelSetpointTarget,
   parsePanelHex,
@@ -1498,6 +1499,7 @@ export function PagePanel({
 }) {
   const page = activePanelPage(book);
   const monitorColors = palette(theme).monitors;
+  const overlapping = overlappingPanelWidgets(page);
   const onPage = (next: PanelPage) => onBook(updatePanelPage(book, next));
   const [fullscreen, setFullscreen] = useState(false);
   const [selected, setSelected] = useState<string | null>(null);
@@ -2358,6 +2360,11 @@ export function PagePanel({
           class="page-viewport"
           onPointerDown={() => editing && setSelected(null)}
         >
+          {editing && overlapping.size > 0 && (
+            <div class="page-overlap-warning" role="alert">
+              Controls overlap. Move one to separate them.
+            </div>
+          )}
           <div
             class={`page-canvas ${editing ? "editing" : ""}`}
             style={{
@@ -2395,7 +2402,7 @@ export function PagePanel({
                 key={widget.id}
                 class={`page-widget ${editing ? "editing" : ""} ${
                   selected === widget.id ? "selected" : ""
-                }`}
+                } ${overlapping.has(widget.id) ? "overlapping" : ""}`}
                 style={{
                   left: `${widget.x * PAGE_GRID}px`,
                   top: `${widget.y * PAGE_GRID}px`,

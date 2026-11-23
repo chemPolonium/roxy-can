@@ -1331,7 +1331,6 @@ export function parsePanelPage(raw: unknown): PanelPage | null {
   for (const entry of source.slice(0, 100)) {
     const widget = sanitise(entry, pageWidth, pageHeight, used);
     if (!widget) continue;
-    if (widgets.some((other) => overlaps(widget, other))) continue;
     used.add(widget.id);
     widgets.push(widget);
   }
@@ -1385,7 +1384,6 @@ function strictWidget(
   index: number,
   width: number,
   height: number,
-  placed: Geometry[],
   id: string,
 ): PanelWidget | { error: string } {
   const where = `Control ${index + 1}`;
@@ -1415,9 +1413,6 @@ function strictWidget(
       error: `${where}: outside the ${width * PAGE_GRID} × ${height * PAGE_GRID} canvas`,
     };
   }
-  if (placed.some((other) => overlaps({ x, y, w, h }, other))) {
-    return { error: `${where}: overlaps another control` };
-  }
   if (kind === "button" && !isActionKind(value.action)) {
     return { error: `${where}: unknown action` };
   }
@@ -1432,8 +1427,8 @@ function strictWidget(
   return buildWidget(kind, id, { x, y, w, h }, value);
 }
 
-/// Reads an exported page strictly: unknown types, bad geometry and overlaps
-/// are errors instead of being dropped.
+/// Reads an exported page strictly: unknown types and bad geometry are errors
+/// instead of being dropped. Overlaps are accepted and warned about in the editor.
 export function importPanelFile(
   raw: unknown,
 ): { page: PanelPage } | { error: string } {
@@ -1469,7 +1464,6 @@ export function importPanelFile(
   const source = value.widgets;
   if (!Array.isArray(source)) return { error: "No controls in this file" };
   const widgets: PanelWidget[] = [];
-  const placed: Geometry[] = [];
   const counts: Partial<Record<PanelWidgetKind, number>> = {};
   for (let index = 0; index < source.length; index += 1) {
     if (index >= 100) return { error: "Too many controls (100 max)" };
@@ -1480,9 +1474,8 @@ export function importPanelFile(
       counts[kind] = n;
       id = `${kind}${n}`;
     }
-    const widget = strictWidget(source[index], index, width, height, placed, id);
+    const widget = strictWidget(source[index], index, width, height, id);
     if ("error" in widget) return { error: widget.error };
-    placed.push({ x: widget.x, y: widget.y, w: widget.w, h: widget.h });
     widgets.push(widget);
   }
   return {
@@ -1584,15 +1577,26 @@ export function movePanelWidget(
     w: nextW,
     h: nextH,
   };
-  if (page.widgets.some((widget) => widget.id !== id && overlaps(next, widget))) {
-    return null;
-  }
   return {
     ...page,
     widgets: page.widgets.map((widget) =>
       widget.id === id ? { ...widget, ...next } : widget,
     ),
   };
+}
+
+/// Widgets whose rectangles intersect another control.
+export function overlappingPanelWidgets(page: PanelPage): Set<string> {
+  const result = new Set<string>();
+  for (let i = 0; i < page.widgets.length; i += 1) {
+    for (let j = i + 1; j < page.widgets.length; j += 1) {
+      if (overlaps(page.widgets[i], page.widgets[j])) {
+        result.add(page.widgets[i].id);
+        result.add(page.widgets[j].id);
+      }
+    }
+  }
+  return result;
 }
 
 function nextId(page: PanelPage, kind: PanelWidgetKind): string {
