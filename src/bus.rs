@@ -748,6 +748,29 @@ pub struct SysVarLabel {
     pub label: String,
 }
 
+/// One entry in a named display-label set. Text and color are independent:
+/// a set may be text-only, color-only, or both.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct SysVarLabelEntry {
+    pub value: f64,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub text: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<u8>,
+}
+
+/// A named view over a numeric system variable. Widgets reference the stable
+/// `id`; the `is_default` set is used when a widget has no explicit choice.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SysVarLabelSet {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub is_default: bool,
+    pub entries: Vec<SysVarLabelEntry>,
+}
+
 /// One system variable definition: CANoe-style namespaced value with
 /// optional clamping bounds and display metadata. Also the persisted
 /// form -- the live value stays core-side, the definition is the config.
@@ -766,7 +789,10 @@ pub struct SysVarDef {
     pub unit: String,
     #[serde(default)]
     pub comment: String,
-    /// Display labels keyed by exact numeric value, sorted by value.
+    /// Named display-label sets; the first is the default when no flag wins.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub label_sets: Vec<SysVarLabelSet>,
+    /// Pre-multi-set text labels, read for old projects only.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub labels: Vec<SysVarLabel>,
 }
@@ -781,6 +807,31 @@ impl SysVarDef {
     pub fn clamp(&self, v: f64) -> f64 {
         let v = self.min.map(|lo| v.max(lo)).unwrap_or(v);
         self.max.map(|hi| v.min(hi)).unwrap_or(v)
+    }
+
+    /// Multi-set labels for the frontend, with the old single `labels`
+    /// field folded into a default text-only set.
+    pub fn display_label_sets(&self) -> Vec<SysVarLabelSet> {
+        if !self.label_sets.is_empty() {
+            return self.label_sets.clone();
+        }
+        if self.labels.is_empty() {
+            return Vec::new();
+        }
+        vec![SysVarLabelSet {
+            id: "default".to_string(),
+            name: "Default".to_string(),
+            is_default: true,
+            entries: self
+                .labels
+                .iter()
+                .map(|label| SysVarLabelEntry {
+                    value: label.value,
+                    text: label.label.clone(),
+                    color: None,
+                })
+                .collect(),
+        }]
     }
 }
 

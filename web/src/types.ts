@@ -353,9 +353,17 @@ export interface ScriptFunctionHelp {
   usage: string;
 }
 
-export interface SysVarLabel {
+export interface SysVarLabelEntry {
   value: number;
-  label: string;
+  text?: string;
+  color?: number;
+}
+
+export interface SysVarLabelSet {
+  id: string;
+  name: string;
+  isDefault: boolean;
+  entries: SysVarLabelEntry[];
 }
 
 export interface SysVar {
@@ -367,7 +375,7 @@ export interface SysVar {
   max: number | null;
   unit: string;
   comment: string;
-  labels: SysVarLabel[];
+  labelSets: SysVarLabelSet[];
 }
 
 export interface MonitorRow {
@@ -898,7 +906,7 @@ export type Command =
       max: number | null;
       unit: string;
       comment: string;
-      labels: SysVarLabel[];
+      label_sets: SysVarLabelSet[];
       old_namespace: string | null;
       old_name: string | null;
     }

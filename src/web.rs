@@ -474,7 +474,7 @@ fn checked_sysvar(
     max: Option<f64>,
     unit: String,
     comment: String,
-    labels: Vec<crate::bus::SysVarLabel>,
+    label_sets: Vec<crate::bus::SysVarLabelSet>,
 ) -> Result<crate::bus::SysVarDef, String> {
     let namespace = namespace.trim().to_string();
     let name = name.trim().to_string();
@@ -489,26 +489,7 @@ fn checked_sysvar(
     {
         return Err(format!("lower bound {lo} is greater than upper bound {hi}"));
     }
-    if labels.len() > 64 {
-        return Err("at most 64 state labels are allowed".into());
-    }
-    let mut labels = labels;
-    for entry in &mut labels {
-        if !entry.value.is_finite() {
-            return Err("state label values must be finite numbers".into());
-        }
-        entry.label = entry.label.trim().to_string();
-        if entry.label.is_empty() {
-            return Err("state labels must not be empty".into());
-        }
-        if entry.label.chars().count() > 80 {
-            return Err("state labels are limited to 80 characters".into());
-        }
-    }
-    labels.sort_by(|a, b| a.value.total_cmp(&b.value));
-    if labels.windows(2).any(|pair| pair[0].value == pair[1].value) {
-        return Err("state label values must be unique".into());
-    }
+    let label_sets = checked_label_sets(label_sets)?;
     Ok(crate::bus::SysVarDef {
         namespace,
         name,
@@ -517,8 +498,89 @@ fn checked_sysvar(
         max,
         unit: unit.trim().to_string(),
         comment: comment.trim().to_string(),
-        labels,
+        label_sets,
+        labels: Vec::new(),
     })
+}
+
+fn checked_label_sets(
+    sets: Vec<crate::bus::SysVarLabelSet>,
+) -> Result<Vec<crate::bus::SysVarLabelSet>, String> {
+    if sets.len() > 8 {
+        return Err("at most 8 label sets are allowed".into());
+    }
+    let mut seen_ids = std::collections::HashSet::new();
+    let mut seen_names = std::collections::HashSet::new();
+    let mut defaults = 0usize;
+    let mut result = Vec::with_capacity(sets.len());
+    for mut set in sets {
+        set.id = set.id.trim().to_string();
+        set.name = set.name.trim().to_string();
+        if set.id.is_empty() || set.id.chars().count() > 64 {
+            return Err("label set id must be 1–64 characters".into());
+        }
+        if set.name.is_empty() || set.name.chars().count() > 40 {
+            return Err("label set name must be 1–40 characters".into());
+        }
+        if !seen_ids.insert(set.id.clone()) {
+            return Err(format!("duplicate label set id \"{}\"", set.id));
+        }
+        if !seen_names.insert(set.name.clone()) {
+            return Err(format!("duplicate label set name \"{}\"", set.name));
+        }
+        if set.entries.len() > 64 {
+            return Err("at most 64 labels are allowed per set".into());
+        }
+        let mut entries = Vec::with_capacity(set.entries.len());
+        for mut entry in set.entries {
+            if !entry.value.is_finite() {
+                return Err("label values must be finite numbers".into());
+            }
+            entry.text = entry.text.trim().to_string();
+            if entry.text.chars().count() > 80 {
+                return Err("label text is limited to 80 characters".into());
+            }
+            if let Some(color) = entry.color
+                && color > 63
+            {
+                return Err("label color slot must be 0–63".into());
+            }
+            if entry.text.is_empty() && entry.color.is_none() {
+                continue;
+            }
+            entries.push(entry);
+        }
+        entries.sort_by(|a, b| a.value.total_cmp(&b.value));
+        if entries
+            .windows(2)
+            .any(|pair| pair[0].value == pair[1].value)
+        {
+            return Err(format!(
+                "label values must be unique in set \"{}\"",
+                set.name
+            ));
+        }
+        if entries.is_empty() {
+            return Err(format!(
+                "label set \"{}\" needs at least one label",
+                set.name
+            ));
+        }
+        set.entries = entries;
+        if set.is_default {
+            defaults += 1;
+        }
+        result.push(set);
+    }
+    if defaults > 1 {
+        return Err("only one label set can be the default".into());
+    }
+    if defaults == 0
+        && let Some(first) = result.first_mut()
+    {
+        first.is_default = true;
+    }
+    Ok(result)
 }
 
 /// Applies the editable parts of a Monitor row (not its signal). The row is
@@ -2437,7 +2499,7 @@ enum WebCommand {
         unit: String,
         comment: String,
         #[serde(default)]
-        labels: Vec<crate::bus::SysVarLabel>,
+        label_sets: Vec<crate::bus::SysVarLabelSet>,
         old_namespace: Option<String>,
         old_name: Option<String>,
     },
@@ -3501,25 +3563,28 @@ fn app_loop(
                     max,
                     unit,
                     comment,
-                    labels,
+                    label_sets,
                     old_namespace,
                     old_name,
-                } => match checked_sysvar(namespace, name, init, min, max, unit, comment, labels) {
-                    Ok(def) => {
-                        // A rename deletes the old key first: leaving it
-                        // would keep a phantom variable scripts could write.
-                        if let (Some(old_ns), Some(old_name)) = (old_namespace, old_name)
-                            && (old_ns != def.namespace || old_name != def.name)
-                        {
-                            app.send(BusCommand::DeleteSysVar {
-                                namespace: old_ns,
-                                name: old_name,
-                            });
+                } => {
+                    match checked_sysvar(namespace, name, init, min, max, unit, comment, label_sets)
+                    {
+                        Ok(def) => {
+                            // A rename deletes the old key first: leaving it
+                            // would keep a phantom variable scripts could write.
+                            if let (Some(old_ns), Some(old_name)) = (old_namespace, old_name)
+                                && (old_ns != def.namespace || old_name != def.name)
+                            {
+                                app.send(BusCommand::DeleteSysVar {
+                                    namespace: old_ns,
+                                    name: old_name,
+                                });
+                            }
+                            app.send(BusCommand::DefineSysVar(def));
                         }
-                        app.send(BusCommand::DefineSysVar(def));
+                        Err(error) => app.fail(format!("sysvar: {error}")),
                     }
-                    Err(error) => app.fail(format!("sysvar: {error}")),
-                },
+                }
                 WebCommand::DeleteSysVar { namespace, name } => {
                     app.send(BusCommand::DeleteSysVar { namespace, name });
                 }
@@ -6446,7 +6511,7 @@ struct WebSysVar {
     max: Option<f64>,
     unit: String,
     comment: String,
-    labels: Vec<crate::bus::SysVarLabel>,
+    label_sets: Vec<crate::bus::SysVarLabelSet>,
 }
 
 #[derive(Clone, Default, Serialize)]
@@ -7283,7 +7348,7 @@ fn build_state(app: &App, series: &VecDeque<WebSeriesPoint>, fps: f64) -> WebSta
             max: v.def.max,
             unit: v.def.unit.clone(),
             comment: v.def.comment.clone(),
-            labels: v.def.labels.clone(),
+            label_sets: v.def.display_label_sets(),
         })
         .collect();
 
@@ -8435,20 +8500,28 @@ mod tests {
             None,
             String::new(),
             String::new(),
-            vec![
-                crate::bus::SysVarLabel {
-                    value: 1.0,
-                    label: " Fault ".into(),
-                },
-                crate::bus::SysVarLabel {
-                    value: 0.0,
-                    label: "Normal".into(),
-                },
-            ],
+            vec![crate::bus::SysVarLabelSet {
+                id: "status".into(),
+                name: "Status".into(),
+                is_default: true,
+                entries: vec![
+                    crate::bus::SysVarLabelEntry {
+                        value: 1.0,
+                        text: " Fault ".into(),
+                        color: Some(2),
+                    },
+                    crate::bus::SysVarLabelEntry {
+                        value: 0.0,
+                        text: "Normal".into(),
+                        color: Some(1),
+                    },
+                ],
+            }],
         )
         .expect("labels");
-        assert_eq!(labeled.labels[0].value, 0.0);
-        assert_eq!(labeled.labels[1].label, "Fault");
+        assert_eq!(labeled.label_sets[0].entries[0].value, 0.0);
+        assert_eq!(labeled.label_sets[0].entries[1].text, "Fault");
+        assert_eq!(labeled.label_sets[0].entries[1].color, Some(2));
         assert!(
             checked_sysvar(
                 "Demo".into(),
@@ -8458,16 +8531,23 @@ mod tests {
                 None,
                 String::new(),
                 String::new(),
-                vec![
-                    crate::bus::SysVarLabel {
-                        value: 1.0,
-                        label: "A".into(),
-                    },
-                    crate::bus::SysVarLabel {
-                        value: 1.0,
-                        label: "B".into(),
-                    },
-                ],
+                vec![crate::bus::SysVarLabelSet {
+                    id: "bad".into(),
+                    name: "Bad".into(),
+                    is_default: true,
+                    entries: vec![
+                        crate::bus::SysVarLabelEntry {
+                            value: 1.0,
+                            text: "A".into(),
+                            color: None,
+                        },
+                        crate::bus::SysVarLabelEntry {
+                            value: 1.0,
+                            text: "B".into(),
+                            color: None,
+                        },
+                    ],
+                }],
             )
             .is_err()
         );

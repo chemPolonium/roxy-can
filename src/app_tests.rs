@@ -5148,6 +5148,7 @@ fn trigger_actions_set_a_sysvar_and_queue_a_script() {
             max: Some(10.0),
             unit: String::new(),
             comment: String::new(),
+            label_sets: Vec::new(),
             labels: Vec::new(),
         },
     ));
@@ -7395,6 +7396,7 @@ fn a_sysvar_condition_fires_when_the_operator_raises_it() {
             max: Some(100.0),
             unit: String::new(),
             comment: String::new(),
+            label_sets: Vec::new(),
             labels: Vec::new(),
         },
     ));
@@ -7535,6 +7537,7 @@ fn sysvars_define_clamp_and_reset_on_run_start() {
             max: Some(500.0),
             unit: "rpm".to_string(),
             comment: "target speed".to_string(),
+            label_sets: Vec::new(),
             labels: Vec::new(),
         },
     ));
@@ -7594,6 +7597,7 @@ fn a_script_sys_set_publishes_the_value_and_the_stream() {
             max: None,
             unit: String::new(),
             comment: String::new(),
+            label_sets: Vec::new(),
             labels: Vec::new(),
         },
     ));
@@ -8213,10 +8217,17 @@ fn sysvars_survive_a_project_roundtrip() {
             max: Some(10.0),
             unit: "Hz".to_string(),
             comment: String::new(),
-            labels: vec![crate::bus::SysVarLabel {
-                value: 2.5,
-                label: "Nominal".to_string(),
+            label_sets: vec![crate::bus::SysVarLabelSet {
+                id: "default".to_string(),
+                name: "Default".to_string(),
+                is_default: true,
+                entries: vec![crate::bus::SysVarLabelEntry {
+                    value: 2.5,
+                    text: "Nominal".to_string(),
+                    color: Some(1),
+                }],
             }],
+            labels: Vec::new(),
         },
     ));
     app.settle();
@@ -8234,7 +8245,7 @@ fn sysvars_survive_a_project_roundtrip() {
     assert_eq!(v.def.name, "Rate");
     assert_eq!(v.def.unit, "Hz");
     assert_eq!(v.def.init, 2.5);
-    assert_eq!(v.def.labels[0].label, "Nominal");
+    assert_eq!(v.def.label_sets[0].entries[0].text, "Nominal");
     assert_eq!(v.value, 2.5, "value starts at init");
 }
 

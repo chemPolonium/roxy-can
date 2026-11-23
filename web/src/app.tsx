@@ -2174,7 +2174,7 @@ export function App() {
       max: edit.max,
       unit: edit.unit,
       comment: edit.comment,
-      labels: edit.labels,
+      label_sets: edit.labelSets,
       old_namespace: edit.oldNamespace,
       old_name: edit.oldName,
     });
@@ -6051,6 +6051,7 @@ export function App() {
           onDelete={(namespace, name) =>
             void run({ type: "delete_sys_var", namespace, name })
           }
+          theme={theme}
           derived={derivedDefs}
           derivedRefs={derivedReferences}
           onAddDerived={(definition) => {

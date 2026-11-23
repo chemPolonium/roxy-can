@@ -4,6 +4,8 @@ import type {
   SomeIpMember,
   SomeIpService,
   SysVar,
+  SysVarLabelEntry,
+  SysVarLabelSet,
 } from "./types";
 import {
   panelFrameProblem,
@@ -159,12 +161,38 @@ export function findPanelSysVar(ref: string, view: PanelView): SysVar | undefine
 }
 
 /// Labels are presentation-only; callers keep comparing the numeric value.
+/// `setId` undefined means the variable's default set, null means no labels.
+export function panelLabelSet(
+  variable: SysVar | undefined,
+  setId?: string | null,
+): SysVarLabelSet | undefined {
+  if (!variable || setId === null) return undefined;
+  if (setId !== undefined) {
+    return variable.labelSets.find((set) => set.id === setId);
+  }
+  return (
+    variable.labelSets.find((set) => set.isDefault) ?? variable.labelSets[0]
+  );
+}
+
+export function panelSysVarEntry(
+  variable: SysVar | undefined,
+  value: number | null,
+  setId?: string | null,
+): SysVarLabelEntry | undefined {
+  if (value === null || !Number.isFinite(value)) return undefined;
+  return panelLabelSet(variable, setId)?.entries.find(
+    (entry) => entry.value === value,
+  );
+}
+
 export function panelSysVarLabel(
   variable: SysVar | undefined,
   value: number | null,
+  setId?: string | null,
 ): string | null {
-  if (!variable || value === null || !Number.isFinite(value)) return null;
-  return variable.labels.find((entry) => entry.value === value)?.label ?? null;
+  const entry = panelSysVarEntry(variable, value, setId);
+  return entry?.text || null;
 }
 
 /// Numeric setpoints clamp into the sysvar's declared bounds.

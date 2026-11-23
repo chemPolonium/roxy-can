@@ -13,6 +13,7 @@ import {
   panelLampLit,
   panelMeterRatio,
   panelBandIndex,
+  panelSysVarEntry,
   panelSysVarLabel,
   panelValueCapability,
   panelWidgetCapability,
@@ -50,7 +51,7 @@ const sysvar = (value: number): SysVar => ({
   max: 1,
   unit: "",
   comment: "",
-  labels: [],
+  labelSets: [],
 });
 
 const script = (over: Partial<ScriptInfo>): ScriptInfo => ({
@@ -73,15 +74,31 @@ describe("panel bindings", () => {
   it("maps sysvar values to display labels without changing the number", () => {
     const variable: SysVar = {
       ...sysvar(1),
-      labels: [
-        { value: 0, label: "Normal" },
-        { value: 1, label: "Component A error" },
+      labelSets: [
+        {
+          id: "status",
+          name: "Status",
+          isDefault: true,
+          entries: [
+            { value: 0, text: "Normal" },
+            { value: 1, text: "Component A error" },
+          ],
+        },
+        {
+          id: "color",
+          name: "Color",
+          isDefault: false,
+          entries: [{ value: 1, color: 2 }],
+        },
       ],
     };
     expect(panelSysVarLabel(variable, 0)).toBe("Normal");
     expect(panelSysVarLabel(variable, 1)).toBe("Component A error");
+    expect(panelSysVarLabel(variable, 1, "color")).toBeNull();
+    expect(panelSysVarEntry(variable, 1, "color")?.color).toBe(2);
     expect(panelSysVarLabel(variable, 2)).toBeNull();
     expect(panelSysVarLabel(variable, null)).toBeNull();
+    expect(panelSysVarLabel(variable, 1, null)).toBeNull();
   });
 
   it("resolves signal, derived and sysvar sources", () => {    const view = {

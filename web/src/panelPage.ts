@@ -201,6 +201,7 @@ export interface PanelValue extends Geometry {
   digits: number;
   cuts?: number[];
   colors?: number[];
+  labelSet?: string | null;
 }
 
 /// Boolean tile bound to a system variable (0/1).
@@ -209,6 +210,7 @@ export interface PanelToggle extends Geometry {
   kind: "toggle";
   label: string;
   sysvar: string;
+  labelSet?: string | null;
 }
 
 export type PanelSetpointTarget = "sysvar" | "signal";
@@ -229,10 +231,18 @@ export interface PanelSetpoint extends Geometry {
   step: number;
   /// Optional script action fired with the committed value.
   panelAction?: string;
+  labelSet?: string | null;
 }
 
 export function panelSetpointTarget(widget: PanelSetpoint): PanelSetpointTarget {
   return widget.target === "signal" ? "signal" : "sysvar";
+}
+
+function labelSetPatch(
+  widget: { labelSet?: string | null },
+  patch: PanelWidgetPatch,
+): string | null | undefined {
+  return patch.labelSet === undefined ? widget.labelSet : patch.labelSet;
 }
 
 /// Read-only indicator: lit when the source is at or above `threshold`.
@@ -244,6 +254,7 @@ export interface PanelLamp extends Geometry {
   threshold: number;
   /// Monitor palette slot used when lit.
   color: number;
+  labelSet?: string | null;
 }
 
 interface PanelMeter extends Geometry {
@@ -255,6 +266,7 @@ interface PanelMeter extends Geometry {
   digits: number;
   cuts?: number[];
   colors?: number[];
+  labelSet?: string | null;
 }
 
 /// Horizontal fill over a fixed range.
@@ -309,6 +321,7 @@ export interface PanelWidgetPatch {
   min?: number;
   max?: number;
   target?: PanelSetpointTarget;
+  labelSet?: string | null;
 }
 
 export type PanelFieldKey = keyof PanelWidgetPatch;
@@ -612,6 +625,7 @@ const VALUE_FIELDS: PanelFieldSpec[] = [
   { key: "label", label: "Label", kind: "text", maxLength: 80 },
   SOURCE_FIELD,
   { key: "digits", label: "Decimals", kind: "digits" },
+  { key: "labelSet", label: "Labels", kind: "select" },
   { key: "cuts", label: "Color cuts", kind: "cuts" },
 ];
 
@@ -625,6 +639,7 @@ const TOGGLE_FIELDS: PanelFieldSpec[] = [
     listId: "page-sysvars",
     placeholder: "namespace::name",
   },
+  { key: "labelSet", label: "Labels", kind: "select" },
 ];
 
 const SETPOINT_FIELDS: PanelFieldSpec[] = [
@@ -655,6 +670,7 @@ const SETPOINT_FIELDS: PanelFieldSpec[] = [
     placeholder: "channel:id:signal",
   },
   { key: "digits", label: "Decimals", kind: "digits" },
+  { key: "labelSet", label: "Labels", kind: "select" },
   {
     key: "step",
     label: "Step",
@@ -685,6 +701,7 @@ const LAMP_FIELDS: PanelFieldSpec[] = [
     label: "Lit color",
     kind: "color",
   },
+  { key: "labelSet", label: "Labels", kind: "select" },
 ];
 
 const METER_FIELDS: PanelFieldSpec[] = [
@@ -693,6 +710,7 @@ const METER_FIELDS: PanelFieldSpec[] = [
   { key: "min", label: "Minimum", kind: "number", placeholder: "0" },
   { key: "max", label: "Maximum", kind: "number", placeholder: "100" },
   { key: "digits", label: "Decimals", kind: "digits" },
+  { key: "labelSet", label: "Labels", kind: "select" },
   { key: "cuts", label: "Color cuts", kind: "cuts" },
 ];
 
@@ -776,6 +794,7 @@ const VALUE_SPEC: PanelWidgetSpec = {
     if (key === "source") return widget.source;
     if (key === "digits") return widget.digits;
     if (key === "label") return widget.label;
+    if (key === "labelSet") return widget.labelSet ?? "";
     return "";
   },
   applyPatch: (widget, patch) => {
@@ -796,6 +815,7 @@ const VALUE_SPEC: PanelWidgetSpec = {
           : clamp(Math.round(patch.digits), 0, 3),
       cuts: bands.cuts ?? widget.cuts,
       colors: bands.colors ?? widget.colors,
+      labelSet: labelSetPatch(widget, patch),
     };
   },
 };
@@ -822,6 +842,7 @@ const TOGGLE_SPEC: PanelWidgetSpec = {
     if (widget.kind !== "toggle") return "";
     if (key === "sysvar") return widget.sysvar;
     if (key === "label") return widget.label;
+    if (key === "labelSet") return widget.labelSet ?? "";
     return "";
   },
   applyPatch: (widget, patch) => {
@@ -833,6 +854,7 @@ const TOGGLE_SPEC: PanelWidgetSpec = {
         patch.sysvar === undefined
           ? widget.sysvar
           : patch.sysvar.slice(0, 120),
+      labelSet: labelSetPatch(widget, patch),
     };
   },
 };
@@ -869,6 +891,7 @@ const SETPOINT_SPEC: PanelWidgetSpec = {
     if (key === "step") return widget.step;
     if (key === "panelAction") return widget.panelAction ?? "";
     if (key === "label") return widget.label;
+    if (key === "labelSet") return widget.labelSet ?? "";
     return "";
   },
   applyPatch: (widget, patch) => {
@@ -901,6 +924,7 @@ const SETPOINT_SPEC: PanelWidgetSpec = {
         patch.panelAction === undefined
           ? widget.panelAction
           : patch.panelAction.slice(0, 80),
+      labelSet: labelSetPatch(widget, patch),
     };
   },
 };
@@ -931,6 +955,7 @@ const LAMP_SPEC: PanelWidgetSpec = {
     if (key === "threshold") return widget.threshold;
     if (key === "color") return widget.color;
     if (key === "label") return widget.label;
+    if (key === "labelSet") return widget.labelSet ?? "";
     return "";
   },
   applyPatch: (widget, patch) => {
@@ -951,6 +976,7 @@ const LAMP_SPEC: PanelWidgetSpec = {
         patch.color === undefined
           ? widget.color
           : paletteSlot(patch.color, widget.color),
+      labelSet: labelSetPatch(widget, patch),
     };
   },
 };
@@ -964,6 +990,7 @@ function meterFieldValue(
   if (key === "max") return widget.max;
   if (key === "digits") return widget.digits;
   if (key === "label") return widget.label;
+  if (key === "labelSet") return widget.labelSet ?? "";
   return "";
 }
 
@@ -983,6 +1010,7 @@ function meterPatch(widget: PanelBar | PanelGauge, patch: PanelWidgetPatch) {
         : clamp(Math.round(patch.digits), 0, 3),
     cuts: bands.cuts ?? widget.cuts,
     colors: bands.colors ?? widget.colors,
+    labelSet: labelSetPatch(widget, patch),
   };
 }
 
@@ -1209,6 +1237,10 @@ function widgetPatch(
     kind === "button" && action === "send"
       ? normalisePanelFrame(value.frame)
       : undefined;
+  const labelSet =
+    value.labelSet === null
+      ? null
+      : text(value.labelSet, 64).trim() || undefined;
   return {
     label: text(value.label, 80),
     ...(kind === "button"
@@ -1223,10 +1255,11 @@ function widgetPatch(
       ? {
           source: text(value.source, 120),
           digits: clamp(Math.round(Number(value.digits) || 0), 0, 3),
+          labelSet,
           ...normalisePanelBandFields(value),
         }
       : {}),
-    ...(kind === "toggle" ? { sysvar: text(value.sysvar, 120) } : {}),
+    ...(kind === "toggle" ? { sysvar: text(value.sysvar, 120), labelSet } : {}),
     ...(kind === "setpoint"
       ? {
           target: value.target === "signal" ? ("signal" as const) : ("sysvar" as const),
@@ -1235,6 +1268,7 @@ function widgetPatch(
           digits: clamp(Math.round(Number(value.digits) || 0), 0, 3),
           step: Number(value.step),
           panelAction: text(value.panelAction, 80),
+          labelSet,
         }
       : {}),
     ...(kind === "lamp"
@@ -1242,6 +1276,7 @@ function widgetPatch(
           source: text(value.source, 120),
           threshold: Number(value.threshold),
           color: paletteSlot(value.color, 1),
+          labelSet,
         }
       : {}),
     ...(kind === "bar" || kind === "gauge"
@@ -1250,6 +1285,7 @@ function widgetPatch(
           min: Number(value.min),
           max: Number(value.max),
           digits: clamp(Math.round(Number(value.digits) || 0), 0, 3),
+          labelSet,
           ...normalisePanelBandFields(value),
         }
       : {}),
@@ -1666,9 +1702,12 @@ export function pastePanelWidget(
           digits: widget.digits,
           cuts: widget.cuts,
           colors: widget.colors,
+          labelSet: widget.labelSet,
         }
       : {}),
-    ...(widget.kind === "toggle" ? { sysvar: widget.sysvar } : {}),
+    ...(widget.kind === "toggle"
+      ? { sysvar: widget.sysvar, labelSet: widget.labelSet }
+      : {}),
     ...(widget.kind === "setpoint"
       ? {
           target: panelSetpointTarget(widget),
@@ -1677,6 +1716,7 @@ export function pastePanelWidget(
           digits: widget.digits,
           step: widget.step,
           panelAction: widget.panelAction,
+          labelSet: widget.labelSet,
         }
       : {}),
     ...(widget.kind === "lamp"
@@ -1684,6 +1724,7 @@ export function pastePanelWidget(
           source: widget.source,
           threshold: widget.threshold,
           color: widget.color,
+          labelSet: widget.labelSet,
         }
       : {}),
     ...(widget.kind === "bar" || widget.kind === "gauge"
@@ -1694,6 +1735,7 @@ export function pastePanelWidget(
           digits: widget.digits,
           cuts: widget.cuts,
           colors: widget.colors,
+          labelSet: widget.labelSet,
         }
       : {}),
   });
