@@ -2090,6 +2090,7 @@ fn derived_channels_sample_their_subscribed_sources() {
         name: "Sum".into(),
         unit: "V".into(),
         expression: "[A] + [B]".into(),
+        band_set_id: None,
         bands: Vec::new(),
         cuts: vec![12.0],
         names: vec!["low".into(), "high".into()],
@@ -5150,6 +5151,7 @@ fn trigger_actions_set_a_sysvar_and_queue_a_script() {
             unit: String::new(),
             comment: String::new(),
             label_sets: Vec::new(),
+            band_set_id: None,
             labels: Vec::new(),
         },
     ));
@@ -7001,6 +7003,7 @@ fn the_state_tracker_round_trips_through_a_project() {
     app.state_trackers[0].rules.insert(
         key.clone(),
         crate::observe::StateRule {
+            band_set_id: None,
             bands: vec![
                 crate::band::Band {
                     upper: Some(1000.0),
@@ -7412,6 +7415,7 @@ fn a_sysvar_condition_fires_when_the_operator_raises_it() {
             unit: String::new(),
             comment: String::new(),
             label_sets: Vec::new(),
+            band_set_id: None,
             labels: Vec::new(),
         },
     ));
@@ -7553,6 +7557,7 @@ fn sysvars_define_clamp_and_reset_on_run_start() {
             unit: "rpm".to_string(),
             comment: "target speed".to_string(),
             label_sets: Vec::new(),
+            band_set_id: None,
             labels: Vec::new(),
         },
     ));
@@ -7613,6 +7618,7 @@ fn a_script_sys_set_publishes_the_value_and_the_stream() {
             unit: String::new(),
             comment: String::new(),
             label_sets: Vec::new(),
+            band_set_id: None,
             labels: Vec::new(),
         },
     ));
@@ -8251,6 +8257,7 @@ fn sysvars_survive_a_project_roundtrip() {
                     },
                 ],
             }],
+            band_set_id: None,
             labels: Vec::new(),
         },
     ));
@@ -8269,7 +8276,17 @@ fn sysvars_survive_a_project_roundtrip() {
     assert_eq!(v.def.name, "Rate");
     assert_eq!(v.def.unit, "Hz");
     assert_eq!(v.def.init, 2.5);
-    assert_eq!(v.def.label_sets[0].bands[0].text, "Nominal");
+    assert!(
+        v.def.band_set_id.is_some(),
+        "legacy per-sysvar bands become a library set"
+    );
+    let set_id = v.def.band_set_id.as_deref().unwrap();
+    let set = restored
+        .band_sets
+        .iter()
+        .find(|set| set.id == set_id)
+        .expect("band set migrated");
+    assert_eq!(set.bands[0].text, "Nominal");
     assert_eq!(v.value, 2.5, "value starts at init");
 }
 

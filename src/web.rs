@@ -499,6 +499,7 @@ fn checked_sysvar(
         unit: unit.trim().to_string(),
         comment: comment.trim().to_string(),
         label_sets,
+        band_set_id: None,
         labels: Vec::new(),
     })
 }
@@ -993,6 +994,58 @@ fn seed_chart_selection(app: &mut App, store: &mut SignalStore) {
 /// Selecting a chart lane also records it on the first Graphics window, so
 /// project save/load carries the selection. The panel stays the source of
 /// truth for lane colors; `store` is updated by the caller.
+fn checked_band_set(
+    id: String,
+    name: String,
+    bands: Vec<crate::band::Band>,
+) -> Result<crate::band::BandSet, String> {
+    let id = id.trim().to_string();
+    let name = name.trim().to_string();
+    if id.is_empty() || id.chars().count() > 64 {
+        return Err("band set id must be 1–64 characters".into());
+    }
+    if name.is_empty() || name.chars().count() > 40 {
+        return Err("band set name must be 1–40 characters".into());
+    }
+    let mut bands = bands;
+    if bands.is_empty() || bands.len() > 64 {
+        return Err("band set needs 1–64 bands".into());
+    }
+    for band in &mut bands {
+        if band.upper.is_some_and(|upper| !upper.is_finite()) {
+            return Err("band bounds must be finite".into());
+        }
+        band.text = band.text.trim().to_string();
+        if band.text.chars().count() > 80 {
+            return Err("band text is limited to 80 characters".into());
+        }
+        if band.color.is_some_and(|color| color > 63) {
+            return Err("band color slot must be 0–63".into());
+        }
+    }
+    bands.sort_by(|a, b| match (a.upper, b.upper) {
+        (Some(left), Some(right)) => left
+            .total_cmp(&right)
+            .then_with(|| a.inclusive.cmp(&b.inclusive)),
+        (Some(_), None) => std::cmp::Ordering::Less,
+        (None, Some(_)) => std::cmp::Ordering::Greater,
+        (None, None) => std::cmp::Ordering::Equal,
+    });
+    if bands.iter().filter(|band| band.upper.is_none()).count() != 1 {
+        return Err("band set needs exactly one open-ended final band".into());
+    }
+    if bands.last().is_some_and(|band| band.upper.is_some()) {
+        return Err("the open-ended band must be last".into());
+    }
+    if bands
+        .windows(2)
+        .any(|pair| pair[0].upper == pair[1].upper && pair[0].inclusive == pair[1].inclusive)
+    {
+        return Err("band set needs unique bound/mode pairs".into());
+    }
+    Ok(crate::band::BandSet { id, name, bands })
+}
+
 #[cfg(test)]
 fn chart_select(app: &mut App, ch: u8, id: u32, ext: bool, name: &str) {
     let key = app.can_key(ch, id, ext, name.to_string());
@@ -1126,14 +1179,20 @@ fn chart_move(app: &mut App, store: &mut SignalStore, key: &SigKey, to: usize) {
 
 /// Replaces a State row's custom value-definition bands. Cuts are sorted
 /// and deduplicated; names are padded so every band has a label.
-fn set_state_rule(app: &mut App, key: &SigKey, bands: Vec<crate::band::Band>) {
+fn set_state_rule(
+    app: &mut App,
+    key: &SigKey,
+    bands: Vec<crate::band::Band>,
+    band_set_id: Option<String>,
+) {
     let Some(window) = app.state_trackers.first_mut() else {
         app.fail("state rule needs a State Tracker window");
         return;
     };
-    window
-        .rules
-        .insert(key.clone(), crate::observe::StateRule { bands });
+    window.rules.insert(
+        key.clone(),
+        crate::observe::StateRule { bands, band_set_id },
+    );
 }
 
 fn clear_state_rule(app: &mut App, key: &SigKey) {
@@ -2504,12 +2563,23 @@ enum WebCommand {
         comment: String,
         #[serde(default)]
         label_sets: Vec<crate::bus::SysVarLabelSet>,
+        #[serde(default)]
+        band_set_id: Option<String>,
         old_namespace: Option<String>,
         old_name: Option<String>,
     },
     DeleteSysVar {
         namespace: String,
         name: String,
+    },
+    DefineBandSet {
+        id: String,
+        name: String,
+        bands: Vec<crate::band::Band>,
+        old_id: Option<String>,
+    },
+    DeleteBandSet {
+        id: String,
     },
     AddMonitor {
         kind: String,
@@ -2534,6 +2604,8 @@ enum WebCommand {
         key: String,
         digits: Option<usize>,
         bands: Option<Vec<crate::band::Band>>,
+        #[serde(default)]
+        band_set_id: Option<String>,
     },
     /// One or two Monitor rows per line.
     SetMonitorColumns {
@@ -2605,6 +2677,8 @@ enum WebCommand {
         frame: Option<String>,
         name: String,
         bands: Vec<crate::band::Band>,
+        #[serde(default)]
+        band_set_id: Option<String>,
     },
     ClearStateRule {
         kind: String,
@@ -3566,12 +3640,14 @@ fn app_loop(
                     unit,
                     comment,
                     label_sets,
+                    band_set_id,
                     old_namespace,
                     old_name,
                 } => {
                     match checked_sysvar(namespace, name, init, min, max, unit, comment, label_sets)
                     {
-                        Ok(def) => {
+                        Ok(mut def) => {
+                            def.band_set_id = band_set_id;
                             // A rename deletes the old key first: leaving it
                             // would keep a phantom variable scripts could write.
                             if let (Some(old_ns), Some(old_name)) = (old_namespace, old_name)
@@ -3589,6 +3665,64 @@ fn app_loop(
                 }
                 WebCommand::DeleteSysVar { namespace, name } => {
                     app.send(BusCommand::DeleteSysVar { namespace, name });
+                }
+                WebCommand::DefineBandSet {
+                    id,
+                    name,
+                    bands,
+                    old_id,
+                } => match checked_band_set(id, name, bands) {
+                    Ok(set) => {
+                        if let Some(old) = old_id
+                            && old != set.id
+                        {
+                            app.band_sets.retain(|entry| entry.id != old);
+                        }
+                        app.band_sets.retain(|entry| entry.id != set.id);
+                        for rule in app
+                            .state_trackers
+                            .iter_mut()
+                            .flat_map(|window| window.rules.values_mut())
+                        {
+                            if rule.band_set_id.as_deref() == Some(set.id.as_str()) {
+                                rule.bands = set.bands.clone();
+                            }
+                        }
+                        for def in &mut app.derived_defs {
+                            if def.band_set_id.as_deref() == Some(set.id.as_str()) {
+                                def.bands = set.bands.clone();
+                            }
+                        }
+                        app.band_sets.push(set);
+                    }
+                    Err(error) => app.fail(format!("bands: {error}")),
+                },
+                WebCommand::DeleteBandSet { id } => {
+                    let used = app
+                        .snap
+                        .sysvars
+                        .iter()
+                        .any(|v| v.def.band_set_id.as_deref() == Some(id.as_str()))
+                        || app
+                            .monitor_view
+                            .rows
+                            .iter()
+                            .any(|row| row.band_set_id.as_deref() == Some(id.as_str()))
+                        || app.state_trackers.iter().any(|window| {
+                            window
+                                .rules
+                                .values()
+                                .any(|rule| rule.band_set_id.as_deref() == Some(id.as_str()))
+                        })
+                        || app
+                            .derived_defs
+                            .iter()
+                            .any(|def| def.band_set_id.as_deref() == Some(id.as_str()));
+                    if used {
+                        app.fail("bands: set is still in use");
+                    } else {
+                        app.band_sets.retain(|set| set.id != id);
+                    }
                 }
                 WebCommand::AddMonitor {
                     kind,
@@ -3631,9 +3765,22 @@ fn app_loop(
                         app.set_win_signal(crate::workspace::PopupTarget::Monitor, key, false);
                     }
                 }
-                WebCommand::ConfigureMonitor { key, digits, bands } => {
+                WebCommand::ConfigureMonitor {
+                    key,
+                    digits,
+                    bands,
+                    band_set_id,
+                } => {
                     if let Err(error) = edit_monitor_row(&mut app, &key, digits, bands) {
                         app.fail(error);
+                    } else if let Some(id) = band_set_id
+                        && let Some(row) = app
+                            .monitor_view
+                            .rows
+                            .iter_mut()
+                            .find(|row| row.key.text() == key)
+                    {
+                        row.band_set_id = if id.is_empty() { None } else { Some(id) };
                     }
                 }
                 WebCommand::SetMonitorColumns { columns } => {
@@ -3785,12 +3932,13 @@ fn app_loop(
                     frame,
                     name,
                     bands,
+                    band_set_id,
                 } => {
                     let Some(key) = command_key(&app, &kind, ch, id, ext, frame, name) else {
                         app.fail(format!("unknown signal kind: {kind}"));
                         continue;
                     };
-                    set_state_rule(&mut app, &key, bands);
+                    set_state_rule(&mut app, &key, bands, band_set_id);
                 }
                 WebCommand::ClearStateRule {
                     kind,
@@ -5928,6 +6076,7 @@ struct WebState {
     trigger_fires: Vec<WebTriggerFire>,
     trigger_limits: WebTriggerLimits,
     sysvars: Vec<WebSysVar>,
+    band_sets: Vec<crate::band::BandSet>,
     monitor: Vec<WebMonitorRow>,
     /// One or two rows per line on the Monitor page.
     monitor_columns: u8,
@@ -6363,6 +6512,8 @@ struct WebMonitorRow {
     unit: String,
     digits: usize,
     bands: Vec<crate::band::Band>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    band_set_id: Option<String>,
 }
 
 #[derive(Clone, Default, Serialize)]
@@ -6398,6 +6549,8 @@ struct WebDerivedDef {
     name: String,
     unit: String,
     expression: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    band_set_id: Option<String>,
     bands: Vec<crate::band::Band>,
     sources: Vec<crate::derived::DerivedSource>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -6417,6 +6570,8 @@ struct WebStateBand {
 #[serde(rename_all = "camelCase")]
 struct WebStateRule {
     bands: Vec<crate::band::Band>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    band_set_id: Option<String>,
 }
 
 #[derive(Clone, Default, Serialize)]
@@ -6505,6 +6660,7 @@ struct WebSysVar {
     unit: String,
     comment: String,
     label_sets: Vec<crate::bus::SysVarLabelSet>,
+    band_set_id: Option<String>,
 }
 
 #[derive(Clone, Default, Serialize)]
@@ -7342,6 +7498,7 @@ fn build_state(app: &App, series: &VecDeque<WebSeriesPoint>, fps: f64) -> WebSta
             unit: v.def.unit.clone(),
             comment: v.def.comment.clone(),
             label_sets: v.def.display_label_sets(),
+            band_set_id: v.def.band_set_id.clone(),
         })
         .collect();
 
@@ -7488,6 +7645,7 @@ fn build_state(app: &App, series: &VecDeque<WebSeriesPoint>, fps: f64) -> WebSta
                         bands,
                         rule: rule.map(|rule| WebStateRule {
                             bands: rule.bands.clone(),
+                            band_set_id: rule.band_set_id.clone(),
                         }),
                     }
                 })
@@ -7561,7 +7719,13 @@ fn build_state(app: &App, series: &VecDeque<WebSeriesPoint>, fps: f64) -> WebSta
                 has_value,
                 unit,
                 digits: row.digits,
-                bands: row.bands.clone(),
+                bands: row
+                    .band_set_id
+                    .as_ref()
+                    .and_then(|id| app.band_sets.iter().find(|set| &set.id == id))
+                    .map(|set| set.bands.clone())
+                    .unwrap_or_else(|| row.bands.clone()),
+                band_set_id: row.band_set_id.clone(),
             }
         })
         .collect();
@@ -8005,6 +8169,7 @@ fn build_state(app: &App, series: &VecDeque<WebSeriesPoint>, fps: f64) -> WebSta
                 name: def.name.clone(),
                 unit: def.unit.clone(),
                 expression: def.expression.clone(),
+                band_set_id: def.band_set_id.clone(),
                 bands: def.state_bands(),
                 sources: def.sources.clone(),
                 error: app
@@ -8052,6 +8217,7 @@ fn build_state(app: &App, series: &VecDeque<WebSeriesPoint>, fps: f64) -> WebSta
             marker_cap: app.limits.marker_cap,
         },
         sysvars,
+        band_sets: app.band_sets.clone(),
         monitor,
         monitor_columns: app.monitor_view.columns,
         data,
@@ -9221,6 +9387,7 @@ mod tests {
     #[test]
     fn state_custom_bands_use_cut_names() {
         let rule = crate::observe::StateRule {
+            band_set_id: None,
             bands: vec![
                 crate::band::Band {
                     upper: Some(1.0),
@@ -9275,6 +9442,7 @@ mod tests {
                     color: None,
                 },
             ],
+            None,
         );
         let state = build_state(&app, &VecDeque::new(), 0.0);
         let rule = state.state_rows[0].rule.as_ref().expect("rule saved");
@@ -10007,6 +10175,7 @@ mod tests {
             name: "Double".into(),
             unit: "rpm".into(),
             expression: "[EngineSpeed] * 2".into(),
+            band_set_id: None,
             bands: Vec::new(),
             cuts: vec![1000.0],
             names: vec!["low".into(), "high".into()],

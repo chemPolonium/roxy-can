@@ -156,8 +156,8 @@ pub struct MonitorRow {
     pub label: String,
     pub digits: usize,
     pub bands: Vec<crate::band::Band>,
+    pub band_set_id: Option<String>,
 }
-
 /// Rows watched by the Monitor panel plus its single/two-column preference.
 pub struct MonitorView {
     pub rows: Vec<MonitorRow>,
@@ -185,6 +185,7 @@ impl Default for MonitorRow {
             label: String::new(),
             digits: 1,
             bands: vec![crate::band::Band::final_band(Some(0))],
+            band_set_id: None,
         }
     }
 }
@@ -253,6 +254,8 @@ pub struct App {
     /// Derived-channel definitions. The project file stores this list and the
     /// core samples the curves; the web modal reads it back from the snapshot.
     pub derived_defs: Vec<crate::derived::DerivedDef>,
+    /// Project-owned reusable BandSets. Targets reference these by id.
+    pub band_sets: Vec<crate::band::BandSet>,
     /// Chart lanes the web shell keeps subscribed even though they are not in
     /// the first Graphics window (session-only Signals picks). Refreshed
     /// from the session selection just before an observer drops a row, so a
@@ -481,6 +484,7 @@ impl App {
             reference: None,
             reference_rev: 0,
             derived_defs: Vec::new(),
+            band_sets: Vec::new(),
             session_chart_keep: std::collections::HashSet::new(),
             expanded_messages: std::collections::HashSet::new(),
             pnp_signature,
@@ -878,6 +882,7 @@ impl App {
         }
         Some(crate::observe::StateRule {
             bands: def.state_bands(),
+            band_set_id: def.band_set_id.clone(),
         })
     }
 

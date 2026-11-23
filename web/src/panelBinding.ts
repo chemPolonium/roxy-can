@@ -22,6 +22,7 @@ import {
 export interface PanelView {
   signals: SignalSeries[];
   sysvars: SysVar[];
+  bandSets?: BandSet[];
   /// Writable CAN signals from the catalog, for setpoint controls.
   writeTargets?: PanelWriteTarget[];
   /// CAN channels the message sender may address.
@@ -170,9 +171,7 @@ export function panelLabelSet(
   if (setId !== undefined) {
     return variable.labelSets.find((set) => set.id === setId);
   }
-  return (
-    variable.labelSets.find((set) => set.isDefault) ?? variable.labelSets[0]
-  );
+  return variable.labelSets[0];
 }
 
 export function panelSysVarEntry(

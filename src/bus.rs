@@ -779,9 +779,12 @@ pub struct SysVarDef {
     pub unit: String,
     #[serde(default)]
     pub comment: String,
-    /// Named display-label sets; the first is the default when no flag wins.
+    /// Named display-label sets; legacy, migrated into `App::band_sets`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub label_sets: Vec<SysVarLabelSet>,
+    /// Project BandSet used by default for this variable.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub band_set_id: Option<String>,
     /// Pre-multi-set text labels, read for old projects only.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub labels: Vec<SysVarLabel>,

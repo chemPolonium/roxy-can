@@ -88,6 +88,7 @@ export interface State {
   triggerFires: TriggerFire[];
   triggerLimits: TriggerLimits;
   sysvars: SysVar[];
+  bandSets: BandSet[];
   monitor: MonitorRow[];
   /// One or two rows per line on the Monitor page.
   monitorColumns: number;
@@ -357,7 +358,6 @@ export interface ScriptFunctionHelp {
 export interface BandSet {
   id: string;
   name: string;
-  isDefault: boolean;
   bands: Band[];
 }
 
@@ -371,6 +371,7 @@ export interface SysVar {
   unit: string;
   comment: string;
   labelSets: BandSet[];
+  bandSetId?: string | null;
 }
 
 export interface MonitorRow {
@@ -392,6 +393,7 @@ export interface MonitorRow {
   digits: number;
   /// Ordered display bands; last band is open-ended.
   bands: Band[];
+  bandSetId?: string | null;
 }
 
 export interface DataRow {
@@ -425,6 +427,7 @@ export interface StateBand {
 
 export interface StateRule {
   bands: Band[];
+  bandSetId?: string | null;
 }
 
 export interface DerivedSource {
@@ -438,6 +441,7 @@ export interface DerivedDef {
   unit: string;
   expression: string;
   bands: Band[];
+  bandSetId?: string | null;
   sources?: DerivedSource[];
   error?: string;
 }
@@ -898,11 +902,20 @@ export type Command =
       max: number | null;
       unit: string;
       comment: string;
-      label_sets: BandSet[];
+      label_sets?: BandSet[];
+      band_set_id: string | null;
       old_namespace: string | null;
       old_name: string | null;
     }
   | { type: "delete_sys_var"; namespace: string; name: string }
+  | {
+      type: "define_band_set";
+      id: string;
+      name: string;
+      bands: Band[];
+      old_id?: string | null;
+    }
+  | { type: "delete_band_set"; id: string }
   | {
       type: "add_monitor";
       kind: string;
@@ -934,6 +947,7 @@ export type Command =
       key: string;
       digits?: number;
       bands?: Band[];
+      band_set_id?: string | null;
     }
   | {
       type: "set_monitor_columns";
@@ -1003,6 +1017,7 @@ export type Command =
       frame?: string;
       name: string;
       bands: Band[];
+      band_set_id?: string | null;
     }
   | {
       type: "clear_state_rule";

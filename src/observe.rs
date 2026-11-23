@@ -683,6 +683,7 @@ pub struct DataWindow {
 #[derive(Clone)]
 pub struct StateRule {
     pub bands: Vec<crate::band::Band>,
+    pub band_set_id: Option<String>,
 }
 
 impl StateRule {

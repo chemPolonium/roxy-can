@@ -78,7 +78,6 @@ describe("panel bindings", () => {
         {
           id: "status",
           name: "Status",
-          isDefault: true,
           bands: [
             { upper: 1, inclusive: false, text: "Normal" },
             { upper: 1, inclusive: true, text: "Component A error" },
@@ -88,7 +87,6 @@ describe("panel bindings", () => {
         {
           id: "color",
           name: "Color",
-          isDefault: false,
           bands: [
             { upper: 1, inclusive: false, color: 1 },
             { upper: 1, inclusive: true, color: 2 },

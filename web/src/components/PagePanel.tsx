@@ -42,7 +42,6 @@ import {
   panelGaugeArc,
   panelLampLit,
   panelMeterRatio,
-  panelLabelSet,
   panelWidgetCapability,
   resolvePanelSource,
   someIpMemberFor,
@@ -117,28 +116,20 @@ function panelWidgetSysVar(
 }
 
 function panelWidgetBands(widget: PanelWidget, view: PanelView): Band[] {
-  if (widget.kind === "value" || widget.kind === "toggle" || widget.kind === "setpoint") {
-    const variable = panelWidgetSysVar(widget, view);
-    if (variable) {
-      return panelLabelSet(variable, widget.labelSet)?.bands ?? [];
-    }
-    if (widget.kind === "value") {
-      return widget.bands ?? bandsFromCuts(widget.cuts, widget.colors);
-    }
-    return [];
+  const variable = panelWidgetSysVar(widget, view);
+  if (variable && "labelSet" in widget) {
+    const chosen =
+      widget.labelSet === null
+        ? null
+        : (widget.labelSet ?? variable.bandSetId ?? null);
+    return chosen
+      ? (view.bandSets?.find((set) => set.id === chosen)?.bands ?? [])
+      : [];
   }
-  if (widget.kind === "bar" || widget.kind === "gauge") {
-    const variable = panelWidgetSysVar(widget, view);
-    if (variable) {
-      return panelLabelSet(variable, widget.labelSet)?.bands ?? [];
-    }
+  if (widget.kind === "value" || widget.kind === "bar" || widget.kind === "gauge") {
     return widget.bands ?? bandsFromCuts(widget.cuts, widget.colors);
   }
   if (widget.kind === "lamp") {
-    const variable = panelWidgetSysVar(widget, view);
-    if (variable) {
-      return panelLabelSet(variable, widget.labelSet)?.bands ?? [];
-    }
     return widget.bands ?? [];
   }
   return [];
@@ -2246,12 +2237,12 @@ export function PagePanel({
         return null;
       }
       const variable = panelWidgetSysVar(widget, view);
-      if (!variable || variable.labelSets.length === 0) return null;
+      if (!variable || (view.bandSets ?? []).length === 0) return null;
       const chosen =
         widget.labelSet === null ? "none" : (widget.labelSet ?? "");
-      const fallback =
-        variable.labelSets.find((set) => set.isDefault) ??
-        variable.labelSets[0];
+      const fallback = variable.bandSetId
+        ? view.bandSets?.find((set) => set.id === variable.bandSetId)
+        : undefined;
       return (
         <label>
           Bands
@@ -2266,9 +2257,11 @@ export function PagePanel({
               });
             }}
           >
-            <option value="">Default · {fallback.name}</option>
+            <option value="">
+              Default · {fallback?.name ?? "none"}
+            </option>
             <option value="none">No bands</option>
-            {variable.labelSets.map((set) => (
+            {(view.bandSets ?? []).map((set) => (
               <option key={set.id} value={set.id}>
                 {set.name}
               </option>

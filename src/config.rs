@@ -251,8 +251,10 @@ pub struct StateOverrideCfg {
 /// `None` color means automatic.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct RuleCfg {
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(default)]
     pub bands: Vec<crate::band::Band>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub band_set_id: Option<String>,
     /// Legacy v0.40 cut/name/color representation, read on load only.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub cuts: Vec<f64>,
@@ -322,6 +324,8 @@ pub struct MonitorRowCfg {
     /// Ordered bands; legacy cuts/colors are read only for old projects.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub bands: Vec<crate::band::Band>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub band_set_id: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub cuts: Vec<f64>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -650,6 +654,10 @@ pub struct ProjectSettings {
     /// only the declarations persist.
     #[serde(default)]
     pub sysvars: Vec<crate::bus::SysVarDef>,
+    /// Reusable value-band sets referenced by SysVars, observer rows and
+    /// Panel controls.
+    #[serde(default)]
+    pub band_sets: Vec<crate::band::BandSet>,
     #[serde(default)]
     pub counters: Counters,
     #[serde(default)]
@@ -834,6 +842,7 @@ impl Default for ProjectSettings {
             nodes: Vec::new(),
             blocks: Vec::new(),
             sysvars: Vec::new(),
+            band_sets: Vec::new(),
             counters: Counters::default(),
             recent_dbc: Vec::new(),
             recent_log: Vec::new(),
@@ -957,6 +966,7 @@ impl ProjectSettings {
                         label: r.label.clone(),
                         digits: r.digits,
                         bands: r.bands.clone(),
+                        band_set_id: r.band_set_id.clone(),
                         cuts: Vec::new(),
                         colors: Vec::new(),
                         rule_on: false,
@@ -993,6 +1003,7 @@ impl ProjectSettings {
                                 y_mode: s.y_mode.to_u8(),
                                 state_rule: w.rules.get(&s.key).map(|r| RuleCfg {
                                     bands: r.bands.clone(),
+                                    band_set_id: r.band_set_id.clone(),
                                     cuts: Vec::new(),
                                     names: Vec::new(),
                                     colors: Vec::new(),
@@ -1037,6 +1048,7 @@ impl ProjectSettings {
                 })
                 .collect(),
             sysvars: app.snap.sysvars.iter().map(|v| v.def.clone()).collect(),
+            band_sets: app.band_sets.clone(),
             counters: app.window_counters(),
             recent_dbc: app.recent_dbc.clone(),
             recent_log: app.recent_log.clone(),
@@ -1206,6 +1218,7 @@ impl ProjectSettings {
                         label: m.label,
                         digits: m.digits,
                         bands,
+                        band_set_id: m.band_set_id,
                     }
                 })
                 .collect();
@@ -1221,7 +1234,10 @@ impl ProjectSettings {
                     if let Some(r) = &cfg.state_rule {
                         rules.insert(
                             s.key.clone(),
-                            crate::observe::StateRule { bands: r.bands() },
+                            crate::observe::StateRule {
+                                bands: r.bands(),
+                                band_set_id: r.band_set_id.clone(),
+                            },
                         );
                     }
                     if let Some(list) = &cfg.state_overrides {
@@ -1264,10 +1280,32 @@ impl ProjectSettings {
         app.send(crate::bus::BusCommand::SetNodes {
             nodes: self.nodes.clone(),
         });
+        // Migrate per-sysvar label sets into the project-wide band library.
+        let mut band_sets = self.band_sets.clone();
+        let mut sysvars = self.sysvars.clone();
+        for def in &mut sysvars {
+            if def.band_set_id.is_none() && !def.label_sets.is_empty() {
+                let source = def.label_sets.remove(0);
+                let id = format!("sysvar:{}::{}:{}", def.namespace, def.name, source.id);
+                def.band_set_id = Some(id.clone());
+                band_sets.push(crate::band::BandSet {
+                    id,
+                    name: if source.name.is_empty() {
+                        def.name.clone()
+                    } else {
+                        source.name
+                    },
+                    bands: source.bands,
+                });
+            }
+            def.label_sets.clear();
+            def.labels.clear();
+        }
+        app.band_sets = band_sets;
         // System variables restore as one Define per entry: existing
         // definitions with the same key are replaced, values start at
         // their declared init.
-        for def in &self.sysvars {
+        for def in &sysvars {
             app.send(crate::bus::BusCommand::DefineSysVar(def.clone()));
         }
         // Replay blocks cross wholesale like the nodes: ids are minted
@@ -1744,6 +1782,7 @@ mod tests {
             name: "Sum".into(),
             unit: "V".into(),
             expression: "[EngineSpeed] + 1".into(),
+            band_set_id: None,
             bands: Vec::new(),
             cuts: vec![10.0],
             names: vec!["low".into(), "high".into()],

@@ -21,6 +21,8 @@ pub struct DerivedDef {
     #[serde(default)]
     pub unit: String,
     pub expression: String,
+    #[serde(default, skip_serializing_if = "Option::is_none", alias = "bandSetId")]
+    pub band_set_id: Option<String>,
     /// State observer bands. Empty means no bands; legacy `cuts`/`names`
     /// are converted on load.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -458,6 +460,7 @@ mod tests {
             name: "Error".into(),
             unit: "km/h".into(),
             expression: "[A] - [B]".into(),
+            band_set_id: None,
             bands: Vec::new(),
             cuts: vec![10.0],
             names: vec!["ok".into(), "high".into()],

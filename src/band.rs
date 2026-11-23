@@ -59,3 +59,13 @@ pub fn from_cuts(cuts: &[f64], colors: &[usize], names: &[String]) -> Vec<Band> 
     }
     bands
 }
+
+/// A reusable, project-owned set of value bands. Targets reference `id`; the
+/// set itself has no owner, so several rows/controls can share it.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BandSet {
+    pub id: String,
+    pub name: String,
+    pub bands: Vec<Band>,
+}

@@ -1,11 +1,9 @@
 import { useEffect, useState } from "preact/hooks";
 import { ModalHeader } from "./ModalHeader";
 import { Tabs } from "./Tabs";
-import type { SysVar } from "../types";
-import type { Band } from "../bands";
-import { bandAt, finalBand, normaliseBands, validateBands } from "../bands";
-import { BandEditor } from "./BandEditor";
-import { palette, type Theme } from "../theme";
+import type { BandSet, SysVar } from "../types";
+import type { Theme } from "../theme";
+import { BandSetPanel } from "./BandSetPanel";
 import type { DerivedDef, DerivedReference } from "../derived";
 import { DerivedPanel } from "./DerivedPanel";
 
@@ -17,18 +15,16 @@ export interface SysVarEdit {
   max: number | null;
   unit: string;
   comment: string;
-  labelSets: {
-    id: string;
-    name: string;
-    isDefault: boolean;
-    bands: Band[];
-  }[];
+  bandSetId: string | null;
   oldNamespace: string | null;
   oldName: string | null;
 }
 
 interface Props {
   vars: SysVar[];
+  bandSets: BandSet[];
+  onSaveBandSet: (set: BandSet, oldId: string | null) => void;
+  onDeleteBandSet: (id: string) => void;
   onSetValue: (namespace: string, name: string, value: number) => void;
   onDefine: (edit: SysVarEdit) => void;
   onDelete: (namespace: string, name: string) => void;
@@ -37,16 +33,9 @@ interface Props {
   onAddDerived: (definition: DerivedDef) => void;
   onRemoveDerived: (id: string) => void;
   onRuleDerived?: (definition: DerivedDef) => void;
-  initialTab?: "values" | "computed";
+  initialTab?: "values" | "computed" | "bands";
   theme: Theme;
   onClose: () => void;
-}
-
-interface DraftLabelSet {
-  id: string;
-  name: string;
-  isDefault: boolean;
-  bands: Band[];
 }
 
 interface Draft {
@@ -58,7 +47,7 @@ interface Draft {
   max: string;
   unit: string;
   comment: string;
-  labelSets: DraftLabelSet[];
+  bandSetId: string;
 }
 
 function newDraft(): Draft {
@@ -71,7 +60,7 @@ function newDraft(): Draft {
     max: "",
     unit: "",
     comment: "",
-    labelSets: [],
+    bandSetId: "",
   };
 }
 
@@ -85,12 +74,7 @@ function editDraft(v: SysVar): Draft {
     max: v.max == null ? "" : String(v.max),
     unit: v.unit,
     comment: v.comment,
-    labelSets: (v.labelSets ?? []).map((labelSet) => ({
-      id: labelSet.id,
-      name: labelSet.name,
-      isDefault: labelSet.isDefault,
-      bands: labelSet.bands,
-    })),
+    bandSetId: v.bandSetId ?? "",
   };
 }
 
@@ -122,40 +106,6 @@ function validate(draft: Draft): { edit?: SysVarEdit; error: string } {
   if (min != null && max != null && min > max) {
     return { error: `lower bound ${min} is greater than upper bound ${max}` };
   }
-  if (draft.labelSets.length > 8) {
-    return { error: "at most 8 band sets are allowed" };
-  }
-  const labelSets: {
-    id: string;
-    name: string;
-    isDefault: boolean;
-    bands: Band[];
-  }[] = [];
-  const ids = new Set<string>();
-  const names = new Set<string>();
-  let defaults = 0;
-  for (const [labelSetIndex, labelSet] of draft.labelSets.entries()) {
-    const id = labelSet.id.trim();
-    const setName = labelSet.name.trim();
-    if (!id) return { error: `band set ${labelSetIndex + 1}: id is empty` };
-    if (!setName) return { error: `band set ${labelSetIndex + 1}: name is empty` };
-    if (ids.has(id)) return { error: `band set id "${id}" is duplicated` };
-    if (names.has(setName)) {
-      return { error: `band set name "${setName}" is duplicated` };
-    }
-    ids.add(id);
-    names.add(setName);
-    const bands = normaliseBands(labelSet.bands);
-    const error = validateBands(bands);
-    if (error) return { error: `${setName}: ${error}` };
-    if (labelSet.isDefault) defaults += 1;
-    labelSets.push({ id, name: setName, isDefault: labelSet.isDefault, bands });
-  }  if (defaults > 1) {
-    return { error: "only one band set can be the default" };
-  }
-  if (labelSets.length > 0 && defaults === 0) {
-    labelSets[0].isDefault = true;
-  }
   return {
     error: "",
     edit: {
@@ -166,7 +116,7 @@ function validate(draft: Draft): { edit?: SysVarEdit; error: string } {
       max,
       unit: draft.unit.trim(),
       comment: draft.comment.trim(),
-      labelSets,
+      bandSetId: draft.bandSetId || null,
       oldNamespace: draft.editing?.namespace ?? null,
       oldName: draft.editing?.name ?? null,
     },
@@ -178,13 +128,6 @@ function rangeText(v: SysVar): string {
   const lo = v.min == null ? "-" : String(v.min);
   const hi = v.max == null ? "+" : String(v.max);
   return `${lo} .. ${hi}`;
-}
-
-function currentLabel(v: SysVar): string | null {
-  const set =
-    v.labelSets?.find((entry) => entry.isDefault) ?? v.labelSets?.[0];
-  const band = set ? bandAt(set.bands, v.value) : null;
-  return band?.text || null;
 }
 
 /** Editable live value; polling state refreshes it only while not typing. */
@@ -230,6 +173,9 @@ function ValueInput({
 
 export function VariablesModal({
   vars,
+  bandSets,
+  onSaveBandSet,
+  onDeleteBandSet,
   onSetValue,
   onDefine,
   onDelete,
@@ -243,9 +189,8 @@ export function VariablesModal({
   onClose,
 }: Props) {
   const [draft, setDraft] = useState<Draft | null>(null);
-  const [tab, setTab] = useState<"values" | "computed">(initialTab);
+  const [tab, setTab] = useState<"values" | "computed" | "bands">(initialTab);
   const checked = draft ? validate(draft) : null;
-  const monitorColors = palette(theme).monitors;
 
   useEffect(() => {
     const close = (event: KeyboardEvent) => {
@@ -287,11 +232,19 @@ export function VariablesModal({
             options={[
               { value: "values", label: "System variables" },
               { value: "computed", label: "Computed channels" },
+              { value: "bands", label: "Band sets" },
             ]}
           />
         </div>
 
-        {tab === "computed" ? (
+        {tab === "bands" ? (
+          <BandSetPanel
+            sets={bandSets}
+            theme={theme}
+            onSave={onSaveBandSet}
+            onDelete={onDeleteBandSet}
+          />
+        ) : tab === "computed" ? (
           <DerivedPanel
             defs={derived}
             references={derivedRefs}
@@ -390,108 +343,26 @@ export function VariablesModal({
                 />
               </label>
             </div>
-            <div class="sv-labels">
-              <div class="sv-labels-head">
-                <span>Band sets</span>
-                <span>{draft.labelSets.length}/8</span>
-              </div>
-              {draft.labelSets.length === 0 && (
-                <span class="sv-hint">
-                  Optional: add named text/color sets. A widget chooses one set
-                  from its Labels property.
-                </span>
-              )}
-              {draft.labelSets.map((labelSet, labelSetIndex) => (
-                <div class="sv-label-set" key={labelSet.id}>
-                  <div class="sv-label-set-head">
-                    <input
-                      class="sv-label-set-name"
-                      value={labelSet.name}
-                      maxLength={40}
-                      placeholder="Status"
-                      aria-label={`Band set ${labelSetIndex + 1} name`}
-                      onInput={(event) => {
-                        const name = (event.target as HTMLInputElement).value;
-                        set({
-                          labelSets: draft.labelSets.map((candidate, at) =>
-                            at === labelSetIndex ? { ...candidate, name } : candidate,
-                          ),
-                        });
-                      }}
-                    />
-                    <label class="sv-label-default">
-                      <input
-                        type="radio"
-                        name="sv-label-default"
-                        checked={labelSet.isDefault}
-                        onChange={() =>
-                          set({
-                            labelSets: draft.labelSets.map((candidate, at) => ({
-                              ...candidate,
-                              isDefault: at === labelSetIndex,
-                            })),
-                          })
-                        }
-                      />
-                      default
-                    </label>
-                    <button
-                      type="button"
-                      class="mini"
-                      title="Remove band set"
-                      aria-label={`Remove band set ${labelSet.name || labelSetIndex + 1}`}
-                      onClick={() =>
-                        set({
-                          labelSets: draft.labelSets.filter(
-                            (_, at) => at !== labelSetIndex,
-                          ),
-                        })
-                      }
-                    >
-                      ×
-                    </button>
-                  </div>
-                  <BandEditor
-                    bands={labelSet.bands}
-                    colors={monitorColors}
-                    label="Bands"
-                    onChange={(bands) =>
-                      set({
-                        labelSets: draft.labelSets.map((candidate, at) =>
-                          at === labelSetIndex ? { ...candidate, bands } : candidate,
-                        ),
-                      })
-                    }
-                  />
-                </div>
-              ))}
-              <div>
-                <button
-                  type="button"
-                  class="mini"
-                  disabled={draft.labelSets.length >= 8}
-                  onClick={() => {
-                    let n = draft.labelSets.length + 1;
-                    const ids = new Set(draft.labelSets.map((labelSet) => labelSet.id));
-                    while (ids.has(`labels${n}`)) n += 1;
+            <div class="sv-form-grid">
+              <label class="wide">
+                Default band set
+                <select
+                  value={draft.bandSetId}
+                  onChange={(event) =>
                     set({
-                      labelSets: [
-                        ...draft.labelSets,
-                        {
-                          id: `labels${n}`,
-                          name: `Bands ${n}`,
-                          isDefault: draft.labelSets.length === 0,
-                          bands: [finalBand()],
-                        },
-                      ],
-                    });
-                  }}
+                      bandSetId: (event.target as HTMLSelectElement).value,
+                    })
+                  }
                 >
-                  + Band set
-                </button>
-              </div>
-            </div>
-            <div class="sv-form-foot">
+                  <option value="">None · numeric only</option>
+                  {bandSets.map((set) => (
+                    <option key={set.id} value={set.id}>
+                      {set.name} ({set.bands.length} bands)
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>            <div class="sv-form-foot">
               {checked?.error ? (
                 <span class="sv-error">{checked.error}</span>
               ) : (
@@ -533,9 +404,6 @@ export function VariablesModal({
                     value={v.value}
                     onCommit={(value) => onSetValue(v.namespace, v.name, value)}
                   />
-                  {currentLabel(v) && (
-                    <small class="sv-label-preview">{currentLabel(v)}</small>
-                  )}
                 </div>
                 <span class="sv-range" title="writes are clamped to these bounds">
                   {rangeText(v)}

@@ -2174,7 +2174,7 @@ export function App() {
       max: edit.max,
       unit: edit.unit,
       comment: edit.comment,
-      label_sets: edit.labelSets,
+      band_set_id: edit.bandSetId ?? null,
       old_namespace: edit.oldNamespace,
       old_name: edit.oldName,
     });
@@ -4587,6 +4587,7 @@ export function App() {
     () => ({
       signals,
       sysvars: state?.sysvars ?? [],
+      bandSets: state?.bandSets ?? [],
       writeTargets: pageWriteTargets,
       someipServices: state?.someipServices ?? [],
       frameBuses: (state?.buses ?? [])
@@ -6044,6 +6045,17 @@ export function App() {
       {sysvarsOpen && (
         <VariablesModal
           vars={state?.sysvars ?? []}
+          bandSets={state?.bandSets ?? []}
+          onSaveBandSet={(set, oldId) =>
+            void run({
+              type: "define_band_set",
+              id: set.id,
+              name: set.name,
+              bands: set.bands,
+              old_id: oldId,
+            })
+          }
+          onDeleteBandSet={(id) => void run({ type: "delete_band_set", id })}
           onSetValue={(namespace, name, value) =>
             void run({ type: "set_sys_var", namespace, name, value })
           }
@@ -6277,12 +6289,14 @@ export function App() {
         <MonitorRowModal
           row={monitorStyle}
           theme={theme}
-          onApply={(digits, bands) => {
+          bandSets={state?.bandSets ?? []}
+          onApply={(digits, bands, bandSetId) => {
             void run({
               type: "configure_monitor",
               key: monitorStyle.key,
               digits,
               bands,
+              band_set_id: bandSetId,
             });
             setMonitorStyle(null);
           }}
@@ -6295,7 +6309,8 @@ export function App() {
           signal={`${stateRule.name} · ${stateRule.bus}`}
           rule={stateRule.rule}
           theme={theme}
-          onApply={(bands) => {
+          bandSets={state?.bandSets ?? []}
+          onApply={(bands, bandSetId) => {
             void run({
               type: "set_state_rule",
               kind: stateRule.kind,
@@ -6305,6 +6320,7 @@ export function App() {
               frame: stateRule.frame,
               name: stateRule.name,
               bands,
+              band_set_id: bandSetId,
             });
             setStateRule(null);
           }}
@@ -6329,15 +6345,16 @@ export function App() {
           signal={`${derivedRule.name} · Derived`}
           rule={
             derivedRule.bands.length > 0
-              ? { bands: derivedRule.bands }
+              ? { bands: derivedRule.bands, bandSetId: derivedRule.bandSetId }
               : null
           }
           theme={theme}
-          onApply={(bands) => {
+          bandSets={state?.bandSets ?? []}
+          onApply={(bands, bandSetId) => {
             saveDerived(
               derivedDefs.map((definition) =>
                 definition.id === derivedRule.id
-                  ? { ...definition, bands }
+                  ? { ...definition, bands, bandSetId }
                   : definition,
               ),
             );
@@ -6347,7 +6364,7 @@ export function App() {
             saveDerived(
               derivedDefs.map((definition) =>
                 definition.id === derivedRule.id
-                  ? { ...definition, bands: [] }
+                  ? { ...definition, bands: [], bandSetId: null }
                   : definition,
               ),
             );
