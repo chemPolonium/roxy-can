@@ -438,7 +438,7 @@ send_frame(closeCmd);
 - 路径是 `Frame` 或 `Bus.Frame`。CAN 用 DBC 报文名；FlexRay 用 `FR0.Frame_25_0_2`；Ethernet 用 `ETH0.EthFrame`。名字不是合法标识符时写成 `frame(CAN1["Frame Name"])` 或 `frame("Frame Name")`。
 - 写字段是物理值，发送时由 DBC/集群描述编码并夹取到声明范围；没写过的 CAN 信号按描述声明的初始值编码（DBC `GenSigStartValue` / ARXML `I-SIGNAL/INIT-VALUE` 是 raw，启动时按 factor/offset 换算成物理值；浮点信号以及 FR/ETH 没有初始值时按物理 0，不是 raw 0）。
 - 常量字段写入（字面量或负字面量）在节点启动和 `--check-script` 时对照声明范围；越界记 `[check] frame "…" signal "…" value … is outside [min, max]`，运行时仍按范围夹取后发送。
-- `send_frame` 一次只发这一帧：CAN 走节点自己的路（仍受节点角色开关约束），FlexRay/Ethernet 只注入本会话，端口边界与既有脚本一致。
+- `send_frame` 一次只发这一帧：CAN 走节点自己的路（仍受节点角色开关约束），FlexRay 有可写端口时经硬件发出、否则只注入本会话，Ethernet 按实时口边界处理。
 - 字段名拼错、消息不存在或长度不合法时，整帧丢弃并在节点日志写明原因。
 - `frame(...)` 的路径与已写字段会在节点启动时按 DBC/集群描述校验，拼错会进 `[check]`。能在 CAN 目录里解析的 `send_frame` 会折算成数值 id 并进入静态发送集（`--check-script` 与编辑器收发 tab 都能看到，来源写作 `<frame Bus.Frame>`）；FlexRay/Ethernet 路径没有数值发送集，只做名字校验。编辑器在 `frame(` 后补全 `Bus.Frame` 路径，并对源码里已识别的 frame 变量补全其信号字段。
 
@@ -620,7 +620,7 @@ emit_value("ErrorAlarm", error > 5);
 为该路的这个槽发**一帧**：`(路, 槽)` 之后给整数字节（最多 9 个）或一个字节缓冲（最长 254 字节）。
 
 - 这一帧与生成器条目走同一个入口，所以 Trace、Messages、统计、负载与规格、触发器、`on fr slot` 处理器、录制文件全都看得见它。
-- **目前不发到总线上**：FlexRay 端口仅接收，所以这是本会话的流量，不是总线上的帧。
+- **硬件发送**：FlexRay 有可写端口时经 `xlFrTransmit` 发出，同时也留在本会话；只有接收权的端口会在 Write 里报告发送失败。
 - 载荷宽度归集群描述：那一槽声明几个字节就发几个字节，给短了补 0；**给得比声明长则整帧丢弃**并在节点日志写原因（静默截断会发出谁都没要过的帧）。这一路没描述、或描述没在这个槽排帧，就照脚本给的长度发。
 - `(路, 槽)` 里的**路**必须是已配置的路（加载了集群描述或已连接监听）。写一个不存在的路号，整帧丢弃并在日志里写原因。槽没配置不受此限：这一路存在，就按输入的长度发送。
 - 这一帧落在该步的生成块里：FlexRay 到达唤醒的处理器在同一步就能看到它，CAN 帧或定时器唤醒的要等下一步。每一步最多一轮，所以"收到自己发的帧就再发一次"的脚本每步只多一帧。

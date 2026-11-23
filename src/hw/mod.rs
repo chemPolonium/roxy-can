@@ -279,6 +279,14 @@ impl FrPort {
             FrPort::Mock(m) => m.try_read(),
         }
     }
+
+    fn write_frame(&self, slot: u16, payload: &[u8]) -> Result<(), String> {
+        match self {
+            FrPort::Vector(ch) => ch.write_frame(slot, payload),
+            #[cfg(test)]
+            FrPort::Mock(_) => Ok(()),
+        }
+    }
 }
 
 /// The receive queue [`Hardware::attach_fr_mock`] hands back to a test.
@@ -309,7 +317,7 @@ pub struct Hardware {
     pub refresh_seq: u64,
     /// Bus index → attachment. One adapter per bus.
     pub buses: HashMap<u8, BusHardware>,
-    /// FlexRay bus index → its RX-only watch. Several clusters can be watched
+    /// FlexRay bus index → its watch. Several clusters can be watched
     /// at once, and a slot number only means something inside its own one, so
     /// the watch -- and the description it was configured from -- belongs to
     /// the bus. Drained alongside the CAN adapters; rows land in the Trace
@@ -332,7 +340,7 @@ pub struct Hardware {
     pending_tx_fail: Vec<u8>,
 }
 
-/// The FlexRay RX-only watch: a Vector channel opened with a
+/// The FlexRay watch: a Vector channel opened with a
 /// FIBEX-parsed cluster configuration, identified by the Vector channel
 /// index and the description file it was configured from.
 #[derive(Debug)]
@@ -499,7 +507,7 @@ impl Hardware {
             .retain(|_, w| !matches!(w.port, FrPort::Vector(_)));
     }
 
-    /// Attaches the FlexRay RX-only watch from the cluster description the
+    /// Attaches the FlexRay watch from the cluster description the
     /// frontend already parsed. Reading and parsing the file again here doubled
     /// the load cost of a big FIBEX -- and `read_to_string` refused the
     /// GBK-encoded exports the frontend's tolerant read accepts, so the watch
@@ -573,9 +581,19 @@ impl Hardware {
     /// CANoe's simulated/real bus distinction, not a per-node dial.
     /// Simulated 模式（`!live`）不写线。
     ///
-    /// A refused write is latched per bus, never swallowed and never logged
-    /// per frame: the frame stays on the internal bus so no view loses it, but
-    /// the row and the Write ring say that the wire took nothing.
+    /// Sends one generated FlexRay frame out its RX/TX watch. A parked bus
+    /// keeps the frame in the session but writes nothing to the wire.
+    pub fn write_fr(&self, bus: u8, slot: u16, payload: &[u8]) -> Result<(), String> {
+        if !self.live {
+            return Ok(());
+        }
+        match self.fr_watches.get(&bus) {
+            Some(watch) => watch.port.write_frame(slot, payload),
+            None => Ok(()),
+        }
+    }
+
+    /// Writes one CAN frame out the bus's wire in Real bus mode.
     pub fn write_if_live(&mut self, bus: u8, f: &CanFrame) {
         if !self.live {
             return;

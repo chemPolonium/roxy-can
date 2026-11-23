@@ -105,7 +105,7 @@ pub fn wire_note(attached: usize, real_bus: bool) -> String {
     }
 }
 
-/// The FlexRay RX-only watch as the frontend sees it: identity only --
+/// The FlexRay watch as the frontend sees it: identity only --
 /// the port itself stays core-side.
 #[derive(Clone, Debug, PartialEq)]
 pub struct FrWatchView {
@@ -164,7 +164,7 @@ pub enum BusCommand {
     /// Writes one signal from a Panel setpoint, addressed by the observer key
     /// so every protocol shares the command. CAN updates/creates the generator
     /// entry and injects one frame; FlexRay encodes the slot's payload and
-    /// injects one session frame (its port stays receive-only); Ethernet
+    /// injects one frame (writing it to a live FR port first); Ethernet
     /// encodes the frame's PDU payload and injects one session TX frame.
     PanelWriteSignal {
         key: SigKey,
@@ -181,7 +181,7 @@ pub enum BusCommand {
         physical: bool,
         signals: std::collections::BTreeMap<String, f64>,
     },
-    /// One-shot FlexRay frame into this session (the port stays receive-only).
+    /// One-shot FlexRay frame into this session (and onto a live FR port).
     PanelSendFrFrame {
         bus: u8,
         slot: u16,
@@ -475,10 +475,10 @@ pub enum BusCommand {
     /// driver so it rescans the adapter, and let the frontend re-enumerate.
     /// Other drivers' attachments are untouched.
     RefreshHardware,
-    /// Attach (or move) the FlexRay RX-only watch to a Vector channel,
+    /// Attach (or move) the FlexRay watch to a Vector channel,
     /// configured from the FIBEX description at `fibex_path`; `None`
-    /// detaches. RX-only and read-only: it never transmits, and its
-    /// frames feed the Trace window's FR section alone.
+    /// detaches. The watch carries RX and TX; a passive fallback cannot
+    /// transmit.
     SetFrWatch {
         /// The FlexRay bus this watch feeds. One bus today; the index is
         /// threaded through now so several ports can be watched at once.
@@ -947,7 +947,7 @@ pub struct Snapshot {
     pub write: Arc<Vec<WriteLine>>,
     /// Hardware attachments: one per wired-up bus.
     pub hw: Vec<HwBusView>,
-    /// The FlexRay RX-only watches, one per watched bus, in bus order.
+    /// The FlexRay watches, one per watched bus, in bus order.
     pub fr_watches: Vec<FrWatchView>,
     /// Whether the attachments are wire-connected (Real bus) or parked
     /// (Simulated): the toolbar bus-mode switch reads this.
@@ -1480,6 +1480,9 @@ pub struct BusCore {
     /// Model/plan issues already written to the Write log. Rebuilding a
     /// cluster must not repeat yesterday's warnings on every edit.
     pub(crate) model_issues_seen: std::collections::HashSet<String>,
+    /// FlexRay buses whose hardware TX refusal was already written. Keeps a
+    /// dead wire from producing one Write line per generated frame.
+    pub(crate) fr_tx_errors: std::collections::HashSet<u8>,
     /// E2E counter continuity per CAN message, updated on every frame.
     pub(crate) e2e_tracks: std::collections::BTreeMap<(u8, u32, bool), E2eView>,
     pub(crate) fr_e2e_tracks: std::collections::BTreeMap<(u8, u16), E2eView>,
@@ -1920,6 +1923,7 @@ impl BusCore {
             eth_dbs: Default::default(),
             eth_sources: Default::default(),
             model_issues_seen: Default::default(),
+            fr_tx_errors: Default::default(),
             e2e_tracks: Default::default(),
             fr_e2e_tracks: Default::default(),
             eth_e2e_tracks: Default::default(),
@@ -2883,7 +2887,7 @@ impl BusCore {
                         Some(db) => match self.hw.attach_fr(bus, idx, &fibex_path, db) {
                             Ok(()) => {
                                 *status = format!(
-                                    "FlexRay watch attached: FR{bus} / Vector ch{idx} (receive-only)"
+                                    "FlexRay watch attached: FR{bus} / Vector ch{idx} (TX/RX)"
                                 );
                             }
                             Err(e) => {
@@ -7413,8 +7417,8 @@ impl BusCore {
 
     /// Panel setpoint write into a FlexRay slot: encode the named signal into
     /// a zeroed payload of the occupant frame's length, clamped to the
-    /// declared range. The frame enters this session only; the FR port stays
-    /// receive-only until the transmit object layout is verified.
+    /// declared range. The frame enters this session and, when the FR port is
+    /// writable and live, goes onto the wire first.
     fn panel_write_fr_signal(
         &mut self,
         bus: u8,
@@ -8390,9 +8394,8 @@ impl BusCore {
         // FlexRay generator entries fill their slot on the same clock and with
         // the same catch-up discipline as the CAN ones, and stand down for a slot
         // the replayed log carries itself. Their rows enter through the receive
-        // path like any other arrival: the watched port is receive-only, so what
-        // an entry drives is this session -- Trace, Messages, the spec check, the
-        // scripts and the recording -- not the wire.
+        // path like any other arrival; a live TX-capable watch also receives the
+        // same payload, while a parked/missing port leaves the row session-only.
         let mut fr_gen: Vec<crate::trace::FrRow> = Vec::new();
         let dbs = &self.fr_dbs;
         let fr_models: std::collections::BTreeMap<u8, ModelHandle> = self
@@ -8534,6 +8537,23 @@ impl BusCore {
             });
         }
         if !fr_gen.is_empty() {
+            if !replaying {
+                for row in &fr_gen {
+                    match self.hw.write_fr(row.bus, row.slot, &row.payload) {
+                        Ok(()) => {
+                            self.fr_tx_errors.remove(&row.bus);
+                        }
+                        Err(error) => {
+                            if self.fr_tx_errors.insert(row.bus) {
+                                self.write_push(
+                                    WriteKind::Warning,
+                                    format!("FR{} transmit refused: {error}", row.bus),
+                                );
+                            }
+                        }
+                    }
+                }
+            }
             fr_landed = true;
             for row in fr_gen {
                 self.accept_fr_row(row, now_us, fr_listeners, &mut fr_queued, status);

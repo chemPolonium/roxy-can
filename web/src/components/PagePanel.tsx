@@ -598,7 +598,7 @@ function FrameField({
         ? "Sends once when clicked."
         : "Raw frame. Pick a defined message to edit physical values."
       : protocol === "fr"
-        ? "Session only — the FR port stays receive-only."
+        ? "Sends on the FR port when one is attached; otherwise session only."
         : protocol === "someip"
           ? "SOME/IP over UDP, session only — no Ethernet transmit port."
           : `Session only — no Ethernet transmit port.${
@@ -1214,16 +1214,19 @@ function SetpointControl({
     w: widget.w,
     h: widget.h,
   };
+  const frSource =
+    widget.source.startsWith("fr:") || widget.source.startsWith("sig:fr:");
+  const ethSource =
+    widget.source.startsWith("eth:") || widget.source.startsWith("sig:eth:");
   const title = [
     widget.source,
     value !== null ? `value ${formatPanelValue(value, widget.digits)}` : "",
     sent !== null ? `written ${formatPanelValue(sent, widget.digits)}` : "",
-    widget.source.startsWith("fr:") ||
-    widget.source.startsWith("eth:") ||
-    widget.source.startsWith("sig:fr:") ||
-    widget.source.startsWith("sig:eth:")
-      ? "session only"
-      : "",
+    frSource
+      ? "writes the FR port when live"
+      : ethSource
+        ? "session only"
+        : "",
   ]
     .filter(Boolean)
     .join(" · ");

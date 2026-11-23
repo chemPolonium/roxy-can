@@ -1025,7 +1025,7 @@ export function BusesModal({
                   disabled={frChannels.length === 0}
                   title={
                     frChannels.length
-                      ? "Attach this port in receive-only mode"
+                      ? "Attach this FlexRay port"
                       : hardware?.frError || "No Vector FlexRay channel found"
                   }
                   onChange={(event) => {

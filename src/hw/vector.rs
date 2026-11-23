@@ -144,6 +144,7 @@ type XlFrSetConfiguration = unsafe extern "system" fn(
 type XlFrGetChannelConfiguration =
     unsafe extern "system" fn(XlPortHandle, XlAccess, *mut flexray::XLfrChannelConfig) -> XlStatus;
 type XlFrReceive = unsafe extern "system" fn(XlPortHandle, *mut u8) -> XlStatus;
+type XlFrTransmit = unsafe extern "system" fn(XlPortHandle, XlAccess, *mut u8) -> XlStatus;
 #[cfg(test)]
 type XlSetApplConfig = unsafe extern "system" fn(*const u8, u32, u32, u32, u32, u32) -> XlStatus;
 /// Every vxlapi entry the tool needs. `None` members mean the export was
@@ -170,10 +171,11 @@ struct Vxlapi {
     /// `set_appl_config` on first use.
     #[cfg(test)]
     set_appl_config: XlSetApplConfig,
-    /// FlexRay RX-only binding (FR-2).
+    /// FlexRay RX/TX binding (FR-2).
     fr_set_configuration: XlFrSetConfiguration,
     fr_get_channel_configuration: XlFrGetChannelConfiguration,
     fr_receive: XlFrReceive,
+    fr_transmit: XlFrTransmit,
 }
 
 impl Vxlapi {
@@ -275,6 +277,7 @@ impl Vxlapi {
                 XlFrGetChannelConfiguration
             ),
             fr_receive: need!(b"xlFrReceive", XlFrReceive),
+            fr_transmit: need!(b"xlFrTransmit", XlFrTransmit),
         })
     }
 
@@ -1105,7 +1108,7 @@ pub fn enumerate() -> Result<Vec<ChannelInfo>, String> {
     }
 }
 
-// ---- FlexRay RX-only 绑定（FR-2）--------------------------------------
+// ---- FlexRay RX/TX 绑定（FR-2）----------------------------------------
 //
 // Transcribed from vxlapi.h (the copy this machine's driver ships):
 // every field of `XLfrClusterConfig` is an `unsigned int`, in this exact
@@ -1114,7 +1117,7 @@ pub fn enumerate() -> Result<Vec<ChannelInfo>, String> {
 // of header + a union; with the header's pshpack8 active, the RX-frame
 // member sits at tagData+0 and its payload at tagData+8.
 //
-// The FlexRay channels are RX-only today; these bindings are exercised by
+// The FlexRay channels are RX/TX today; these bindings are exercised by
 // the CLI probes and tests until the bus pipeline consumes them.
 pub mod flexray {
     use super::*;
@@ -1213,7 +1216,7 @@ pub mod flexray {
     pub const FR_CHANNEL_CFG_STATUS_VALID_CLUSTER_CFG: u32 = 0x04;
 
     /// One received FlexRay frame: the static-slot/dynamic-slot address and
-    /// the cycle it arrived in, plus the raw payload (RX-only slice -- no
+    /// the cycle it arrived in, plus the raw payload (RX events carry no
     /// signal decoding).
     #[derive(Clone, Debug, PartialEq)]
     pub struct FrFrame {
@@ -1237,12 +1240,51 @@ pub mod flexray {
     pub(super) const FR_EVENT_HEADER_CRC: usize = 34;
     pub(super) const FR_EVENT_FLAGS: usize = 32;
     pub(super) const XL_FR_EV_TAG_RX_FRAME: u16 = 0x0081;
+    pub(super) const XL_FR_EV_TAG_TX_FRAME: u16 = 0x0082;
+    pub(super) const XL_FR_TX_MODE_SINGLE_SHOT: u8 = 0x02;
+    pub(super) const XL_FR_FRAMEFLAG_REQ_TXACK: u16 = 0x0020;
+    pub(super) const FR_TX_EVENT_TAG: usize = 4;
+    pub(super) const FR_TX_EVENT_CHANNEL: usize = 6;
+    pub(super) const FR_TX_EVENT_FLAGS: usize = 32;
+    pub(super) const FR_TX_EVENT_SLOT: usize = 34;
+    pub(super) const FR_TX_EVENT_OFFSET: usize = 36;
+    pub(super) const FR_TX_EVENT_REPETITION: usize = 37;
+    pub(super) const FR_TX_EVENT_PAYLOAD_LEN: usize = 38;
+    pub(super) const FR_TX_EVENT_MODE: usize = 39;
+    pub(super) const FR_TX_EVENT_DATA: usize = 44;
+
+    /// Builds the `XL_FR_TX_FRAME_EV` event the driver takes. It is a
+    /// single-shot event; the payload is padded to the even length FlexRay
+    /// puts on the wire.
+    pub(super) fn tx_event(slot: u16, payload: &[u8]) -> Result<[u8; FR_EVENT_SIZE], String> {
+        if payload.len() > FR_MAX_DATA_LENGTH {
+            return Err(format!(
+                "FlexRay payload is {} bytes; the driver accepts at most {FR_MAX_DATA_LENGTH}",
+                payload.len()
+            ));
+        }
+        let len = (payload.len() + 1) & !1;
+        let mut event = [0u8; FR_EVENT_SIZE];
+        event[0..4].copy_from_slice(&(FR_EVENT_SIZE as u32).to_le_bytes());
+        event[FR_TX_EVENT_TAG..FR_TX_EVENT_TAG + 2]
+            .copy_from_slice(&XL_FR_EV_TAG_TX_FRAME.to_le_bytes());
+        event[FR_TX_EVENT_CHANNEL..FR_TX_EVENT_CHANNEL + 2].copy_from_slice(&0u16.to_le_bytes());
+        event[FR_TX_EVENT_FLAGS..FR_TX_EVENT_FLAGS + 2]
+            .copy_from_slice(&XL_FR_FRAMEFLAG_REQ_TXACK.to_le_bytes());
+        event[FR_TX_EVENT_SLOT..FR_TX_EVENT_SLOT + 2].copy_from_slice(&slot.to_le_bytes());
+        event[FR_TX_EVENT_OFFSET] = 0;
+        event[FR_TX_EVENT_REPETITION] = 1;
+        event[FR_TX_EVENT_PAYLOAD_LEN] = (len / 2) as u8;
+        event[FR_TX_EVENT_MODE] = XL_FR_TX_MODE_SINGLE_SHOT;
+        event[FR_TX_EVENT_DATA..FR_TX_EVENT_DATA + payload.len()].copy_from_slice(payload);
+        Ok(event)
+    }
     /// `vxlapi.h`: `#define XL_FR_MAX_DATA_LENGTH 254` -- also the payload
     /// ceiling inside the RX-frame event.
     pub(super) const FR_MAX_DATA_LENGTH: usize = 254;
 
-    /// An open, configured FlexRay port (RX-only). Frames leave nothing to
-    /// the tool yet -- this slice only watches.
+    /// An open, configured FlexRay port. RX is always available; TX works
+    /// when the port was granted init access.
     #[derive(Debug)]
     pub struct FlexRayChannel {
         port: XlPortHandle,
@@ -1532,6 +1574,20 @@ pub mod flexray {
                 ));
             }
             Ok(cfg)
+        }
+
+        /// Sends one static/dynamic frame as a single-shot TX event.
+        pub fn write_frame(&self, slot: u16, payload: &[u8]) -> Result<(), String> {
+            let lib = Vxlapi::lib().ok_or("Vector driver unavailable")?;
+            let mut event = tx_event(slot, payload)?;
+            let status = unsafe { (lib.fr_transmit)(self.port, self.mask, event.as_mut_ptr()) };
+            if status != 0 {
+                return Err(format!(
+                    "xlFrTransmit FR{slot} failed ({})",
+                    lib.error(status)
+                ));
+            }
+            Ok(())
         }
 
         /// Takes one FlexRay frame off the queue. Start-cycle and other
@@ -1841,6 +1897,48 @@ mod tests {
         let mut ev = [0u8; FR_EVENT_SIZE];
         ev[FR_EVENT_TAG..FR_EVENT_TAG + 2].copy_from_slice(&0x0080u16.to_le_bytes());
         assert!(parse_fr_event(&ev).is_none());
+    }
+
+    /// The TX event uses the same 32-byte header as RX, then the TX-frame
+    /// layout from vxlapi.h: slot, cycle offset/repetition, word length and
+    /// the single-shot mode.
+    #[test]
+    fn fr_tx_event_builds_the_driver_layout() {
+        let ev = tx_event(77, &[1, 2, 3]).expect("tx event");
+        assert_eq!(
+            u16::from_le_bytes([ev[FR_TX_EVENT_TAG], ev[FR_TX_EVENT_TAG + 1]]),
+            XL_FR_EV_TAG_TX_FRAME
+        );
+        assert_eq!(
+            u16::from_le_bytes([ev[FR_TX_EVENT_SLOT], ev[FR_TX_EVENT_SLOT + 1]]),
+            77
+        );
+        assert_eq!(ev[FR_TX_EVENT_OFFSET], 0);
+        assert_eq!(ev[FR_TX_EVENT_REPETITION], 1);
+        assert_eq!(ev[FR_TX_EVENT_PAYLOAD_LEN], 2, "3 bytes pad to 2 words");
+        assert_eq!(ev[FR_TX_EVENT_MODE], XL_FR_TX_MODE_SINGLE_SHOT);
+        assert_eq!(&ev[FR_TX_EVENT_DATA..FR_TX_EVENT_DATA + 3], &[1, 2, 3]);
+        assert!(tx_event(1, &[0u8; 255]).is_err());
+    }
+
+    /// Hardware-only: one single-shot TX on a VN7640 FlexRay channel. Run
+    /// with `cargo test fr_tx_hardware_probe -- --ignored --nocapture` on a
+    /// bench with a cluster description loaded. No RX is expected from the
+    /// transmitting node itself.
+    #[test]
+    #[ignore]
+    fn fr_tx_hardware_probe() {
+        const DOC: &str = r#"<AUTOSAR><AR-PACKAGES><AR-PACKAGE><SHORT-NAME>P</SHORT-NAME><ELEMENTS>
+ <FLEXRAY-FRAME><SHORT-NAME>F</SHORT-NAME><FRAME-LENGTH>2</FRAME-LENGTH></FLEXRAY-FRAME>
+ <FLEXRAY-CLUSTER><SHORT-NAME>C</SHORT-NAME><FLEXRAY-GD-MACROTICK-DURATION>1</FLEXRAY-GD-MACROTICK-DURATION><FLEXRAY-CYCLE-TIME-MS>5</FLEXRAY-CYCLE-TIME-MS><FLEXRAY-G-NUMBER-OF-STATIC-SLOTS>60</FLEXRAY-G-NUMBER-OF-STATIC-SLOTS><FLEXRAY-GD-STATIC-SLOT>44</FLEXRAY-GD-STATIC-SLOT><FLEXRAY-G-PAYLOAD-LENGTH-STATIC>16</FLEXRAY-G-PAYLOAD-LENGTH-STATIC>
+  <FLEXRAY-PHYSICAL-CHANNEL><SHORT-NAME>ChA</SHORT-NAME><FLEXRAY-FRAME-TRIGGERING><SHORT-NAME>FT</SHORT-NAME><FRAME-REF DEST="FLEXRAY-FRAME">/P/F</FRAME-REF><SLOT-ID>1</SLOT-ID></FLEXRAY-FRAME-TRIGGERING></FLEXRAY-PHYSICAL-CHANNEL>
+ </FLEXRAY-CLUSTER></ELEMENTS></AR-PACKAGE></AR-PACKAGES></AUTOSAR>"#;
+        let db = crate::fr_db::FrDb::parse(DOC).expect("cluster");
+        let channel = FlexRayChannel::open_rx_with_db(0, &db).expect("open ch0");
+        channel
+            .write_frame(1, &[0x11, 0x22])
+            .expect("xlFrTransmit accepted one frame");
+        std::thread::sleep(std::time::Duration::from_millis(200));
     }
 
     /// The cluster config struct is 79 uniform u32s (316 bytes) -- the
