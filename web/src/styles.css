@@ -7694,7 +7694,8 @@ body:has(.cm-tooltip-autocomplete) .script-signature {
 
 .sv-label-entry-main {
   display: grid;
-  grid-template-columns: 72px minmax(0, 1fr);
+  grid-template-columns: 64px 200px;
+  justify-content: start;
   gap: 5px;
   align-items: center;
 }
@@ -7738,7 +7739,8 @@ body:has(.cm-tooltip-autocomplete) .script-signature {
 
 .sv-label-set-head {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto 22px;
+  grid-template-columns: minmax(140px, 220px) auto 22px;
+  justify-content: start;
   align-items: center;
   gap: 6px;
 }
