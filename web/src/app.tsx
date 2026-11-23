@@ -1,3 +1,4 @@
+import type { Band } from "./bands";
 import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 import type { ComponentChildren, JSX } from "preact";
 import type {
@@ -790,7 +791,31 @@ export function App() {
     const key = `${state.projectPath}|${panelPagesSignature}`;
     if (appliedPanelPages.current === key) return;
     appliedPanelPages.current = key;
-    setPanelBook(panelBookFromProject(state.panelPages ?? []));
+    const book = panelBookFromProject(state.panelPages ?? []);
+    const migrated: { id: string; name: string; bands: Band[] }[] = [];
+    for (const page of book.pages) {
+      for (const widget of page.widgets) {
+        const raw = widget as { labelSet?: string | null; bands?: Band[] };
+        if (raw.labelSet || !raw.bands?.length) continue;
+        const id = `legacy:panel:${page.id}:${widget.id}`;
+        raw.labelSet = id;
+        migrated.push({
+          id,
+          name: `Panel · ${widget.label || widget.kind}`,
+          bands: raw.bands,
+        });
+        delete raw.bands;
+      }
+    }
+    setPanelBook(book);
+    for (const set of migrated) {
+      void run({
+        type: "define_band_set",
+        id: set.id,
+        name: set.name,
+        bands: set.bands,
+      });
+    }
     setPanelDirty(false);
   }, [workspaceHydrated, state?.projectPath, panelPagesSignature]);
 
