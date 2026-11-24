@@ -49,7 +49,7 @@ import {
   type PanelFrameDef,
   type PanelView,
 } from "../panelBinding";
-import { bandAt, bandsFromCuts, type Band } from "../bands";
+import { bandAt, type Band } from "../bands";
 import { palette, type Theme } from "../theme";
 import { copyText } from "../clipboard";
 import { ContextMenu } from "./ContextMenu";
@@ -129,10 +129,10 @@ function panelWidgetBands(widget: PanelWidget, view: PanelView): Band[] {
       : [];
   }
   if (widget.kind === "value" || widget.kind === "bar" || widget.kind === "gauge") {
-    return widget.bands ?? bandsFromCuts(widget.cuts, widget.colors);
+    return [];
   }
   if (widget.kind === "lamp") {
-    return widget.bands ?? [];
+    return [];
   }
   return [];
 }

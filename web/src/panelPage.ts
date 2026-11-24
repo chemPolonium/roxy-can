@@ -1,5 +1,4 @@
 import type { Band } from "./bands";
-import { bandsFromCuts, normaliseBands } from "./bands";
 
 export const PAGE_GRID = 8;
 export const PAGE_WIDTH = 160;
@@ -1241,13 +1240,6 @@ export function movePanelPage(
   return { ...book, pages };
 }
 
-function legacyPanelBands(value: Record<string, unknown>): Band[] | undefined {
-  if (!Array.isArray(value.cuts) && !Array.isArray(value.colors)) {
-    return undefined;
-  }
-  return bandsFromCuts(value.cuts as number[], value.colors as number[]);
-}
-
 function widgetPatch(
   value: Record<string, unknown>,
   kind: PanelWidgetKind,
@@ -1263,9 +1255,6 @@ function widgetPatch(
     value.labelSet === null
       ? null
       : text(value.labelSet, 64).trim() || undefined;
-  const bands = Array.isArray(value.bands)
-    ? normaliseBands(value.bands as Band[])
-    : undefined;
   return {
     label: text(value.label, 80),
     ...(kind === "button"
@@ -1281,7 +1270,6 @@ function widgetPatch(
           source: text(value.source, 120),
           digits: clamp(Math.round(Number(value.digits) || 0), 0, 3),
           labelSet,
-          bands: bands ?? legacyPanelBands(value),
           ...normalisePanelBandFields(value),
         }
       : {}),
@@ -1303,7 +1291,6 @@ function widgetPatch(
           threshold: Number(value.threshold),
           color: paletteSlot(value.color, 1),
           labelSet,
-          ...(bands ? { bands } : {}),
         }
       : {}),
     ...(kind === "bar" || kind === "gauge"
@@ -1313,7 +1300,6 @@ function widgetPatch(
           max: Number(value.max),
           digits: clamp(Math.round(Number(value.digits) || 0), 0, 3),
           labelSet,
-          bands: bands ?? legacyPanelBands(value),
           ...normalisePanelBandFields(value),
         }
       : {}),

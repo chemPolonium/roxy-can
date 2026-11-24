@@ -25,23 +25,6 @@ export function finalBand(color?: number): Band {
   return { upper: null, inclusive: false, color };
 }
 
-/// Legacy cuts/colours use left-closed intervals: cut i starts band i + 1.
-export function bandsFromCuts(
-  cuts: number[] | undefined,
-  colors: number[] | undefined,
-  names?: string[],
-): Band[] {
-  const list = cuts ?? [];
-  return Array.from({ length: list.length + 1 }, (_, index) => ({
-    upper: index < list.length ? list[index] : null,
-    inclusive: false,
-    text: names?.[index] || undefined,
-    color:
-      colors?.[index] ??
-      (list.length > 0 ? index % 6 : undefined),
-  }));
-}
-
 export function normaliseBands(bands: Band[]): Band[] {
   return [...bands].sort((a, b) => {
     if (a.upper === null) return 1;

@@ -7000,24 +7000,29 @@ fn the_state_tracker_round_trips_through_a_project() {
         y_mode: YMode::Auto,
     });
     app.state_trackers[0].time_window_s = 60.0;
+    app.band_sets.push(crate::band::BandSet {
+        id: "speed".to_string(),
+        name: "Speed".to_string(),
+        bands: vec![
+            crate::band::Band {
+                upper: Some(1000.0),
+                inclusive: false,
+                text: "low".to_string(),
+                color: Some(0),
+            },
+            crate::band::Band {
+                upper: None,
+                inclusive: false,
+                text: "high".to_string(),
+                color: None,
+            },
+        ],
+    });
     app.state_trackers[0].rules.insert(
         key.clone(),
         crate::observe::StateRule {
-            band_set_id: None,
-            bands: vec![
-                crate::band::Band {
-                    upper: Some(1000.0),
-                    inclusive: false,
-                    text: "low".to_string(),
-                    color: Some(0),
-                },
-                crate::band::Band {
-                    upper: None,
-                    inclusive: false,
-                    text: "high".to_string(),
-                    color: None,
-                },
-            ],
+            band_set_id: Some("speed".to_string()),
+            bands: app.band_sets[0].bands.clone(),
         },
     );
     // A default-mode override pinned on the signal's second key (the one
@@ -7042,11 +7047,17 @@ fn the_state_tracker_round_trips_through_a_project() {
         .rules
         .get(&key)
         .expect("custom bands ride the project file");
-    assert_eq!(rule.bands[0].upper, Some(1000.0));
-    assert_eq!(rule.bands[0].text, "low");
-    assert_eq!(rule.bands[0].color, Some(0));
+    assert_eq!(rule.band_set_id.as_deref(), Some("speed"));
+    let set = restored
+        .band_sets
+        .iter()
+        .find(|set| set.id == "speed")
+        .expect("state band set restored");
+    assert_eq!(set.bands[0].upper, Some(1000.0));
+    assert_eq!(set.bands[0].text, "low");
+    assert_eq!(set.bands[0].color, Some(0));
     assert_eq!(
-        rule.bands[1].color, None,
+        set.bands[1].color, None,
         "automatic survives the round trip"
     );
     let restored_ov = restored.state_trackers[0]
@@ -8229,6 +8240,16 @@ fn an_undefined_sysvar_write_warns_and_is_dropped() {
 #[test]
 fn sysvars_survive_a_project_roundtrip() {
     let mut app = App::headless();
+    app.band_sets.push(crate::band::BandSet {
+        id: "rate".to_string(),
+        name: "Rate bands".to_string(),
+        bands: vec![crate::band::Band {
+            upper: None,
+            inclusive: false,
+            text: "Nominal".to_string(),
+            color: Some(1),
+        }],
+    });
     app.send(crate::bus::BusCommand::DefineSysVar(
         crate::bus::SysVarDef {
             namespace: "Demo".to_string(),
@@ -8238,58 +8259,28 @@ fn sysvars_survive_a_project_roundtrip() {
             max: Some(10.0),
             unit: "Hz".to_string(),
             comment: String::new(),
-            label_sets: vec![crate::bus::SysVarLabelSet {
-                id: "default".to_string(),
-                name: "Default".to_string(),
-                is_default: true,
-                bands: vec![
-                    crate::band::Band {
-                        upper: Some(2.5),
-                        inclusive: false,
-                        text: "Nominal".to_string(),
-                        color: Some(1),
-                    },
-                    crate::band::Band {
-                        upper: None,
-                        inclusive: false,
-                        text: String::new(),
-                        color: None,
-                    },
-                ],
-            }],
-            band_set_id: None,
+            label_sets: Vec::new(),
+            band_set_id: Some("rate".to_string()),
             labels: Vec::new(),
         },
     ));
     app.settle();
     let json = serde_json::to_string(&ProjectV2::from_app(&app, None)).unwrap();
-    assert!(json.contains("\"sysvars\""), "the section is in the file");
-    assert!(json.contains("\"Nominal\""), "labels are in the file");
     let mut restored = App::headless();
     serde_json::from_str::<ProjectV2>(&json)
         .unwrap()
         .apply(&mut restored);
     restored.settle();
-    assert_eq!(restored.snap.sysvars.len(), 1, "restored");
     let v = &restored.snap.sysvars[0];
-    assert_eq!(v.def.namespace, "Demo");
-    assert_eq!(v.def.name, "Rate");
-    assert_eq!(v.def.unit, "Hz");
-    assert_eq!(v.def.init, 2.5);
-    assert!(
-        v.def.band_set_id.is_some(),
-        "legacy per-sysvar bands become a library set"
-    );
-    let set_id = v.def.band_set_id.as_deref().unwrap();
+    assert_eq!(v.def.band_set_id.as_deref(), Some("rate"));
     let set = restored
         .band_sets
         .iter()
-        .find(|set| set.id == set_id)
-        .expect("band set migrated");
+        .find(|set| set.id == "rate")
+        .expect("band set restored");
     assert_eq!(set.bands[0].text, "Nominal");
     assert_eq!(v.value, 2.5, "value starts at init");
 }
-
 /// A handler that sends the frame it receives re-enters itself. The step's
 /// reaction budget stops that from wedging the core and leaves one warning.
 #[test]

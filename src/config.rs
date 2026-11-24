@@ -350,16 +350,6 @@ fn is_zero_usize(value: &usize) -> bool {
     *value == 0
 }
 
-fn legacy_band_id(sets: &[crate::band::BandSet], kind: &str, seed: usize) -> String {
-    let mut n = seed;
-    loop {
-        let id = format!("legacy:{kind}:{n}");
-        if sets.iter().all(|set| set.id != id) {
-            return id;
-        }
-        n += 1;
-    }
-}
 fn digits_default() -> usize {
     1
 }
@@ -1298,67 +1288,61 @@ impl ProjectSettings {
         app.send(crate::bus::BusCommand::SetNodes {
             nodes: self.nodes.clone(),
         });
-        // Migrate per-sysvar label sets into the project-wide band library.
-        let mut band_sets = self.band_sets.clone();
+        // Legacy inline labels/bands are intentionally not migrated.
         let mut sysvars = self.sysvars.clone();
         for def in &mut sysvars {
-            if def.band_set_id.is_none() && !def.label_sets.is_empty() {
-                let source = def.label_sets.remove(0);
-                let id = format!("sysvar:{}::{}:{}", def.namespace, def.name, source.id);
-                def.band_set_id = Some(id.clone());
-                band_sets.push(crate::band::BandSet {
-                    id,
-                    name: if source.name.is_empty() {
-                        def.name.clone()
-                    } else {
-                        source.name
-                    },
-                    bands: source.bands,
-                });
-            }
             def.label_sets.clear();
             def.labels.clear();
-        }
-        app.band_sets = band_sets;
-        // Promote observer/derived inline bands into the same project library.
-        // The original copy stays on the target until the next save so a
-        // deleted set still has a fallback.
-        for (index, row) in app.monitor_view.rows.iter_mut().enumerate() {
-            if row.band_set_id.is_none() && !row.bands.is_empty() {
-                let id = legacy_band_id(&app.band_sets, "monitor", index);
-                row.band_set_id = Some(id.clone());
-                app.band_sets.push(crate::band::BandSet {
-                    id,
-                    name: format!("Monitor · {}", row.label),
-                    bands: row.bands.clone(),
-                });
+            if def
+                .band_set_id
+                .as_deref()
+                .is_some_and(|id| id.starts_with("legacy:"))
+            {
+                def.band_set_id = None;
             }
         }
-        for (window, win) in app.state_trackers.iter_mut().enumerate() {
-            for (slot, (_, rule)) in win.rules.iter_mut().enumerate() {
-                if rule.band_set_id.is_none() && !rule.bands.is_empty() {
-                    let id = legacy_band_id(&app.band_sets, "state", window * 1000 + slot);
-                    rule.band_set_id = Some(id.clone());
-                    app.band_sets.push(crate::band::BandSet {
-                        id,
-                        name: format!("State · {}", rule.label(0)),
-                        bands: rule.bands.clone(),
-                    });
+        app.band_sets = self
+            .band_sets
+            .iter()
+            .filter(|set| !set.id.starts_with("legacy:"))
+            .cloned()
+            .collect();
+        for row in &mut app.monitor_view.rows {
+            if row
+                .band_set_id
+                .as_deref()
+                .is_some_and(|id| id.starts_with("legacy:"))
+            {
+                row.band_set_id = None;
+            }
+            row.bands.clear();
+        }
+        for window in &mut app.state_trackers {
+            for rule in window.rules.values_mut() {
+                if rule
+                    .band_set_id
+                    .as_deref()
+                    .is_some_and(|id| id.starts_with("legacy:"))
+                {
+                    rule.band_set_id = None;
+                }
+                if rule.band_set_id.is_none() {
+                    rule.bands.clear();
                 }
             }
         }
         for def in &mut app.derived_defs {
-            if def.band_set_id.is_none() && !def.bands.is_empty() {
-                let id = legacy_band_id(&app.band_sets, "derived", 0);
-                def.band_set_id = Some(id.clone());
-                app.band_sets.push(crate::band::BandSet {
-                    id,
-                    name: format!("Derived · {}", def.name),
-                    bands: def.bands.clone(),
-                });
+            if def
+                .band_set_id
+                .as_deref()
+                .is_some_and(|id| id.starts_with("legacy:"))
+            {
+                def.band_set_id = None;
             }
-        }
-        // System variables restore as one Define per entry: existing
+            if def.band_set_id.is_none() {
+                def.bands.clear();
+            }
+        } // System variables restore as one Define per entry: existing
         // definitions with the same key are replaced, values start at
         // their declared init.
         for def in &sysvars {
@@ -1748,8 +1732,8 @@ mod tests {
         assert_eq!(restored.tx_list[0].srcs, app.tx_list[0].srcs);
     }
 
-    /// The Monitor window's rows persist with the project: the watched
-    /// keys, labels, digits, bands and column count all round-trip.
+    /// The Monitor window's rows persist with the project: bindings and
+    /// digits round-trip; bands live in the project library.
     #[test]
     fn monitor_rows_round_trip_with_the_project() {
         let mut app = App::headless();
@@ -1757,21 +1741,20 @@ mod tests {
         app.set_win_signal(crate::workspace::PopupTarget::Monitor, key, true);
         assert_eq!(app.monitor_view.rows.len(), 1, "the row was added");
         app.monitor_view.rows[0].digits = 2;
-        app.monitor_view.rows[0].bands = vec![
-            crate::band::Band {
-                upper: Some(10.0),
-                inclusive: false,
-                text: String::new(),
-                color: Some(1),
-            },
-            crate::band::Band {
-                upper: Some(87.5),
-                inclusive: false,
-                text: String::new(),
-                color: Some(3),
-            },
-            crate::band::Band::final_band(Some(5)),
-        ];
+        app.monitor_view.rows[0].band_set_id = Some("speed".to_string());
+        app.band_sets.push(crate::band::BandSet {
+            id: "speed".to_string(),
+            name: "Speed".to_string(),
+            bands: vec![
+                crate::band::Band {
+                    upper: Some(87.5),
+                    inclusive: false,
+                    text: "fast".to_string(),
+                    color: Some(3),
+                },
+                crate::band::Band::final_band(Some(5)),
+            ],
+        });
         app.monitor_view.columns = 2;
 
         let json = serde_json::to_string(&ProjectV2::from_app(&app, None)).unwrap();
@@ -1781,30 +1764,22 @@ mod tests {
             .apply(&mut restored);
         assert_eq!(restored.monitor_view.rows.len(), 1);
         let r = &restored.monitor_view.rows[0];
-        assert!(
-            matches!(
-                r.key,
-                crate::observe::SigKey::Can {
-                    cluster: crate::model::ClusterId(1),
-                    id: 0x100,
-                    ext: false,
-                    ..
-                }
-            ),
-            "the round trip keeps a standard-class CAN key"
-        );
         assert_eq!(r.key.name(), "EngineStatus");
-        assert_eq!(r.bands.len(), 3);
-        assert_eq!(r.bands[1].upper, Some(87.5));
-        assert_eq!(r.bands[1].color, Some(3));
-        assert_eq!(r.bands[2].color, Some(5));
+        assert_eq!(r.band_set_id.as_deref(), Some("speed"));
+        assert!(r.bands.is_empty());
+        let set = restored
+            .band_sets
+            .iter()
+            .find(|set| set.id == "speed")
+            .expect("band set restored");
+        assert_eq!(set.bands[0].upper, Some(87.5));
+        assert_eq!(set.bands[1].color, Some(5));
         assert_eq!(restored.monitor_view.columns, 2);
     }
 
-    /// Projects written before the cut editor carry one `rule_on` threshold.
-    /// Loading turns it into a two-band cut instead of dropping the color.
+    /// Legacy monitor cuts are ignored now that band sets are explicit.
     #[test]
-    fn a_legacy_monitor_rule_loads_as_a_band() {
+    fn a_legacy_monitor_rule_is_ignored() {
         let mut app = App::headless();
         let key = app.can_key(0, 0x100, false, "EngineStatus".to_string());
         app.set_win_signal(crate::workspace::PopupTarget::Monitor, key, true);
@@ -1823,9 +1798,8 @@ mod tests {
             .unwrap()
             .apply(&mut restored);
         let row = &restored.monitor_view.rows[0];
-        assert_eq!(row.bands[0].upper, Some(87.5));
-        assert_eq!(row.bands[0].color, Some(3));
-        assert_eq!(row.bands[1].color, Some(3));
+        assert!(row.bands.is_empty());
+        assert!(row.band_set_id.is_none());
     }
 
     /// Derived definitions and the observer rows that read them belong to
