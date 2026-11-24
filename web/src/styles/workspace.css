@@ -1705,7 +1705,7 @@ body.row-resizing {
     .description-remove
   ):not(.picker-message-toggle):not(.picker-frame-action):not(
     .picker-name
-  ):not(.grouped-select-option):not(
+  ):not(.grouped-select-option):not(.palette-swatch):not(
     .monitor-style-button
   ),
 .modal-backdrop > :not(.palette) select,

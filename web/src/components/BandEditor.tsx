@@ -1,5 +1,6 @@
-import { useEffect, useState } from "preact/hooks";
+import { useEffect, useRef, useState } from "preact/hooks";
 import { PaletteSwatches } from "./PaletteSwatches";
+import { UiIcon } from "./icons";
 import {
   finalBand,
   normaliseBands,
@@ -66,6 +67,147 @@ function BoundInput({
         }
       }}
     />
+  );
+}
+
+/// One colour trigger per band: the current swatch is the button itself, and
+/// the palette opens in a small popover with an explicit "No colour" entry.
+/// Keeping the palette out of the row makes the selected colour obvious and
+/// leaves a single trailing remove action.
+function ColorInput({
+  colors,
+  value,
+  onChange,
+}: {
+  colors: string[];
+  value: number | null;
+  onChange: (slot: number | null) => void;
+}) {
+  const trigger = useRef<HTMLButtonElement>(null);
+  const menu = useRef<HTMLDivElement>(null);
+  const [open, setOpen] = useState(false);
+  const [anchor, setAnchor] = useState<{
+    left: number;
+    top: number;
+    width: number;
+  } | null>(null);
+  const slot = value === null ? null : Math.abs(value) % colors.length;
+  const color = slot === null ? null : colors[slot];
+
+  const show = () => {
+    const box = trigger.current?.getBoundingClientRect();
+    if (!box) return;
+    const width = Math.max(140, Math.min(colors.length * 21 + 10, 220));
+    const left = Math.max(
+      8,
+      Math.min(box.left, window.innerWidth - width - 8),
+    );
+    const top =
+      box.bottom + 66 > window.innerHeight
+        ? Math.max(8, box.top - 62)
+        : box.bottom + 2;
+    setAnchor({ left, top, width });
+    setOpen(true);
+  };
+
+  const close = () => {
+    setOpen(false);
+    setAnchor(null);
+  };
+
+  useEffect(() => {
+    if (!open) return;
+    menu.current
+      ?.querySelector<HTMLElement>(".palette-swatch.on, .palette-swatch")
+      ?.focus({ preventScroll: true });
+    const inside = (node: Node | null) =>
+      !!node && (trigger.current?.contains(node) || menu.current?.contains(node));
+    const closeOnPointer = (event: PointerEvent) => {
+      if (!inside(event.target as Node)) close();
+    };
+    const closeOnScroll = (event: Event) => {
+      if (inside(event.target as Node)) return;
+      close();
+    };
+    const closeOnResize = () => close();
+    window.addEventListener("pointerdown", closeOnPointer);
+    window.addEventListener("scroll", closeOnScroll, true);
+    window.addEventListener("resize", closeOnResize);
+    return () => {
+      window.removeEventListener("pointerdown", closeOnPointer);
+      window.removeEventListener("scroll", closeOnScroll, true);
+      window.removeEventListener("resize", closeOnResize);
+    };
+  }, [open]);
+
+  return (
+    <div class="band-color-wrap">
+      <button
+        ref={trigger}
+        type="button"
+        class={`band-color${color ? "" : " none"}`}
+        style={color ? { background: color } : undefined}
+        title={color ? "Band colour — click to change" : "No colour"}
+        aria-label={
+          color
+            ? `Band colour ${slot === null ? "" : slot + 1}`
+            : "Band colour: none"
+        }
+        aria-haspopup="dialog"
+        aria-expanded={open}
+        disabled={colors.length === 0}
+        onClick={() => (open ? close() : show())}
+        onKeyDown={(event) => {
+          if (event.key === "Escape" && open) {
+            event.stopPropagation();
+            close();
+          }
+        }}
+      />
+      {open && anchor && (
+        <div
+          ref={menu}
+          class="band-color-menu"
+          role="group"
+          aria-label="Band colour"
+          style={{
+            left: `${anchor.left}px`,
+            top: `${anchor.top}px`,
+            width: `${anchor.width}px`,
+          }}
+          onKeyDown={(event) => {
+            if (event.key !== "Escape") return;
+            event.preventDefault();
+            event.stopPropagation();
+            close();
+            trigger.current?.focus();
+          }}
+        >
+          <PaletteSwatches
+            colors={colors}
+            value={value}
+            label="Band colour"
+            onChange={(next) => {
+              onChange(next);
+              close();
+              trigger.current?.focus();
+            }}
+          />
+          <button
+            type="button"
+            class={`band-color-none${color ? "" : " on"}`}
+            aria-pressed={!color}
+            onClick={() => {
+              onChange(null);
+              close();
+              trigger.current?.focus();
+            }}
+          >
+            No colour
+          </button>
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -165,35 +307,23 @@ export function BandEditor({
             />
           )}
           {showColor && (
-            <>
-              <PaletteSwatches
-                colors={colors}
-                value={band.color ?? null}
-                compact
-                onChange={(color) => update(index, { color })}
-              />
-              {band.color != null && (
-                <button
-                  type="button"
-                  class="mini band-clear"
-                  title="Remove colour"
-                  aria-label="Remove colour"
-                  onClick={() => update(index, { color: undefined })}
-                >
-                  ×
-                </button>
-              )}
-            </>
+            <ColorInput
+              colors={colors}
+              value={band.color ?? null}
+              onChange={(color) =>
+                update(index, { color: color ?? undefined })
+              }
+            />
           )}
           <button
             type="button"
-            class="mini"
+            class="mini band-remove"
             disabled={band.upper === null}
             title={band.upper === null ? "Open-ended band" : "Remove band"}
             aria-label={`Remove band ${index + 1}`}
             onClick={() => remove(index)}
           >
-            ×
+            <UiIcon name="trash" />
           </button>
         </div>
       ))}
