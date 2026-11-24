@@ -1,4 +1,5 @@
 import { useEffect, useState } from "preact/hooks";
+import { finalBand } from "../bands";
 import type { BandSet, MonitorRow } from "../types";
 import { BandSetPicker } from "./BandSetPicker";
 import { ModalHeader } from "./ModalHeader";
@@ -87,7 +88,10 @@ export function MonitorRowModal({ row, bandSets, onApply, onClose }: Props) {
               type="button"
               class="primary"
               disabled={!!error}
-              onClick={() => onApply(digits, row.bands, bandSetId || null)}
+              onClick={() => {
+                const chosen = bandSets.find((set) => set.id === bandSetId);
+                onApply(digits, chosen?.bands ?? [finalBand()], bandSetId || null);
+              }}
             >
               Apply
             </button>

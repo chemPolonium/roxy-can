@@ -1,3 +1,17 @@
+/// Bind or clear a Monitor row's BandSet. `None` and an empty id both mean
+/// "no bands", so Apply from the Settings dialog can actually unbind.
+fn bind_monitor_band_set(app: &mut App, key: &str, band_set_id: Option<String>) {
+    let binding = band_set_id.filter(|id| !id.is_empty());
+    if let Some(row) = app
+        .monitor_view
+        .rows
+        .iter_mut()
+        .find(|row| row.key.text() == key)
+    {
+        row.band_set_id = binding;
+    }
+}
+
 fn app_loop(
     inbox: Receiver<WebCommand>,
     stores: SharedStores,
@@ -857,14 +871,8 @@ fn app_loop(
                 } => {
                     if let Err(error) = edit_monitor_row(&mut app, &key, digits, bands) {
                         app.fail(error);
-                    } else if let Some(id) = band_set_id
-                        && let Some(row) = app
-                            .monitor_view
-                            .rows
-                            .iter_mut()
-                            .find(|row| row.key.text() == key)
-                    {
-                        row.band_set_id = if id.is_empty() { None } else { Some(id) };
+                    } else {
+                        bind_monitor_band_set(&mut app, &key, band_set_id);
                     }
                 }
                 WebCommand::SetMonitorColumns { columns } => {

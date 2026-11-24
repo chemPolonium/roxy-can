@@ -4771,6 +4771,8 @@ export function App() {
               bands,
               band_set_id: bandSetId,
             });
+            const name = state?.bandSets.find((set) => set.id === bandSetId)?.name;
+            showToast(name ? `Applied band set ${name}` : "Band set removed from row");
             setMonitorStyle(null);
           }}
           onClose={() => setMonitorStyle(null)}

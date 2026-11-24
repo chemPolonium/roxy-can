@@ -1086,6 +1086,28 @@ mod tests {
         assert!(!chart_signal_action(&mut app, &mut store, &key, "nope"));
     }
 
+    #[test]
+    fn monitor_band_set_binding_can_be_set_and_cleared() {
+        let mut app = App::headless();
+        let key = SigKey::can_in(crate::model::ClusterId(1), 0x100, false, "EngineSpeed");
+        app.monitor_view.rows.push(crate::app::MonitorRow {
+            key: key.clone(),
+            label: key.name().to_string(),
+            ..Default::default()
+        });
+        let id = key.text();
+
+        super::bind_monitor_band_set(&mut app, &id, Some("speed".to_string()));
+        assert_eq!(app.monitor_view.rows[0].band_set_id.as_deref(), Some("speed"));
+
+        super::bind_monitor_band_set(&mut app, &id, None);
+        assert_eq!(app.monitor_view.rows[0].band_set_id, None);
+
+        super::bind_monitor_band_set(&mut app, &id, Some("speed".to_string()));
+        super::bind_monitor_band_set(&mut app, &id, Some(String::new()));
+        assert_eq!(app.monitor_view.rows[0].band_set_id, None);
+    }
+
     /// The Bus Statistics tab reads the same BusLoad numbers as the core
     /// model: load, send distance, bursts and per-class rates.
     #[test]
