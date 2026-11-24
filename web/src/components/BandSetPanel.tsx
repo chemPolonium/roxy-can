@@ -1,6 +1,6 @@
 import { useState } from "preact/hooks";
 import type { BandSet } from "../types";
-import type { Band } from "../bands";
+import { normaliseBands, validateBands, type Band } from "../bands";
 import { palette, type Theme } from "../theme";
 import { BandEditor } from "./BandEditor";
 
@@ -11,12 +11,36 @@ interface Props {
   onDelete: (id: string) => void;
 }
 
+interface Draft {
+  id: string;
+  name: string;
+  bands: Band[];
+  editing: boolean;
+}
+
 export function BandSetPanel({ sets, theme, onSave, onDelete }: Props) {
   const colors = palette(theme).monitors;
-  const [draft, setDraft] = useState<{ id: string; name: string; bands: Band[] } | null>(null);
-  const edit = (set: BandSet) => setDraft({ ...set });
+  const [draft, setDraft] = useState<Draft | null>(null);
+  const edit = (set: BandSet) =>
+    setDraft({ ...set, bands: set.bands.map((band) => ({ ...band })), editing: true });
+  const error = draft ? validateBands(normaliseBands(draft.bands)) : "";
+  const canApply = !!draft && !!draft.name.trim() && !error;
+
+  const apply = () => {
+    if (!draft || !canApply) return;
+    onSave(
+      {
+        id: draft.id,
+        name: draft.name.trim(),
+        bands: normaliseBands(draft.bands),
+      },
+      draft.editing ? draft.id : null,
+    );
+    setDraft(null);
+  };
+
   return (
-    <div class="sv-table">
+    <>
       <div class="sv-tools">
         <button
           type="button"
@@ -28,6 +52,7 @@ export function BandSetPanel({ sets, theme, onSave, onDelete }: Props) {
               id: `bands${n}`,
               name: `Bands ${n}`,
               bands: [{ upper: null, inclusive: false, text: "all" }],
+              editing: false,
             });
           }}
         >
@@ -38,7 +63,13 @@ export function BandSetPanel({ sets, theme, onSave, onDelete }: Props) {
         </span>
       </div>
       {draft && (
-        <div class="sv-form">
+        <form
+          class="sv-form"
+          onSubmit={(event) => {
+            event.preventDefault();
+            apply();
+          }}
+        >
           <div class="sv-form-grid">
             <label class="wide">
               Name
@@ -60,34 +91,33 @@ export function BandSetPanel({ sets, theme, onSave, onDelete }: Props) {
             onChange={(bands) => setDraft({ ...draft, bands })}
           />
           <div class="sv-form-foot">
+            {error ? (
+              <span class="sv-error">{error}</span>
+            ) : (
+              <span class="sv-hint">
+                {draft.editing ? `Editing ${draft.id}` : "New band set"}
+              </span>
+            )}
             <span class="spacer" />
-            <button
-              type="button"
-              class="primary"
-              disabled={!draft.name.trim()}
-              onClick={() => {
-                onSave(
-                  {
-                    id: draft.id,
-                    name: draft.name.trim(),
-                    bands: draft.bands,
-                  },
-                  sets.some((set) => set.id === draft.id) ? draft.id : null,
-                );
-                setDraft(null);
-              }}
-            >
+            <button type="submit" class="primary" disabled={!canApply}>
               Apply
             </button>
             <button type="button" onClick={() => setDraft(null)}>
               Cancel
             </button>
           </div>
-        </div>
+        </form>
       )}
       <div class="sv-table">
+        <div class="sv-row sv-head">
+          <span>Band set</span>
+          <span>Bands</span>
+          <span />
+          <span />
+          <span />
+        </div>
         {sets.map((set) => (
-          <div class="sv-row" key={set.id}>
+          <div class="sv-row band-set-row" key={set.id}>
             <span class="sv-name">
               <strong>{set.name}</strong>
               <small>{set.id}</small>
@@ -117,6 +147,6 @@ export function BandSetPanel({ sets, theme, onSave, onDelete }: Props) {
           </div>
         )}
       </div>
-    </div>
+    </>
   );
 }

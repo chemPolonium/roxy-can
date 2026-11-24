@@ -25,6 +25,15 @@ export function finalBand(color?: number): Band {
   return { upper: null, inclusive: false, color };
 }
 
+/// Parse an edited bound. Blank and non-finite input returns null so the
+/// caller can keep the last committed value instead of making the band open.
+export function parseBandBound(text: string): number | null {
+  const raw = text.trim();
+  if (raw === "") return null;
+  const value = Number(raw);
+  return Number.isFinite(value) ? value : null;
+}
+
 export function normaliseBands(bands: Band[]): Band[] {
   return [...bands].sort((a, b) => {
     if (a.upper === null) return 1;

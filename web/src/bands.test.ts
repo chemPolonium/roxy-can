@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { bandAt, bandIndex, validateBands, type Band } from "./bands";
+import {
+  bandAt,
+  bandIndex,
+  parseBandBound,
+  validateBands,
+  type Band,
+} from "./bands";
 
 describe("bands", () => {
   it("matches < and <= thresholds with an open final band", () => {
@@ -14,6 +20,15 @@ describe("bands", () => {
     expect(bandAt(bands, 1.5)?.text).toBe("below two");
     expect(bandAt(bands, 2)?.text).toBe("rest");
     expect(bandIndex(bands, null)).toBeNull();
+  });
+
+  it("keeps blank or half-typed bounds from becoming open bands", () => {
+    expect(parseBandBound("30")).toBe(30);
+    expect(parseBandBound("-5.5")).toBe(-5.5);
+    expect(parseBandBound("")).toBeNull();
+    expect(parseBandBound("   ")).toBeNull();
+    expect(parseBandBound("1e")).toBeNull();
+    expect(parseBandBound("abc")).toBeNull();
   });
 
   it("rejects missing or multiple open bands", () => {
