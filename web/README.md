@@ -19,6 +19,7 @@ npx vitest run
 - `app.tsx`：外壳、快照轮询、命令发送、跨会话布局。
 - `app/support.ts`：保存视图的解析/归一化、localStorage、小格式化函数与 `useUiFps`；不碰快照。
 - `app/StatsBar.tsx`：顶部统计条与回放 transport；只收 props，不读全局状态。
+- `app/panels.tsx`：各面板页眉/内容、固定外壳与 Panel 页动作；`app.tsx` 组装 `PanelRenderContext` 后取出渲染函数。
 - `dockLayout.ts`：四种布局、槽位面板分配、移动/交换、归一化与旧 workspace 迁移；纯函数并单测。
 - `components/TraceTable.tsx`：手写固定行高虚拟化，不引入表格库。
 - `components/SignalChart.tsx`：canvas 抽稀绘制，不引入图表库。

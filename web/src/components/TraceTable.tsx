@@ -175,7 +175,7 @@ export function TraceTable({
   jump,
   onJumpDone,
   leading,
-  title,
+  meta,
   tools,
   empty,
   filtered = false,
@@ -198,9 +198,10 @@ export function TraceTable({
   onColumnsChange: (next: TraceColumnPrefs) => void;
   jump?: TraceJump | null;
   onJumpDone?: () => void;
-  /// View switch rendered before the title (Trace / Messages).
+  /// View switch rendered at the left edge of the header.
   leading?: ComponentChildren;
-  title?: ComponentChildren;
+  /// Right-aligned count, formatted like every other panel header.
+  meta?: ComponentChildren;
   tools?: ComponentChildren;
   /// Replaces the plain "No frames yet" state, e.g. with workspace actions.
   empty?: ComponentChildren;
@@ -488,7 +489,8 @@ export function TraceTable({
   const head = (
     <div class="panel-head dock-head">
       {leading}
-      <div class="panel-title">{title}</div>
+      <div class="dock-head-spacer" />
+      {meta && <span class="meta">{meta}</span>}
       <div class="panel-tools">{tools}</div>
     </div>
   );

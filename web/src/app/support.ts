@@ -202,6 +202,20 @@ export function seconds(us: number, digits = 3): string {
   return (us / 1e6).toFixed(digits);
 }
 
+/// One count format for every panel header: `N noun` or `N / M noun`.
+export function panelMeta(
+  noun: string,
+  count: number,
+  total?: number,
+  plural = `${noun}s`,
+): string {
+  const shown = count.toLocaleString();
+  if (total === undefined) {
+    return `${shown} ${count === 1 ? noun : plural}`;
+  }
+  return `${shown} / ${total.toLocaleString()} ${plural}`;
+}
+
 export function useUiFps(): number {
   const [fps, setFps] = useState(0);
   useEffect(() => {
