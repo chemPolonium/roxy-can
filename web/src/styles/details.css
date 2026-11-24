@@ -1558,6 +1558,19 @@ button.danger:hover:not(:disabled) {
   box-shadow: 0 20px 60px rgb(0 0 0 / 55%);
 }
 
+/* Same dialog, in-app full screen. No browser Fullscreen API, no canvas
+   resize: the editor just gets the whole viewport and the list stays a rail. */
+:root .scripts-modal.fullscreen {
+  position: fixed;
+  inset: 0;
+  z-index: 110;
+  width: 100vw;
+  height: 100vh;
+  max-height: none;
+  border: 0;
+  border-radius: 0;
+}
+
 .scripts-body {
   display: grid;
   flex: 1 1 auto;

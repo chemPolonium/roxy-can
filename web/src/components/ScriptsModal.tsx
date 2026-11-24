@@ -97,6 +97,7 @@ export function ScriptsModal({
   const [functions, setFunctions] = useState<ScriptFunctionHelp[]>([]);
   const [signature, setSignature] = useState<SignatureHint | null>(null);
   const [helpOpen, setHelpOpen] = useState(false);
+  const [fullscreen, setFullscreen] = useState(false);
   const [reload, setReload] = useState(0);
   const editing = useRef<Set<number>>(new Set());
   const selectNewest = useRef(false);
@@ -140,6 +141,20 @@ export function ScriptsModal({
   useEffect(() => {
     debugArmedRef.current = debugArmed;
   }, [debugArmed]);
+
+  // In fullscreen Esc leaves the editor first; only a second Esc closes the
+  // dialog. The capture listener wins over the app's global Escape handler.
+  useEffect(() => {
+    if (!fullscreen) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      setFullscreen(false);
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [fullscreen]);
 
   useEffect(
     () => () => {
@@ -438,7 +453,7 @@ export function ScriptsModal({
     <>
     <div class="modal-backdrop" onMouseDown={onClose}>
       <div
-        class="scripts-modal"
+        class={`scripts-modal${fullscreen ? " fullscreen" : ""}`}
         role="dialog"
         aria-modal="true"
         aria-label="Node scripts"
@@ -448,6 +463,18 @@ export function ScriptsModal({
           <span>{scripts.length} scripts</span>
           <button type="button" onClick={() => setNewOpen((open) => !open)}>
             + New script
+          </button>
+          <button
+            type="button"
+            class="mini"
+            title={
+              fullscreen
+                ? "Leave the full-screen editor (Esc)"
+                : "Expand the editor to fill the screen"
+            }
+            onClick={() => setFullscreen((value) => !value)}
+          >
+            {fullscreen ? "Collapse" : "Expand"}
           </button>
         </ModalHeader>
 
