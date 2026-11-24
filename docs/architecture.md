@@ -25,6 +25,7 @@ BusCore（bus-core 线程，事件驱动）
 - **归属划分**：核心拥有全部总线状态与执行；Web 前端拥有面板布局、弹窗与草稿态（数字/源码/路径的未提交草稿）、文字节流、状态行文案。边界记录在 `BusCommand`（事件）与一组原子旋钮（步长/容差/宽限等连续量，前端每帧写、核心每轮读）。
 - **双驱动**：产品用线程驱动，测试与 CLI 用手摇驱动（命令同步执行、时钟手动推进），所以全链都能在 `cargo test` 里跑。核心对前端的隐式直读在线程驱动下当场 panic——前端对总线的每一条读写都必须"读经快照、写经命令"。
 - **纪律**：每步结束代码可编译、测试全部通过、程序可用、可发版；重构期间冻结新功能。
+- **代码分工**：`src/bus.rs` 只放共享类型、常量与 `BusCore` 字段；`src/bus/core_command.rs` / `core_publish.rs` / `core_eth.rs` / `core_view.rs` / `core_channels.rs` / `core_models.rs` / `core_replay.rs` / `core_send.rs` / `core_run.rs` / `core_triggers.rs` / `core_someip.rs` 各放一组 `impl BusCore`，跨文件方法用 `pub(super)`，测试在 `src/bus/tests.rs`。Web 侧 `app/support.ts` 放保存视图的解析与小工具，`app/StatsBar.tsx` 放统计条与回放条。
 
 ## 核心时钟模型：事件驱动，不用固定步长
 

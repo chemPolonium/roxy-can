@@ -29,12 +29,9 @@ import {
   emptySignalFilter,
   matchesSignalFilter,
 } from "./signalFilter";
-import { emptyFilterGroup, filterActive, normalizeFilter } from "./filterTree";
-import type { FilterGroup, FilterNode } from "./filterTree";
-import {
-  normalizeFilterLibrary,
-  type SavedFilter,
-} from "./filterLibrary";
+import { emptyFilterGroup, filterActive } from "./filterTree";
+import type { FilterNode } from "./filterTree";
+import type { SavedFilter } from "./filterLibrary";
 import { FilterBar } from "./components/FilterBar";
 import {
   MESSAGE_FILTER_SPECS,
@@ -120,7 +117,6 @@ import {
   defaultDock,
   layoutInfo,
   moveSlot,
-  normalizeDock,
   panelsFor,
   panelLabel,
   resetLayoutPanels,
@@ -187,302 +183,29 @@ import {
   type PanelWriteTarget,
 } from "./panelBinding";
 
-type ShellMode = "standard" | "panel";
-type DockDrag = "x" | "y" | null;
-
-const LAYOUT_KEY = "roxy-can-web.layout";
-const VIEW_KEY = "roxy-can-web.view";
-const TRACE_CAP = 50_000;
-const SIGNAL_CAP = 12_000;
-
-interface LegacyView {
-  mainView?: unknown;
-  tab?: unknown;
-  chartTab?: unknown;
-  chartTab2?: unknown;
-  chartSplit?: unknown;
-  splitRatio?: unknown;
-  layout?: unknown;
-}
-
-interface ViewFilters {
-  monitor: FilterGroup;
-  data: FilterGroup;
-  message: FilterGroup;
-  trace: FilterGroup;
-  signals: FilterGroup;
-  state: FilterGroup;
-  stats: FilterGroup;
-}
-
-interface SavedView {
-  shellMode: ShellMode;
-  dock: DockState;
-  overlay: boolean;
-  signalView: SignalView;
-  yModes?: Record<string, ChartYMode>;
-  derivedReads?: { id: string; name: string }[];
-  cursors: ChartCursor[];
-  filters?: ViewFilters;
-  filterLibrary?: SavedFilter[];
-}
-
-interface SavedWorkspace extends Partial<SavedView>, LegacyView {
-  traceColumns?: unknown;
-  messageColumns?: unknown;
-  statsColumns?: unknown;
-  readSignals?: unknown;
-}
-
-
-function normalizeView(
-  saved: SavedWorkspace,
-  legacyLayout?: unknown,
-): Partial<SavedView> {
-  const raw: SavedWorkspace =
-    saved && typeof saved === "object" ? saved : {};
-  const docking = normalizeDock(raw.dock, {
-    mainView: raw.mainView,
-    tab: raw.tab,
-    chartTab: raw.chartTab,
-    layout: raw.layout ?? legacyLayout,
-  });
-  const windowS = clamp(Number(raw.signalView?.windowS) || 30, 1, 120);
-  const rawEnd = raw.signalView?.endS;
-  const endS =
-    typeof rawEnd === "number" && Number.isFinite(rawEnd) ? rawEnd : null;
-  const cursors: ChartCursor[] = [];
-  if (Array.isArray(raw.cursors)) {
-    for (const cursor of raw.cursors.slice(0, 16)) {
-      if (!Number.isFinite(cursor?.id) || !Number.isFinite(cursor?.t)) continue;
-      const label =
-        cursor.label === "A" || cursor.label === "B" ? cursor.label : undefined;
-      cursors.push({
-        id: cursor.id,
-        t: cursor.t,
-        ...(label ? { label } : {}),
-      });
-    }
-  }
-  const yModes: Record<string, ChartYMode> = {};
-  if (raw.yModes && typeof raw.yModes === "object") {
-    for (const [key, mode] of Object.entries(raw.yModes).slice(0, 256)) {
-      if (mode === "auto" || mode === "memory" || mode === "dbc") {
-        yModes[key] = mode;
-      }
-    }
-  }
-  const derivedReads: { id: string; name: string }[] = [];
-  if (Array.isArray(raw.derivedReads)) {
-    for (const entry of raw.derivedReads.slice(0, 64)) {
-      if (
-        entry &&
-        typeof entry.id === "string" &&
-        entry.id &&
-        typeof entry.name === "string" &&
-        entry.name
-      ) {
-        derivedReads.push({ id: entry.id, name: entry.name });
-      }
-    }
-  }
-  const shellMode: ShellMode =
-    raw.shellMode === "panel" || raw.shellMode === "standard"
-      ? raw.shellMode
-      : raw.mainView === "panel"
-        ? "panel"
-        : "standard";
-  const hasFilters = !!raw.filters && typeof raw.filters === "object";
-  const rawFilters = hasFilters
-    ? (raw.filters as unknown as Record<string, unknown>)
-    : {};
-  const filters: ViewFilters = {
-    monitor: normalizeFilter(rawFilters.monitor, SIGNAL_FILTER_SPECS),
-    data: normalizeFilter(rawFilters.data, SIGNAL_FILTER_SPECS),
-    message: normalizeFilter(rawFilters.message, MESSAGE_FILTER_SPECS),
-    trace: normalizeFilter(rawFilters.trace, TRACE_FILTER_SPECS),
-    signals: normalizeFilter(rawFilters.signals, SIGNAL_FILTER_SPECS),
-    state: normalizeFilter(rawFilters.state, SIGNAL_FILTER_SPECS),
-    stats: normalizeFilter(rawFilters.stats, STATS_FILTER_SPECS),
-  };
-  const hasLibrary = Array.isArray(raw.filterLibrary);
-  const filterLibrary = normalizeFilterLibrary(raw.filterLibrary);
-  return {
-    shellMode,
-    dock: docking,
-    overlay: typeof raw.overlay === "boolean" ? raw.overlay : false,
-    yModes,
-    derivedReads,
-    signalView: { windowS, endS },
-    cursors,
-    ...(hasFilters ? { filters } : {}),
-    ...(hasLibrary ? { filterLibrary } : {}),
-  };
-}
-
-function loadLegacyLayout(): unknown {
-  try {
-    const raw = localStorage.getItem(LAYOUT_KEY);
-    return raw ? JSON.parse(raw) : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-function loadView(): Partial<SavedView> {
-  try {
-    const raw = localStorage.getItem(VIEW_KEY);
-    if (!raw) return {};
-    const parsed = JSON.parse(raw) as SavedWorkspace;
-    return normalizeView(parsed, parsed.layout ?? loadLegacyLayout());
-  } catch {
-    return {};
-  }
-}
-
-interface ReferenceRun extends ReferenceData {
-  series: Record<string, [number, number][]>;
-}
-
-/// Aligned-CSV headers are `bus:signal`; match them to the live lanes, with
-/// a unique-name fallback when the bus labels differ.
-function mapReferenceColumns(
-  columns: ReferenceColumns,
-  series: SignalSeries[],
-): Record<string, [number, number][]> {
-  const byKey: Record<string, [number, number][]> = {};
-  for (const signal of series) {
-    let points = columns[`${signal.bus}:${signal.name}`];
-    if (!points) {
-      const matches = Object.keys(columns).filter(
-        (label) => label.slice(label.lastIndexOf(":") + 1) === signal.name,
-      );
-      if (matches.length === 1) points = columns[matches[0]];
-    }
-    if (points && points.length > 0) byKey[signal.key] = points;
-  }
-  return byKey;
-}
-
-function clamp(value: number, min: number, max: number): number {
-  return Math.min(max, Math.max(min, value));
-}
-
-function seconds(us: number, digits = 3): string {
-  return (us / 1e6).toFixed(digits);
-}
-
-function useUiFps(): number {
-  const [fps, setFps] = useState(0);
-  useEffect(() => {
-    let frames = 0;
-    let last = performance.now();
-    let raf = 0;
-    const tick = (now: number) => {
-      frames += 1;
-      if (now - last >= 500) {
-        setFps(Math.round((frames * 1000) / (now - last)));
-        frames = 0;
-        last = now;
-      }
-      raf = requestAnimationFrame(tick);
-    };
-    raf = requestAnimationFrame(tick);
-    return () => window.cancelAnimationFrame(raf);
-  }, []);
-  return fps;
-}
-
-function baseName(path: string): string {
-  const cut = Math.max(path.lastIndexOf("\\"), path.lastIndexOf("/"));
-  return cut >= 0 ? path.slice(cut + 1) : path;
-}
-
-function shortDateTime(ms: number): string {
-  if (!ms) return "—";
-  const d = new Date(ms);
-  const p = (value: number) => String(value).padStart(2, "0");
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
-}
-
-function shortSize(bytes: number): string {
-  if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-  if (bytes >= 1024) return `${(bytes / 1024).toFixed(0)} KB`;
-  return `${bytes} B`;
-}
-
-const RECENT_PROJECTS_KEY = "roxy-can-web.recentProjects";
-
-function loadLocalRecentProjects(): string[] {
-  try {
-    const raw = localStorage.getItem(RECENT_PROJECTS_KEY);
-    const parsed: unknown = raw ? JSON.parse(raw) : [];
-    return Array.isArray(parsed)
-      ? parsed.filter((path): path is string => typeof path === "string").slice(0, 8)
-      : [];
-  } catch {
-    return [];
-  }
-}
-
-function saveLocalRecentProjects(paths: string[]): void {
-  try {
-    localStorage.setItem(RECENT_PROJECTS_KEY, JSON.stringify(paths));
-  } catch {
-    // Private mode can reject storage; the session still works.
-  }
-}
-
-function fileNameOf(path: string): string {
-  const cut = Math.max(path.lastIndexOf("\\"), path.lastIndexOf("/"));
-  return cut >= 0 ? path.slice(cut + 1) : path;
-}
-
-function handleMenuKey(
-  event: KeyboardEvent,
-  panel: HTMLElement | null,
-  close: () => void,
-  trigger: HTMLElement | null,
-): void {
-  if (!panel) return;
-  const items = [
-    ...panel.querySelectorAll<HTMLButtonElement>("button:not(:disabled)"),
-  ];
-  if (items.length === 0) return;
-  const active = document.activeElement;
-  const index = items.indexOf(active as HTMLButtonElement);
-  switch (event.key) {
-    case "ArrowDown":
-      event.preventDefault();
-      items[index < 0 ? 0 : (index + 1) % items.length].focus();
-      break;
-    case "ArrowUp":
-      event.preventDefault();
-      items[index < 0 ? items.length - 1 : (index - 1 + items.length) % items.length].focus();
-      break;
-    case "Home":
-      event.preventDefault();
-      items[0].focus();
-      break;
-    case "End":
-      event.preventDefault();
-      items[items.length - 1].focus();
-      break;
-    case "Escape":
-      event.preventDefault();
-      close();
-      trigger?.focus();
-      break;
-  }
-}
-
-function clock(wallUs: number): string {  const total = wallUs / 1e6;
-  const h = Math.floor(total / 3600);
-  const m = Math.floor((total % 3600) / 60);
-  const s = Math.floor(total % 60);
-  const ms = Math.floor((wallUs % 1e6) / 1000);
-  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}.${String(ms).padStart(3, "0")}`;
-}
+import {
+  SIGNAL_CAP,
+  TRACE_CAP,
+  VIEW_KEY,
+  baseName,
+  clamp,
+  clock,
+  fileNameOf,
+  handleMenuKey,
+  loadLocalRecentProjects,
+  loadView,
+  mapReferenceColumns,
+  normalizeView,
+  saveLocalRecentProjects,
+  shortDateTime,
+  shortSize,
+  useUiFps,
+  type DockDrag,
+  type ReferenceRun,
+  type SavedWorkspace,
+  type ShellMode,
+} from "./app/support";
+import { ReplayBar, StatsBar } from "./app/StatsBar";
 
 export function App() {
   const pickHost = useFileBrowser();
@@ -5550,257 +5273,49 @@ export function App() {
         </ContextMenu>
       )}
 
-      <section class="stats">
-        <div class="stat">
-          <span>Frames</span>
-          <strong>{state?.frames.toLocaleString() ?? "—"}</strong>
-        </div>
-        <div class="stat">
-          <span>Frame rate</span>
-          <strong>{state ? `${state.fps.toFixed(0)} f/s` : "—"}</strong>
-        </div>
-        <div class="stat">
-          <span>Trace ring</span>
-          <strong>{state?.traceLen.toLocaleString() ?? "—"}</strong>
-        </div>
-        <div class="stat">
-          <span>Sim time</span>
-          <strong>{state ? `${seconds(state.simTimeUs, 2)} s` : "—"}</strong>
-        </div>
-        <div
-          class="stat"
-          title={
-            recordActive
-              ? `Recording to ${
-                  state?.recordFile ? baseName(state.recordFile) : "a new file"
-                }`
-              : recordArmed
-                ? "Recording is armed; Start opens a new file"
-                : "Recording is off"
-          }
-        >
-          <span>Record</span>
-          <strong class={recordActive ? "rec" : recordArmed ? "armed" : ""}>
-            {!state ? "—" : recordActive ? "REC" : recordArmed ? "Armed" : "Off"}
-          </strong>
-        </div>
-        <div class="stat">
-          <span>Bus</span>
-          <strong>
-            {!state
-              ? "—"
-              : replaying
-                ? "—"
-                : attachedBuses === 0
-                  ? "Simulated"
-                  : busLive
-                    ? `Real · ${attachedBuses}`
-                    : `Simulated · ${attachedBuses}`}
-          </strong>
-        </div>
-        {error && <div class="error-pill">{error}</div>}
-      </section>
+      <StatsBar
+        state={state}
+        error={error}
+        recordActive={recordActive}
+        recordArmed={recordArmed}
+        replaying={replaying}
+        attachedBuses={attachedBuses}
+        busLive={busLive}
+      />
 
       {state?.runMode === "Replay" && state.log && (
-        <section class="replaybar">
-          <span class="replay-mode">Replay</span>
-          <span class="replay-pos">{replayText || "no position"}</span>
-          <button
-            type="button"
-            class="mini replay-channels"
-            title="Map this recording's channel numbers onto project buses"
-            aria-label={
-              replayDropped > 0
-                ? `Channels, ${replayDropped} not replayed`
-                : "Channels"
-            }
-            onClick={openReplayChannels}
-          >
-            Channels
-            {replayDropped > 0 && <em>{replayDropped} not replayed</em>}
-          </button>
-          <div class="replay-nav">
-            <label>
-              Speed
-              <select
-                value={state.replaySpeed >= 1e8 ? "fast" : String(state.replaySpeed)}
-                onChange={(event) => {
-                  const value = (event.target as HTMLSelectElement).value;
-                  void run({
-                    type: "set_replay_speed",
-                    speed: value === "fast" ? 1e9 : Number(value),
-                  });
-                }}
-              >
-                {[0.5, 1, 2, 4].map((speed) => (
-                  <option key={speed} value={speed}>
-                    {speed}x
-                  </option>
-                ))}
-                <option value="fast">Fast</option>
-              </select>
-            </label>
-            <label>
-              Step
-              <select
-                value={replayStepMs}
-                onChange={(event) =>
-                  setReplayStepMs(Number((event.target as HTMLSelectElement).value))
-                }
-              >
-                {[10, 50, 100, 500, 1000, 5000].map((ms) => (
-                  <option key={ms} value={ms}>
-                    {ms >= 1000 ? `${ms / 1000} s` : `${ms} ms`}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <button
-              type="button"
-              class="icon-btn"
-              disabled={!state.measuring}
-              title="Advance the replay by the step size (forward only)"
-              aria-label="Advance one step"
-              onClick={() =>
-                void run({ type: "replay_step", delta_us: replayStepMs * 1000 })
-              }
-            >
-              <UiIcon name="step-forward" />
-            </button>
-            {state.markers.length > 0 && (
-              <>
-                <button
-                  type="button"
-                  class="icon-btn"
-                  disabled={prevTriggerUs === null}
-                  title="Show the previous trigger in Trace and the chart; playback keeps running"
-                  aria-label="Previous trigger"
-                  onClick={() => prevTriggerUs !== null && viewTimeUs(prevTriggerUs)}
-                >
-                  <UiIcon name="arrow-left" />
-                </button>
-                <button
-                  type="button"
-                  class="icon-btn"
-                  disabled={nextTriggerUs === null}
-                  title="Show the next trigger in Trace and the chart; playback keeps running"
-                  aria-label="Next trigger"
-                  onClick={() => nextTriggerUs !== null && viewTimeUs(nextTriggerUs)}
-                >
-                  <UiIcon name="arrow-right" />
-                </button>
-              </>
-            )}
-            <label>
-              Play for
-              <select
-                value={replayForS}
-                onChange={(event) =>
-                  setReplayForS(Number((event.target as HTMLSelectElement).value))
-                }
-              >
-                {[1, 5, 10, 30, 60].map((s) => (
-                  <option key={s} value={s}>
-                    {s} s
-                  </option>
-                ))}
-              </select>
-            </label>
-            <button
-              type="button"
-              disabled={!state.measuring}
-              title={`Play ${replayForS} s, then pause`}
-              onClick={() =>
-                void run({
-                  type: "replay_play_for",
-                  duration_us: replayForS * 1_000_000,
-                })
-              }
-            >
-              Play {replayForS} s
-            </button>
-            <form
-              class="replay-to"
-              onSubmit={(event) => {
-                event.preventDefault();
-                const secs = Number(replayTo);
-                if (Number.isFinite(secs) && secs >= 0) {
-                  void run({
-                    type: "replay_play_to",
-                    target_us: Math.round(secs * 1_000_000),
-                  });
-                }
-              }}
-            >
-              <label>
-                to
-                <input
-                  value={replayTo}
-                  placeholder="s"
-                  inputMode="decimal"
-                  onInput={(event) =>
-                    setReplayTo((event.target as HTMLInputElement).value)
-                  }
-                />
-              </label>
-              <button
-                type="submit"
-                disabled={
-                  !state.measuring ||
-                  !replayTo.trim() ||
-                  !Number.isFinite(Number(replayTo))
-                }
-                title="Play forward to this absolute log time, then pause"
-              >
-                Go
-              </button>
-            </form>
-          </div>
-          {state.replayPosUs != null &&
-            state.replayTotalUs != null &&
-            state.replayTotalUs > 0 && (
-              <div class="replay-track-row">
-                <div
-                  class="replay-track"
-                  title="Click ahead to play there; clicking behind only moves the view"
-                  onClick={(event) => {
-                  const rect = event.currentTarget.getBoundingClientRect();
-                  const frac = clamp(
-                    (event.clientX - rect.left) / rect.width,
-                    0,
-                    1,
-                  );
-                  goToTimeUs(Math.round(frac * state.replayTotalUs!));
-                }}
-              >
-                <span
-                  class="replay-fill"
-                  style={{
-                    width: `${(state.replayPosUs / state.replayTotalUs) * 100}%`,
-                  }}
-                />
-                {state.markers.map((marker) => (
-                  <span
-                    key={marker}
-                    class="replay-mark"
-                    style={{
-                      left: `${clamp((marker * 1e6) / state.replayTotalUs! * 100, 0, 100)}%`,
-                    }}
-                  />
-                ))}
-                <span
-                  class="replay-cursor"
-                  style={{
-                    left: `${(state.replayPosUs / state.replayTotalUs) * 100}%`,
-                  }}
-                />
-                </div>
-                <span class="replay-hint">
-                  forward only · pauses at the target
-                </span>
-              </div>
-            )}
-        </section>
+        <ReplayBar
+          state={state}
+          replayText={replayText}
+          replayDropped={replayDropped}
+          replayStepMs={replayStepMs}
+          replayForS={replayForS}
+          replayTo={replayTo}
+          prevTriggerUs={prevTriggerUs}
+          nextTriggerUs={nextTriggerUs}
+          onSpeed={(speed) => void run({ type: "set_replay_speed", speed })}
+          onStepChange={setReplayStepMs}
+          onForChange={setReplayForS}
+          onStepForward={() =>
+            void run({ type: "replay_step", delta_us: replayStepMs * 1000 })
+          }
+          onPlayFor={() =>
+            void run({
+              type: "replay_play_for",
+              duration_us: replayForS * 1_000_000,
+            })
+          }
+          onPlayTo={(secs) =>
+            void run({
+              type: "replay_play_to",
+              target_us: Math.round(secs * 1_000_000),
+            })
+          }
+          onToChange={setReplayTo}
+          onOpenChannels={openReplayChannels}
+          onViewTime={viewTimeUs}
+          onGoTo={goToTimeUs}
+        />
       )}
 
       <main
