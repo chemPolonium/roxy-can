@@ -4,6 +4,7 @@ import { Tabs } from "./Tabs";
 import type { BandSet, SysVar } from "../types";
 import type { Theme } from "../theme";
 import { BandSetPanel } from "./BandSetPanel";
+import { BandSetPicker } from "./BandSetPicker";
 import type { DerivedDef, DerivedReference } from "../derived";
 import { DerivedPanel } from "./DerivedPanel";
 
@@ -346,21 +347,19 @@ export function VariablesModal({
             <div class="sv-form-grid">
               <label class="wide">
                 Default band set
-                <select
+                <BandSetPicker
                   value={draft.bandSetId}
-                  onChange={(event) =>
-                    set({
-                      bandSetId: (event.target as HTMLSelectElement).value,
-                    })
-                  }
-                >
-                  <option value="">None · numeric only</option>
-                  {bandSets.map((set) => (
-                    <option key={set.id} value={set.id}>
-                      {set.name} ({set.bands.length} bands)
-                    </option>
-                  ))}
-                </select>
+                  ariaLabel="Default band set"
+                  choices={[
+                    { value: "", label: "None · numeric only" },
+                    ...bandSets.map((set) => ({
+                      value: set.id,
+                      label: `${set.name} (${set.bands.length} bands)`,
+                      hint: set.id,
+                    })),
+                  ]}
+                  onChange={(bandSetId) => set({ bandSetId })}
+                />
               </label>
             </div>            <div class="sv-form-foot">
               {checked?.error ? (

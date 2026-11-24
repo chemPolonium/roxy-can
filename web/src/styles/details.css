@@ -2226,6 +2226,12 @@ body:has(.cm-tooltip-autocomplete) .script-signature {
   line-height: 1.5;
 }
 
+.sv-tools .sv-filter {
+  flex: 0 1 180px;
+  min-width: 120px;
+  height: 22px;
+}
+
 .sv-hint code {
   padding: 1px 3px;
   background: #151c24;

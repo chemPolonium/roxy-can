@@ -25,6 +25,19 @@ export function finalBand(color?: number): Band {
   return { upper: null, inclusive: false, color };
 }
 
+/// Case-insensitive name/id match for the BandSet picker and manager filter.
+export function bandSetMatchesQuery(
+  name: string,
+  id: string,
+  query: string,
+): boolean {
+  const needle = query.trim().toLowerCase();
+  if (!needle) return true;
+  return (
+    name.toLowerCase().includes(needle) || id.toLowerCase().includes(needle)
+  );
+}
+
 /// Parse an edited bound. Blank and non-finite input returns null so the
 /// caller can keep the last committed value instead of making the band open.
 export function parseBandBound(text: string): number | null {

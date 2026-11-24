@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   bandAt,
   bandIndex,
+  bandSetMatchesQuery,
   parseBandBound,
   validateBands,
   type Band,
@@ -20,6 +21,14 @@ describe("bands", () => {
     expect(bandAt(bands, 1.5)?.text).toBe("below two");
     expect(bandAt(bands, 2)?.text).toBe("rest");
     expect(bandIndex(bands, null)).toBeNull();
+  });
+
+  it("matches band sets by name or id, ignoring case and padding", () => {
+    expect(bandSetMatchesQuery("Engine", "bands1", "")).toBe(true);
+    expect(bandSetMatchesQuery("Engine", "bands1", "  ")).toBe(true);
+    expect(bandSetMatchesQuery("Engine", "bands1", "eng")).toBe(true);
+    expect(bandSetMatchesQuery("Engine", "bands1", "BANDS1")).toBe(true);
+    expect(bandSetMatchesQuery("Engine", "bands1", "brake")).toBe(false);
   });
 
   it("keeps blank or half-typed bounds from becoming open bands", () => {

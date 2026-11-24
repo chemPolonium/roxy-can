@@ -131,6 +131,7 @@ function panelWidgetBands(widget: PanelWidget, view: PanelView): Band[] {
 const EMPTY_HISTORY: History = { past: [], future: [] };
 
 import { GaugeView, SetpointControl, SuggestionInput, SysVarSetpointControl } from "./PanelControls";
+import { BandSetPicker } from "./BandSetPicker";
 export function PagePanel({
   book,
   revision,
@@ -860,27 +861,26 @@ export function PagePanel({
       return (
         <label>
           Bands
-          <select
+          <BandSetPicker
             value={chosen}
-            onFocus={pushHistory}
-            onChange={(event) => {
-              const next = (event.target as HTMLSelectElement).value;
+            ariaLabel="Bands"
+            onOpen={pushHistory}
+            choices={[
+              { value: "", label: `Default · ${fallback?.name ?? "none"}` },
+              { value: "none", label: "No bands" },
+              ...(view.bandSets ?? []).map((set) => ({
+                value: set.id,
+                label: set.name,
+                hint: set.id,
+              })),
+            ]}
+            onChange={(next) =>
               update({
                 labelSet:
                   next === "" ? undefined : next === "none" ? null : next,
-              });
-            }}
-          >
-            <option value="">
-              Default · {fallback?.name ?? "none"}
-            </option>
-            <option value="none">No bands</option>
-            {(view.bandSets ?? []).map((set) => (
-              <option key={set.id} value={set.id}>
-                {set.name}
-              </option>
-            ))}
-          </select>
+              })
+            }
+          />
         </label>
       );
     }

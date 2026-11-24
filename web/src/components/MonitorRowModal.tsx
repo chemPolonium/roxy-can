@@ -1,5 +1,6 @@
 import { useEffect, useState } from "preact/hooks";
 import type { BandSet, MonitorRow } from "../types";
+import { BandSetPicker } from "./BandSetPicker";
 import { ModalHeader } from "./ModalHeader";
 
 interface Props {
@@ -46,20 +47,19 @@ export function MonitorRowModal({ row, bandSets, onApply, onClose }: Props) {
           </p>
           <div class="monitor-style-row">
             <span>Bands</span>
-            <select
+            <BandSetPicker
               value={bandSetId}
-              onChange={(event) => {
-                const id = (event.target as HTMLSelectElement).value;
-                setBandSetId(id);
-              }}
-            >
-              <option value="">No bands</option>
-              {bandSets.map((set) => (
-                <option key={set.id} value={set.id}>
-                  {set.name}
-                </option>
-              ))}
-            </select>
+              ariaLabel="Bands"
+              choices={[
+                { value: "", label: "No bands" },
+                ...bandSets.map((set) => ({
+                  value: set.id,
+                  label: set.name,
+                  hint: set.id,
+                })),
+              ]}
+              onChange={setBandSetId}
+            />
           </div>
           <div class="monitor-style-row">
             <span>Decimals</span>

@@ -1,6 +1,7 @@
 import { useEffect, useState } from "preact/hooks";
 import type { BandSet, StateRule } from "../types";
 import type { Band } from "../bands";
+import { BandSetPicker } from "./BandSetPicker";
 import { ModalHeader } from "./ModalHeader";
 
 interface Props {
@@ -49,20 +50,19 @@ export function StateRuleModal({
           <div class="state-band-list">
             <label>
               Project BandSet
-              <select
+              <BandSetPicker
                 value={bandSetId}
-                onChange={(event) => {
-                  const id = (event.target as HTMLSelectElement).value;
-                  setBandSetId(id);
-                }}
-              >
-                <option value="">Inline / none</option>
-                {bandSets.map((set) => (
-                  <option key={set.id} value={set.id}>
-                    {set.name}
-                  </option>
-                ))}
-              </select>
+                ariaLabel="Project BandSet"
+                choices={[
+                  { value: "", label: "Inline / none" },
+                  ...bandSets.map((set) => ({
+                    value: set.id,
+                    label: set.name,
+                    hint: set.id,
+                  })),
+                ]}
+                onChange={setBandSetId}
+              />
             </label>
           </div>
           <div class="state-rule-actions">

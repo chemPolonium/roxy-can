@@ -1,6 +1,11 @@
 import { useState } from "preact/hooks";
 import type { BandSet } from "../types";
-import { normaliseBands, validateBands, type Band } from "../bands";
+import {
+  bandSetMatchesQuery,
+  normaliseBands,
+  validateBands,
+  type Band,
+} from "../bands";
 import { palette, type Theme } from "../theme";
 import { BandEditor } from "./BandEditor";
 
@@ -21,8 +26,12 @@ interface Draft {
 export function BandSetPanel({ sets, theme, onSave, onDelete }: Props) {
   const colors = palette(theme).monitors;
   const [draft, setDraft] = useState<Draft | null>(null);
+  const [filter, setFilter] = useState("");
   const edit = (set: BandSet) =>
     setDraft({ ...set, bands: set.bands.map((band) => ({ ...band })), editing: true });
+  const visible = sets.filter((set) =>
+    bandSetMatchesQuery(set.name, set.id, filter),
+  );
   const error = draft ? validateBands(normaliseBands(draft.bands)) : "";
   const canApply = !!draft && !!draft.name.trim() && !error;
 
@@ -37,6 +46,7 @@ export function BandSetPanel({ sets, theme, onSave, onDelete }: Props) {
       draft.editing ? draft.id : null,
     );
     setDraft(null);
+    setFilter("");
   };
 
   return (
@@ -58,6 +68,16 @@ export function BandSetPanel({ sets, theme, onSave, onDelete }: Props) {
         >
           + Band set
         </button>
+        <input
+          class="sv-filter"
+          value={filter}
+          placeholder="Filter name or id…"
+          aria-label="Filter band sets"
+          spellcheck={false}
+          onInput={(event) =>
+            setFilter((event.target as HTMLInputElement).value)
+          }
+        />
         <span class="sv-hint">
           Reusable by SysVars, Monitor, State, Derived and Panel controls.
         </span>
@@ -116,7 +136,7 @@ export function BandSetPanel({ sets, theme, onSave, onDelete }: Props) {
           <span />
           <span />
         </div>
-        {sets.map((set) => (
+        {visible.map((set) => (
           <div class="sv-row band-set-row" key={set.id}>
             <span class="sv-name">
               <strong>{set.name}</strong>
@@ -144,6 +164,11 @@ export function BandSetPanel({ sets, theme, onSave, onDelete }: Props) {
         {sets.length === 0 && (
           <div class="sv-empty-row">
             no band sets -- add one to reuse display rules
+          </div>
+        )}
+        {sets.length > 0 && visible.length === 0 && (
+          <div class="sv-empty-row">
+            no band sets match "{filter.trim()}"
           </div>
         )}
       </div>

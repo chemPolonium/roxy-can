@@ -1521,6 +1521,85 @@ body.col-resizing {
   background: var(--accent-soft);
 }
 
+/* Searchable BandSet dropdown. It reuses the suggestion menu chrome but sits
+   above .modal-backdrop (z-index 100) and keeps its search row fixed while the
+   options scroll. */
+.bandset-picker {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.bandset-picker-trigger {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  min-width: 0;
+  height: 22px;
+  padding: 0 6px;
+  text-align: left;
+}
+
+.bandset-picker-trigger .name {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bandset-picker-trigger small,
+.bandset-picker-trigger .caret {
+  flex: 0 0 auto;
+  color: var(--muted);
+}
+
+.bandset-picker-trigger small {
+  font-size: 9.5px;
+}
+
+.bandset-picker-menu {
+  z-index: 120;
+  overflow: hidden;
+}
+
+.bandset-picker-search {
+  flex: 0 0 auto;
+  height: 22px;
+  margin-bottom: 3px;
+}
+
+.bandset-picker-list {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.bandset-picker-list button {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.bandset-picker-list button .name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bandset-picker-list button small {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 9.5px;
+}
+
+.bandset-picker-empty {
+  padding: 4px 6px;
+  color: var(--muted);
+  font-size: 10px;
+}
+
 @media (max-width: 1100px) {
   .page-panel .panel-head.editing .meta {
     display: none;
