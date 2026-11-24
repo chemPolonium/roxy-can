@@ -3716,18 +3716,21 @@ fn app_loop(
                     for row in &mut app.monitor_view.rows {
                         if row.band_set_id.as_deref() == Some(id.as_str()) {
                             row.band_set_id = None;
+                            row.bands.clear();
                         }
                     }
                     for window in &mut app.state_trackers {
                         for rule in window.rules.values_mut() {
                             if rule.band_set_id.as_deref() == Some(id.as_str()) {
                                 rule.band_set_id = None;
+                                rule.bands.clear();
                             }
                         }
                     }
                     for def in &mut app.derived_defs {
                         if def.band_set_id.as_deref() == Some(id.as_str()) {
                             def.band_set_id = None;
+                            def.bands.clear();
                         }
                     }
                 }

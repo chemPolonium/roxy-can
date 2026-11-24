@@ -1241,6 +1241,13 @@ export function movePanelPage(
   return { ...book, pages };
 }
 
+function legacyPanelBands(value: Record<string, unknown>): Band[] | undefined {
+  if (!Array.isArray(value.cuts) && !Array.isArray(value.colors)) {
+    return undefined;
+  }
+  return bandsFromCuts(value.cuts as number[], value.colors as number[]);
+}
+
 function widgetPatch(
   value: Record<string, unknown>,
   kind: PanelWidgetKind,
@@ -1274,9 +1281,7 @@ function widgetPatch(
           source: text(value.source, 120),
           digits: clamp(Math.round(Number(value.digits) || 0), 0, 3),
           labelSet,
-          bands:
-            bands ??
-            bandsFromCuts(value.cuts as number[], value.colors as number[]),
+          bands: bands ?? legacyPanelBands(value),
           ...normalisePanelBandFields(value),
         }
       : {}),
@@ -1308,9 +1313,7 @@ function widgetPatch(
           max: Number(value.max),
           digits: clamp(Math.round(Number(value.digits) || 0), 0, 3),
           labelSet,
-          bands:
-            bands ??
-            bandsFromCuts(value.cuts as number[], value.colors as number[]),
+          bands: bands ?? legacyPanelBands(value),
           ...normalisePanelBandFields(value),
         }
       : {}),

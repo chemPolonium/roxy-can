@@ -6086,9 +6086,13 @@ export function App() {
               pages: book.pages.map((page) => ({
                 ...page,
                 widgets: page.widgets.map((widget) => {
-                  const raw = widget as { labelSet?: string | null };
+                  const raw = widget as { labelSet?: string | null; bands?: unknown };
                   return raw.labelSet === id
-                    ? ({ ...raw, labelSet: undefined } as typeof widget)
+                    ? ({
+                        ...raw,
+                        labelSet: undefined,
+                        bands: undefined,
+                      } as typeof widget)
                     : widget;
                 }),
               })),

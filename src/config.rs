@@ -975,7 +975,11 @@ impl ProjectSettings {
                         signal: r.key.name().to_string(),
                         label: r.label.clone(),
                         digits: r.digits,
-                        bands: r.bands.clone(),
+                        bands: if r.band_set_id.is_some() {
+                            Vec::new()
+                        } else {
+                            r.bands.clone()
+                        },
                         band_set_id: r.band_set_id.clone(),
                         cuts: Vec::new(),
                         colors: Vec::new(),
@@ -1012,7 +1016,11 @@ impl ProjectSettings {
                                 visible: s.visible,
                                 y_mode: s.y_mode.to_u8(),
                                 state_rule: w.rules.get(&s.key).map(|r| RuleCfg {
-                                    bands: r.bands.clone(),
+                                    bands: if r.band_set_id.is_some() {
+                                        Vec::new()
+                                    } else {
+                                        r.bands.clone()
+                                    },
                                     band_set_id: r.band_set_id.clone(),
                                     cuts: Vec::new(),
                                     names: Vec::new(),
