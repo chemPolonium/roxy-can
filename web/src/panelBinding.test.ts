@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
-import type { ScriptInfo, SignalSeries, SysVar } from "./types";
+import type { BandSet, ScriptInfo, SignalSeries, SysVar } from "./types";
 import {
   clampPanelNumber,
+  controlBandSetChoices,
   filterPanelOptions,
   findPanelSysVar,
   panelButtonCapability,
@@ -447,5 +448,35 @@ describe("SOME/IP panel fields", () => {
       "OnSpeed",
     );
     expect(someIpMemberFor(services, 1, 0x1234, 1, 0x00)).toBeUndefined();
+  });
+});
+
+describe("panel BandSet choices", () => {
+  const engine: BandSet = { id: "bands1", name: "Engine bands", bands: [] };
+  const brake: BandSet = { id: "bands2", name: "Brake bands", bands: [] };
+
+  it("offers one No bands entry when the variable has no default", () => {
+    const { value, choices } = controlBandSetChoices([engine], undefined, null);
+    expect(value).toBe("");
+    expect(choices.map((choice) => choice.label)).toEqual([
+      "No bands",
+      "Engine bands",
+    ]);
+    expect(choices.some((choice) => choice.value === "none")).toBe(false);
+  });
+
+  it("separates the variable default from an explicit override", () => {
+    const fallback = controlBandSetChoices([engine, brake], engine, undefined);
+    expect(fallback.value).toBe("");
+    expect(fallback.choices.slice(0, 2).map((choice) => choice.label)).toEqual([
+      "Default · Engine bands",
+      "No bands (override)",
+    ]);
+    expect(controlBandSetChoices([engine, brake], engine, null).value).toBe(
+      "none",
+    );
+    expect(controlBandSetChoices([engine, brake], engine, "bands2").value).toBe(
+      "bands2",
+    );
   });
 });

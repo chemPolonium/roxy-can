@@ -31,6 +31,7 @@ import {
   type PanelSetpoint,
 } from "../panelPage";
 import {
+  controlBandSetChoices,
   findPanelSysVar,
   panelLampLit,
   panelMeterRatio,
@@ -853,11 +854,14 @@ export function PagePanel({
       if ((!variable && !inlineSource) || (view.bandSets ?? []).length === 0) {
         return null;
       }
-      const chosen =
-        widget.labelSet === null ? "none" : (widget.labelSet ?? "");
       const fallback = variable?.bandSetId
         ? view.bandSets?.find((set) => set.id === variable.bandSetId)
         : undefined;
+      const { value: chosen, choices } = controlBandSetChoices(
+        view.bandSets ?? [],
+        fallback,
+        widget.labelSet,
+      );
       return (
         <label>
           Bands
@@ -865,15 +869,7 @@ export function PagePanel({
             value={chosen}
             ariaLabel="Bands"
             onOpen={pushHistory}
-            choices={[
-              { value: "", label: `Default · ${fallback?.name ?? "none"}` },
-              { value: "none", label: "No bands" },
-              ...(view.bandSets ?? []).map((set) => ({
-                value: set.id,
-                label: set.name,
-                hint: set.id,
-              })),
-            ]}
+            choices={choices}
             onChange={(next) =>
               update({
                 labelSet:

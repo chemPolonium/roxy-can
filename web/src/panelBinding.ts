@@ -424,3 +424,30 @@ export function someIpMemberFor(
     entry.events.find((member) => member.id === method)
   );
 }
+
+/// Band choices for a Panel control. "Default" follows the variable's own
+/// BandSet; "No bands (override)" is only offered when that default exists,
+/// otherwise the two choices would do the same thing.
+export function controlBandSetChoices(
+  bandSets: BandSet[],
+  fallback: BandSet | undefined,
+  labelSet: string | null | undefined,
+): { value: string; choices: { value: string; label: string; hint?: string }[] } {
+  const value = fallback && labelSet === null ? "none" : (labelSet ?? "");
+  return {
+    value,
+    choices: [
+      ...(fallback
+        ? [{ value: "", label: `Default · ${fallback.name}`, hint: fallback.id }]
+        : []),
+      fallback
+        ? { value: "none", label: "No bands (override)" }
+        : { value: "", label: "No bands" },
+      ...bandSets.map((set) => ({
+        value: set.id,
+        label: set.name,
+        hint: set.id,
+      })),
+    ],
+  };
+}
