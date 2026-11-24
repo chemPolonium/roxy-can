@@ -1196,6 +1196,7 @@ button.mini.on {
 .gen-block-row {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 8px;
   padding: 3px 0;
   border-bottom: 1px solid #161d26;

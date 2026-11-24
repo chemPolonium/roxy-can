@@ -123,6 +123,13 @@
   color: #cfe7ff;
 }
 
+.page-toggle-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .page-toggle-state {
   max-width: 65%;
   overflow: hidden;
@@ -1149,6 +1156,20 @@ button.icon-btn svg {
   display: inline-block;
   width: 14px;
   margin-right: 4px;
+}
+
+.msg-name {
+  display: inline-block;
+  max-width: calc(100% - 22px);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: bottom;
+  white-space: nowrap;
+}
+
+td.name:has(.e2e-tag) .msg-name {
+  max-width: calc(100% - 88px);
 }
 
 .e2e-tag {

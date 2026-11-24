@@ -259,7 +259,7 @@ export function SomeIpPanel({
                 label="Filter ARXML service objects"
                 onInput={setDbQuery}
               />
-              <span class="muted">
+              <span class="meta">
                 {dbServices.length} / {services.length}
               </span>
             </div>

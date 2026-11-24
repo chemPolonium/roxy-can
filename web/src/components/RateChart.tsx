@@ -76,6 +76,18 @@ export function RateChart({
         ctx.fillText(`${label}%`, width - pad.right + 6, y);
       }
 
+      if (n === 0) {
+        ctx.fillStyle = colors.rateEmpty;
+        ctx.font = "11px 'Segoe UI', sans-serif";
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillText(
+          "Start a measurement to see bus load",
+          pad.left + plotW / 2,
+          pad.top + plotH / 2,
+        );
+      }
+
       if (n > 0) {
         const x = (i: number) =>
           pad.left + (n === 1 ? 0 : (plotW * i) / (n - 1));

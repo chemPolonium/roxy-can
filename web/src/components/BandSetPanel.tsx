@@ -8,6 +8,7 @@ import {
 } from "../bands";
 import { palette, type Theme } from "../theme";
 import { BandEditor } from "./BandEditor";
+import { ConfirmDialog } from "./ConfirmDialog";
 
 interface Props {
   sets: BandSet[];
@@ -27,11 +28,13 @@ export function BandSetPanel({ sets, theme, onSave, onDelete }: Props) {
   const colors = palette(theme).monitors;
   const [draft, setDraft] = useState<Draft | null>(null);
   const [filter, setFilter] = useState("");
+  const [pendingDelete, setPendingDelete] = useState<string | null>(null);
   const edit = (set: BandSet) =>
     setDraft({ ...set, bands: set.bands.map((band) => ({ ...band })), editing: true });
   const visible = sets.filter((set) =>
     bandSetMatchesQuery(set.name, set.id, filter),
   );
+  const pendingSet = sets.find((set) => set.id === pendingDelete);
   const error = draft ? validateBands(normaliseBands(draft.bands)) : "";
   const canApply = !!draft && !!draft.name.trim() && !error;
 
@@ -150,11 +153,7 @@ export function BandSetPanel({ sets, theme, onSave, onDelete }: Props) {
               <button
                 type="button"
                 class="danger"
-                onClick={() => {
-                  if (window.confirm(`Delete band set ${set.name}?`)) {
-                    onDelete(set.id);
-                  }
-                }}
+                onClick={() => setPendingDelete(set.id)}
               >
                 ×
               </button>
@@ -172,6 +171,19 @@ export function BandSetPanel({ sets, theme, onSave, onDelete }: Props) {
           </div>
         )}
       </div>
+      {pendingSet && (
+        <ConfirmDialog
+          title="Delete band set"
+          message={`Delete band set ${pendingSet.name}? This cannot be undone.`}
+          confirmLabel="Delete"
+          danger
+          onConfirm={() => {
+            onDelete(pendingSet.id);
+            setPendingDelete(null);
+          }}
+          onClose={() => setPendingDelete(null)}
+        />
+      )}
     </>
   );
 }
