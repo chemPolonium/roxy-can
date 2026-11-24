@@ -75,3 +75,14 @@
 改 UI 要跑 `npm run build`、`cargo fmt --check`、`cargo clippy --all-targets`、
 `cargo test --all-targets`，并在 1280×800 与 1024×768 下检查主要标签页和
 弹窗没有横向溢出。验证用的服务、浏览器必须停掉，不要留后台进程。
+
+## 提交与推送
+
+- 每次修改并通过验证后，可以自行决定是否提交、推送；提交信息按仓库现有风格
+  写清变更范围，不要留 WIP 或半成品提交。
+- 不要发版：不建 tag、不改版本号、不触发出版流程；发版由人工决定。
+
+## 工具
+
+- 命令优先使用 PowerShell 7+（`pwsh`），不要用 Windows 自带的 PowerShell 5.1
+  （`powershell.exe`）：两者在语法和编码上的差异会让同一脚本得到不同结果。
