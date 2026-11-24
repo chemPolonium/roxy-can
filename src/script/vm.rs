@@ -163,6 +163,18 @@ pub struct Vm {
     /// `(cluster name, frame, signal)` → cluster index for the named
     /// Ethernet form (`ETH.Body.Frame.Signal`).
     pub eth_bus_named_ids: std::collections::HashMap<(String, String, String), u8>,
+    /// Last booleans for `schmitt` / `rising` / `falling`.
+    pub flags: std::collections::HashMap<String, bool>,
+    /// Last `(value, change time)` pairs for `debounce`.
+    pub debounces: std::collections::HashMap<String, (f64, f64)>,
+    /// Last timestamps for `elapsed`.
+    pub marks: std::collections::HashMap<String, f64>,
+    /// Rising-edge counts for `edge_count`.
+    pub edge_counts: std::collections::HashMap<String, u64>,
+    /// Bounded sample windows for `moving_avg`.
+    pub windows: std::collections::HashMap<String, std::collections::VecDeque<f64>>,
+    /// Bounded `(id, time)` frame arrivals, used by the `expect_*` helpers.
+    pub frame_events: Vec<(u32, f64)>,
 }
 
 impl Vm {
@@ -210,6 +222,12 @@ impl Vm {
             fr_named_slots: std::collections::HashMap::new(),
             fr_bus_named_slots: std::collections::HashMap::new(),
             eth_bus_named_ids: std::collections::HashMap::new(),
+            flags: std::collections::HashMap::new(),
+            debounces: std::collections::HashMap::new(),
+            marks: std::collections::HashMap::new(),
+            edge_counts: std::collections::HashMap::new(),
+            windows: std::collections::HashMap::new(),
+            frame_events: Vec::new(),
         }
     }
 
@@ -746,6 +764,46 @@ impl Vm {
         Ok(())
     }
 
+    fn number(value: &Value) -> Option<f64> {
+        match value {
+            Value::Int(n) => Some(*n as f64),
+            Value::Float(f) => Some(*f),
+            _ => None,
+        }
+    }
+
+    fn whole(value: &Value) -> Option<u64> {
+        Self::number(value).and_then(|f| (f >= 0.0 && f.fract() == 0.0).then_some(f as u64))
+    }
+
+    fn vm_signal_named(&self, msg: &str, sig: &str) -> Option<f64> {
+        let id = *self.named_messages.get(msg)?;
+        self.host_input.signals.get(&(id, sig.to_string())).copied()
+    }
+
+    /// Aggregates one assertion into the same report `test()` writes.
+    fn record_test(&mut self, name: String, ok: bool) {
+        let line = self.call_line();
+        let time_s = self.host_input.now_s;
+        match self.tests.iter_mut().find(|result| result.name == name) {
+            Some(result) => {
+                result.runs += 1;
+                if !ok {
+                    result.failures += 1;
+                }
+                result.line = line;
+                result.time_s = time_s;
+            }
+            None => self.tests.push(crate::script::TestResult {
+                name,
+                runs: 1,
+                failures: u64::from(!ok),
+                line,
+                time_s,
+            }),
+        }
+    }
+
     fn call_host(&mut self, id: usize, argc: usize) -> Result<(), VmError> {
         if id >= self.script.host_fns.len() {
             return Err(VmError(format!("unknown host function {id}")));
@@ -785,25 +843,226 @@ impl Vm {
                         "test(\"name\", condition) needs a string and a bool".into(),
                     ));
                 };
-                let line = self.call_line();
-                let time_s = self.host_input.now_s;
-                match self.tests.iter_mut().find(|result| result.name == *name) {
-                    Some(result) => {
-                        result.runs += 1;
-                        if !ok {
-                            result.failures += 1;
-                        }
-                        result.line = line;
-                        result.time_s = time_s;
-                    }
-                    None => self.tests.push(crate::script::TestResult {
-                        name: name.clone(),
-                        runs: 1,
-                        failures: u64::from(!ok),
-                        line,
-                        time_s,
-                    }),
+                self.record_test(name.clone(), *ok);
+                self.stack.push(Value::Nil);
+                return Ok(());
+            }
+            "schmitt" => {
+                let (Value::Str(key), raw_value, raw_lo, raw_hi) =
+                    (&args[0], &args[1], &args[2], &args[3])
+                else {
+                    return Err(VmError(
+                        "schmitt(key, value, low, high) needs a string and numbers".into(),
+                    ));
+                };
+                let (Some(value), Some(lo), Some(hi)) = (
+                    Self::number(raw_value),
+                    Self::number(raw_lo),
+                    Self::number(raw_hi),
+                ) else {
+                    return Err(VmError("schmitt needs numeric value/low/high".into()));
+                };
+                let mut state = *self.flags.get(key).unwrap_or(&false);
+                if value >= hi {
+                    state = true;
+                } else if value <= lo {
+                    state = false;
                 }
+                if self.flags.len() < 256 {
+                    self.flags.insert(key.clone(), state);
+                }
+                self.stack.push(Value::Bool(state));
+                return Ok(());
+            }
+            "debounce" => {
+                let (Value::Str(key), raw_value, raw_ms) = (&args[0], &args[1], &args[2]) else {
+                    return Err(VmError(
+                        "debounce(key, value, stable_ms) needs a string and numbers".into(),
+                    ));
+                };
+                let (Some(value), Some(ms)) = (Self::number(raw_value), Self::whole(raw_ms)) else {
+                    return Err(VmError(
+                        "debounce needs a numeric value and stable_ms".into(),
+                    ));
+                };
+                let now = self.host_input.now_s;
+                let (stable, since) = self.debounces.get(key).copied().unwrap_or((value, now));
+                let (stable, since) = if value != stable {
+                    (value, now)
+                } else {
+                    (stable, since)
+                };
+                let ready = now - since >= ms as f64 / 1000.0;
+                let result = if ready {
+                    stable
+                } else {
+                    self.debounces.get(key).map_or(stable, |v| v.0)
+                };
+                if self.debounces.len() < 256 {
+                    self.debounces.insert(key.clone(), (stable, since));
+                }
+                self.stack.push(Value::Float(result));
+                return Ok(());
+            }
+            "rising" | "falling" => {
+                let (Value::Str(key), Value::Bool(current)) = (&args[0], &args[1]) else {
+                    return Err(VmError(format!(
+                        "{name}(key, condition) needs a string and a bool"
+                    )));
+                };
+                let previous = *self.flags.get(key).unwrap_or(&false);
+                let fired = if name == "rising" {
+                    *current && !previous
+                } else {
+                    !*current && previous
+                };
+                if self.flags.len() < 256 {
+                    self.flags.insert(key.clone(), *current);
+                }
+                self.stack.push(Value::Bool(fired));
+                return Ok(());
+            }
+            "edge_count" => {
+                let (Value::Str(key), Value::Bool(current)) = (&args[0], &args[1]) else {
+                    return Err(VmError(
+                        "edge_count(key, condition) needs a string and a bool".into(),
+                    ));
+                };
+                let previous = *self.flags.get(key).unwrap_or(&false);
+                let count = self.edge_counts.entry(key.clone()).or_insert(0);
+                if *current && !previous {
+                    *count = count.saturating_add(1);
+                }
+                if self.flags.len() < 256 {
+                    self.flags.insert(key.clone(), *current);
+                }
+                self.stack.push(Value::Int(*count as i64));
+                return Ok(());
+            }
+            "elapsed" => {
+                let Value::Str(key) = &args[0] else {
+                    return Err(VmError("elapsed(key) needs a string key".into()));
+                };
+                let now = self.host_input.now_s;
+                let previous = self.marks.get(key).copied();
+                if self.marks.len() < 256 {
+                    self.marks.insert(key.clone(), now);
+                }
+                self.stack
+                    .push(Value::Float(previous.map_or(0.0, |t| now - t)));
+                return Ok(());
+            }
+            "moving_avg" => {
+                let (Value::Str(key), raw_value, raw_window) = (&args[0], &args[1], &args[2])
+                else {
+                    return Err(VmError(
+                        "moving_avg(key, value, window) needs a string and numbers".into(),
+                    ));
+                };
+                let (Some(value), Some(window)) =
+                    (Self::number(raw_value), Self::whole(raw_window))
+                else {
+                    return Err(VmError(
+                        "moving_avg needs a numeric value and window".into(),
+                    ));
+                };
+                let cap = window.clamp(1, 64) as usize;
+                let samples = self.windows.entry(key.clone()).or_default();
+                samples.push_back(value);
+                while samples.len() > cap {
+                    samples.pop_front();
+                }
+                let avg: f64 = samples.iter().sum::<f64>() / samples.len() as f64;
+                if self.windows.len() > 256 {
+                    self.windows.remove(key);
+                }
+                self.stack.push(Value::Float(avg));
+                return Ok(());
+            }
+            "expect_near" => {
+                let (Value::Str(name), raw_actual, raw_expected, raw_tol) =
+                    (&args[0], &args[1], &args[2], &args[3])
+                else {
+                    return Err(VmError(
+                        "expect_near(name, actual, expected, tol) needs a string and numbers"
+                            .into(),
+                    ));
+                };
+                let (Some(a), Some(b), Some(tol)) = (
+                    Self::number(raw_actual),
+                    Self::number(raw_expected),
+                    Self::number(raw_tol),
+                ) else {
+                    return Err(VmError(
+                        "expect_near needs numeric actual/expected/tolerance".into(),
+                    ));
+                };
+                self.record_test(name.clone(), (a - b).abs() <= tol.abs());
+                self.stack.push(Value::Nil);
+                return Ok(());
+            }
+            "expect_signal" => {
+                let (Value::Str(name), Value::Str(msg), Value::Str(sig), raw_expected, raw_tol) =
+                    (&args[0], &args[1], &args[2], &args[3], &args[4])
+                else {
+                    return Err(VmError("expect_signal(name, message, signal, value, tol) needs strings and numbers".into()));
+                };
+                let (Some(expected), Some(tol)) =
+                    (Self::number(raw_expected), Self::number(raw_tol))
+                else {
+                    return Err(VmError(
+                        "expect_signal needs numeric value/tolerance".into(),
+                    ));
+                };
+                let value = self.vm_signal_named(msg, sig);
+                let ok = value.is_some_and(|v| (v - expected).abs() <= tol.abs());
+                self.record_test(name.clone(), ok);
+                self.stack.push(Value::Nil);
+                return Ok(());
+            }
+            "expect_frame" => {
+                let (Value::Str(name), raw_id, raw_ms) = (&args[0], &args[1], &args[2]) else {
+                    return Err(VmError(
+                        "expect_frame(name, id, within_ms) needs a string and numbers".into(),
+                    ));
+                };
+                let (Some(id), Some(ms)) = (Self::whole(raw_id), Self::whole(raw_ms)) else {
+                    return Err(VmError("expect_frame needs numeric id/within_ms".into()));
+                };
+                let cutoff = self.host_input.now_s - ms as f64 / 1000.0;
+                let ok = self
+                    .frame_events
+                    .iter()
+                    .any(|(seen, at)| *seen as u64 == id && *at >= cutoff);
+                self.record_test(name.clone(), ok);
+                self.stack.push(Value::Nil);
+                return Ok(());
+            }
+            "expect_count" => {
+                let (Value::Str(name), raw_id, raw_count, raw_ms) =
+                    (&args[0], &args[1], &args[2], &args[3])
+                else {
+                    return Err(VmError(
+                        "expect_count(name, id, count, within_ms) needs a string and numbers"
+                            .into(),
+                    ));
+                };
+                let (Some(id), Some(want), Some(ms)) = (
+                    Self::whole(raw_id),
+                    Self::whole(raw_count),
+                    Self::whole(raw_ms),
+                ) else {
+                    return Err(VmError(
+                        "expect_count needs numeric id/count/within_ms".into(),
+                    ));
+                };
+                let cutoff = self.host_input.now_s - ms as f64 / 1000.0;
+                let seen = self
+                    .frame_events
+                    .iter()
+                    .filter(|(frame, at)| *frame as u64 == id && *at >= cutoff)
+                    .count() as u64;
+                self.record_test(name.clone(), seen == want);
                 self.stack.push(Value::Nil);
                 return Ok(());
             }

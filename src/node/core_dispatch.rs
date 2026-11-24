@@ -31,6 +31,10 @@ impl ScriptNode {
         rt.vm.frame_id = id;
         rt.vm.frame_bus = channel;
         rt.vm.frame_present = true;
+        rt.vm.frame_events.push((id, input.now_s));
+        if rt.vm.frame_events.len() > 1024 {
+            rt.vm.frame_events.remove(0);
+        }
         rt.vm.frame_is_fr = false;
         // A CAN frame has no cycle; clearing it keeps `fr_cycle()` and
         // `this.cycle` from reporting the previous FlexRay arrival.
@@ -59,8 +63,11 @@ impl ScriptNode {
                 // standard range.
                 HandlerKind::ErrorFrame => is_error,
                 HandlerKind::AnyMessage => !is_error,
-                HandlerKind::Message { id: mid } => {
-                    !is_error && *mid == id && extended == (*mid > 0x7FF)
+                HandlerKind::Message { id: mid, bus } => {
+                    !is_error
+                        && *mid == id
+                        && extended == (*mid > 0x7FF)
+                        && bus.is_none_or(|wanted| wanted == channel)
                 }
                 HandlerKind::NamedMessage { name } => {
                     !is_error
@@ -547,5 +554,70 @@ impl ScriptNode {
         rt.someip_offer.append(&mut rt.vm.someip_offer_outbox);
         rt.someip_reply.append(&mut rt.vm.someip_reply_outbox);
         rt.nm_timing.append(&mut rt.vm.nm_timing_outbox);
+    }
+
+    /// Fires `on signal` / `on sysvar` handlers whose watched value changed
+    /// since the previous bus step. The first observation only seeds the
+    /// baseline: a freshly started measurement must not fire every handler
+    /// just because the signal has an initial value.
+    pub fn dispatch_changes(&mut self, input: &HostInput) -> Vec<crate::script::ScriptSend> {
+        let mut out = Vec::new();
+        let Some(rt) = self.runtime.as_mut() else {
+            return out;
+        };
+        if !self.enabled || self.errored {
+            return out;
+        }
+        let watches: Vec<(u16, String, f64)> = rt
+            .handlers
+            .iter()
+            .filter_map(|handler| match &handler.kind {
+                HandlerKind::Signal { name } => Self::named_signal_value(rt, input, name)
+                    .map(|value| (handler.chunk, format!("signal:{name}"), value)),
+                HandlerKind::SysVar { key } => input
+                    .sysvars
+                    .get(key)
+                    .copied()
+                    .map(|value| (handler.chunk, format!("sysvar:{key}"), value)),
+                _ => None,
+            })
+            .collect();
+        for (chunk, key, value) in watches {
+            let changed = rt.last_values.get(&key).is_some_and(|prev| *prev != value);
+            rt.last_values.insert(key, value);
+            if !changed {
+                continue;
+            }
+            rt.vm.frame_present = false;
+            rt.vm.frame_is_fr = false;
+            rt.vm.fr_cycle = 0;
+            rt.vm.frame_bytes.clear();
+            let mut sink = RunSink {
+                log: &mut self.log,
+                log_dirty: &mut self.log_dirty,
+                pending_lines: &mut self.pending_lines,
+                out: &mut out,
+            };
+            if let Err(error) = Self::run_chunk(rt, &mut sink, chunk, None, input) {
+                self.errored = true;
+                self.issue = runtime_issue(&error.to_string());
+                break;
+            }
+        }
+        out
+    }
+
+    /// Resolve a dotted `"Message.Signal"` watch through the DBC names the
+    /// host injected, or a bare signal name against any watched signal.
+    fn named_signal_value(rt: &NodeRuntime, input: &HostInput, name: &str) -> Option<f64> {
+        if let Some((msg, sig)) = name.split_once('.') {
+            let id = *rt.vm.named_messages.get(msg)?;
+            return input.signals.get(&(id, sig.to_string())).copied();
+        }
+        input
+            .signals
+            .iter()
+            .find(|((_, sig), _)| sig == name)
+            .map(|(_, value)| *value)
     }
 }

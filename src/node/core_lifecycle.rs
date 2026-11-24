@@ -185,7 +185,7 @@ impl ScriptNode {
                     let mut taken: std::collections::HashSet<(u32, bool)> = handlers
                         .iter()
                         .filter_map(|handler| match handler.kind {
-                            HandlerKind::Message { id } => Some((id, false)),
+                            HandlerKind::Message { id, .. } => Some((id, false)),
                             HandlerKind::ExtendedMessage { id } => Some((id, true)),
                             _ => None,
                         })
@@ -344,6 +344,7 @@ impl ScriptNode {
             someip_offer: Vec::new(),
             someip_reply: Vec::new(),
             nm_timing: Vec::new(),
+            last_values: HashMap::new(),
             timers,
         };
         // `on start` handlers, in declaration order.

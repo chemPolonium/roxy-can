@@ -128,6 +128,8 @@ struct NodeRuntime {
     /// Auto-reply payloads queued by `someip_reply`.
     someip_reply: Vec<crate::script::SomeIpReply>,
     nm_timing: Vec<crate::script::NmTiming>,
+    /// Last observed values for on signal / on sysvar change detection.
+    last_values: HashMap<String, f64>,
     /// One slot per Timer handler, in handler order; named one-shot slots
     /// join on `set_timer`. `next_due_us == 0` means "not armed yet": the
     /// first step after start arms periodic slots one period out.

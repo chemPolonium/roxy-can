@@ -1634,3 +1634,42 @@ fn constant_frame_writes_warn_outside_the_declared_range() {
         "{lines:?}"
     );
 }
+
+#[test]
+fn signal_and_sysvar_changes_fire_once_per_transition() {
+    let mut node = node(
+        r#"
+            on signal "RPM" { emit_value("signal changed", 1); }
+            on sysvar "Demo::X" { emit_value("sysvar changed", 1); }
+        "#,
+    );
+    node.start(None);
+    let mut input = HostInput {
+        now_s: 1.0,
+        ..Default::default()
+    };
+    input.signals.insert((0x100, "RPM".to_string()), 10.0);
+    input.sysvars.insert("Demo::X".to_string(), 1.0);
+
+    node.dispatch_changes(&input);
+    assert!(node.take_emitted().is_empty());
+
+    input.signals.insert((0x100, "RPM".to_string()), 20.0);
+    node.dispatch_changes(&input);
+    assert!(
+        node.take_emitted()
+            .iter()
+            .any(|(k, _)| k == "signal changed")
+    );
+
+    input.sysvars.insert("Demo::X".to_string(), 2.0);
+    node.dispatch_changes(&input);
+    assert!(
+        node.take_emitted()
+            .iter()
+            .any(|(k, _)| k == "sysvar changed")
+    );
+
+    node.dispatch_changes(&input);
+    assert!(node.take_emitted().is_empty());
+}

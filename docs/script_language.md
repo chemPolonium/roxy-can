@@ -803,3 +803,53 @@ Scripts 编辑器内置行级调试器，由 Web 主机直接驱动：
 - 节点错误状态通过重新 Apply 或重启测量清除
 
 
+## 变化事件、状态内建与断言
+
+### 变化事件
+
+`on signal` / `on sysvar` 在某个值变化时执行一次；第一次观察到值只建立基线，不触发。变化按每个总线步的发布值比较，浮点相等视为没变化。
+
+```c
+on signal "EngineStatus.EngineSpeed" {   // 也支持裸信号名 "RPM"
+    print("rpm changed", EngineStatus.EngineSpeed);
+}
+
+on sysvar "Demo::Setpoint" {
+    print("setpoint", sys_get("Demo::Setpoint"));
+}
+```
+
+可以用 `on can <bus> message <id>` 把报文处理器限制到某条 CAN 通道；多个 id 用逗号列出，共用同一段处理器体：
+
+```c
+on can 1 message 0x100, 0x200 { print("bus 1"); }
+on message 0x300, 0x400 { print("any bus"); }
+```
+
+同一地址重复声明仍然是编译错误。
+
+### 状态型内建
+
+这些函数用法人可见的 key 保存少量状态（每个节点最多 256 个 key，滑动窗口最多 64 个采样），都在单个回调的指令预算内：
+
+| 内建 | 说明 |
+|------|------|
+| `schmitt("key", value, low, high)` | 迟滞布尔：到 `high` 置真，到 `low` 置假，中间保持 |
+| `debounce("key", value, stable_ms)` | 值稳定指定毫秒后才返回新值 |
+| `rising("key", condition)` / `falling("key", condition)` | 本步相对上一步的边沿 |
+| `edge_count("key", condition)` | 上升沿累计次数 |
+| `elapsed("key")` | 距上次同 key 调用的秒数，首次为 0 |
+| `moving_avg("key", value, window)` | 有界滑动平均（window 限 1..64） |
+
+### 断言内建
+
+这些断言汇入现有的 `test()` 报告（同名聚合、Tests 面板可跳转、Write 输出汇总）：
+
+| 内建 | 说明 |
+|------|------|
+| `expect_near("name", actual, expected, tol)` | 数值在容差内 |
+| `expect_signal("name", "Message", "Signal", value, tol)` | 已解码信号在容差内；未采到值为失败 |
+| `expect_frame("name", id, within_ms)` | 最近窗口内收到过该帧 |
+| `expect_count("name", id, count, within_ms)` | 最近窗口内该帧恰好出现 count 次 |
+
+帧到达记录有界（最近 1024 条），只保留时间和 id，不保存载荷。

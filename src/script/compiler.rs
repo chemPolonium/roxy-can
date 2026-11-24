@@ -82,7 +82,7 @@ pub fn compile(program: Program) -> Result<Script, ScriptError> {
     let mut seen_start = false;
     let mut seen_stop = false;
     let mut seen_panel_actions: HashSet<String> = HashSet::new();
-    let mut seen_ids: HashSet<u32> = HashSet::new();
+    let mut seen_ids: HashSet<(Option<u8>, u32)> = HashSet::new();
     let mut seen_named_messages: HashSet<String> = HashSet::new();
     let mut seen_named: HashSet<String> = HashSet::new();
     let mut seen_wildcard = false;
@@ -114,8 +114,8 @@ pub fn compile(program: Program) -> Result<Script, ScriptError> {
                         );
                     }
                 }
-                OnKind::Message { id } => {
-                    if !seen_ids.insert(*id) {
+                OnKind::Message { id, bus } => {
+                    if !seen_ids.insert((*bus, *id)) {
                         return c.err_at(
                             on.line,
                             on.col,
@@ -138,6 +138,24 @@ pub fn compile(program: Program) -> Result<Script, ScriptError> {
                             on.line,
                             on.col,
                             &format!("duplicate handler for extended id {id:#x}"),
+                        );
+                    }
+                }
+                OnKind::Signal { name } => {
+                    if !seen_named.insert(format!("signal:{name}")) {
+                        return c.err_at(
+                            on.line,
+                            on.col,
+                            &format!("duplicate handler for signal \"{name}\""),
+                        );
+                    }
+                }
+                OnKind::SysVar { key } => {
+                    if !seen_named.insert(format!("sysvar:{key}")) {
+                        return c.err_at(
+                            on.line,
+                            on.col,
+                            &format!("duplicate handler for sysvar \"{key}\""),
                         );
                     }
                 }
@@ -318,12 +336,15 @@ fn handler_label(kind: &HandlerKind) -> String {
         HandlerKind::Start => "<on start>".to_string(),
         HandlerKind::Stop => "<on stop>".to_string(),
         HandlerKind::PanelAction { name, .. } => format!("<on panel_action \"{name}\">"),
-        HandlerKind::Message { id } => format!("<on message {id:#x}>"),
+        HandlerKind::Message { id, bus: None } => format!("<on message {id:#x}>"),
+        HandlerKind::Message { id, bus: Some(bus) } => format!("<on can {bus} message {id:#x}>"),
         HandlerKind::SomeIp { service, method } => {
             format!("<on someip {service:#06x}.{method:#06x}>")
         }
         HandlerKind::NamedMessage { name } => format!("<on message {name}>"),
         HandlerKind::ExtendedMessage { id } => format!("<on extended message {id:#x}>"),
+        HandlerKind::Signal { name } => format!("<on signal \"{name}\">"),
+        HandlerKind::SysVar { key } => format!("<on sysvar \"{key}\">"),
         HandlerKind::AnyMessage => WILDCARD_LABEL.to_string(),
         HandlerKind::ErrorFrame => "<on errorFrame>".to_string(),
         HandlerKind::Timer { period_ms } => format!("<on timer {period_ms}>"),
@@ -958,7 +979,7 @@ impl Comp {
                             matches!(&args[0], Expr::Call(n, a) if n == "frame_id" && a.is_empty());
                         if is_frame_id {
                             match &kind {
-                                HandlerKind::Message { id } => {
+                                HandlerKind::Message { id, .. } => {
                                     self.send_refs.push((from, *id, false));
                                 }
                                 HandlerKind::ExtendedMessage { id } => {
@@ -1161,9 +1182,11 @@ impl Comp {
                 name: name.clone(),
                 arg: arg.clone(),
             },
-            OnKind::Message { id } => HandlerKind::Message { id: *id },
+            OnKind::Message { id, bus } => HandlerKind::Message { id: *id, bus: *bus },
             OnKind::NamedMessage { name } => HandlerKind::NamedMessage { name: name.clone() },
             OnKind::ExtendedMessage { id } => HandlerKind::ExtendedMessage { id: *id },
+            OnKind::Signal { name } => HandlerKind::Signal { name: name.clone() },
+            OnKind::SysVar { key } => HandlerKind::SysVar { key: key.clone() },
             OnKind::AnyMessage => HandlerKind::AnyMessage,
             OnKind::SomeIp { service, method } => HandlerKind::SomeIp {
                 service: *service,
@@ -1181,7 +1204,7 @@ impl Comp {
         };
         // 接收集（R2 静态事实表）：帧事件 handler 声明监听的 id。
         match &on.kind {
-            OnKind::Message { id } => {
+            OnKind::Message { id, .. } => {
                 if !self.recv_refs.contains(&(*id, false)) {
                     self.recv_refs.push((*id, false));
                 }

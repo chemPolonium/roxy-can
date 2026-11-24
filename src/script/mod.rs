@@ -329,8 +329,10 @@ pub enum HandlerKind {
         name: String,
         arg: Option<String>,
     },
+    /// A CAN frame id; `bus` restricts it to one channel (None = any).
     Message {
         id: u32,
+        bus: Option<u8>,
     },
     /// A DBC-named message (`on message EngineStatus`). The node runtime
     /// resolves the name, id and frame class against its channel database at
@@ -343,6 +345,14 @@ pub enum HandlerKind {
     /// standard range, where plain `on message` cannot reach.
     ExtendedMessage {
         id: u32,
+    },
+    /// A named signal changed (`on signal "Message.Signal"`).
+    Signal {
+        name: String,
+    },
+    /// A system variable changed (`on sysvar "ns::name"`).
+    SysVar {
+        key: String,
     },
     /// Every frame on the channel (`on message *`).
     AnyMessage,
@@ -595,6 +605,19 @@ pub const HOST_FNS: &[(&str, usize, usize)] = &[
     ("set_fr_sig", 4, 4),
     ("send_fd", 2, 3),
     ("send_fd_ext", 2, 3),
+    // Stateful helpers (keys are string names, bounded per node).
+    ("schmitt", 4, 4),
+    ("debounce", 3, 3),
+    ("rising", 2, 2),
+    ("falling", 2, 2),
+    ("edge_count", 2, 2),
+    ("elapsed", 1, 1),
+    ("moving_avg", 3, 3),
+    // Assertions that aggregate into the same test report as `test`.
+    ("expect_near", 4, 4),
+    ("expect_signal", 5, 5),
+    ("expect_frame", 3, 3),
+    ("expect_count", 4, 4),
 ];
 
 /// Human-facing call shapes for the editor's completion popup. Kept beside
@@ -604,6 +627,26 @@ pub const SCRIPT_HELP: &[(&str, &str)] = &[
     ("print", "print(value, …)"),
     ("format", "format(\"text\", …)"),
     ("test", "test(\"name\", condition)"),
+    (
+        "expect_near",
+        "expect_near(\"name\", actual, expected, tolerance)",
+    ),
+    (
+        "expect_signal",
+        "expect_signal(\"name\", \"Message\", \"Signal\", value, tolerance)",
+    ),
+    ("expect_frame", "expect_frame(\"name\", id, within_ms)"),
+    (
+        "expect_count",
+        "expect_count(\"name\", id, count, within_ms)",
+    ),
+    ("schmitt", "schmitt(\"key\", value, low, high)"),
+    ("debounce", "debounce(\"key\", value, stable_ms)"),
+    ("rising", "rising(\"key\", condition)"),
+    ("falling", "falling(\"key\", condition)"),
+    ("edge_count", "edge_count(\"key\", condition)"),
+    ("elapsed", "elapsed(\"key\")"),
+    ("moving_avg", "moving_avg(\"key\", value, window)"),
     ("send", "send(id, byte, …)"),
     ("send_fd", "send_fd(id, buffer, brs = false)"),
     ("send_fd_ext", "send_fd_ext(id, buffer, brs = false)"),
@@ -1091,7 +1134,13 @@ mod tests {
         .unwrap();
         assert_eq!(script.handlers.len(), 3);
         assert_eq!(script.handlers[0].kind, HandlerKind::Start);
-        assert_eq!(script.handlers[1].kind, HandlerKind::Message { id: 0x100 });
+        assert_eq!(
+            script.handlers[1].kind,
+            HandlerKind::Message {
+                id: 0x100,
+                bus: None
+            }
+        );
         assert_eq!(
             script.handlers[2].kind,
             HandlerKind::Timer { period_ms: 100 }
@@ -1219,7 +1268,13 @@ mod tests {
             "#,
         )
         .unwrap();
-        let chunk = script_chunk(&script, HandlerKind::Message { id: 0x200 });
+        let chunk = script_chunk(
+            &script,
+            HandlerKind::Message {
+                id: 0x200,
+                bus: None,
+            },
+        );
         let mut vm = Vm::new(script);
         // The node runtime order: main once (globals initialize), then
         // handlers per event.
@@ -1290,7 +1345,10 @@ mod tests {
         let script = compile("on message 0x7FF { }").unwrap();
         assert_eq!(
             script.handlers[0].kind,
-            HandlerKind::Message { id: 0x7FF },
+            HandlerKind::Message {
+                id: 0x7FF,
+                bus: None
+            },
             "the top of the standard id range"
         );
     }
@@ -1314,5 +1372,89 @@ mod tests {
                 "stale completion help for {name}"
             );
         }
+    }
+
+    #[test]
+    fn message_lists_and_bus_qualified_handlers_compile() {
+        let script = compile(
+            r#"
+                on can 1 message 0x100, 0x200 { print("can"); }
+                on message 0x300, 0x400 { print("any"); }
+            "#,
+        )
+        .unwrap();
+        let kinds: Vec<_> = script.handlers.iter().map(|h| h.kind.clone()).collect();
+        assert_eq!(
+            kinds,
+            vec![
+                HandlerKind::Message {
+                    id: 0x100,
+                    bus: Some(1)
+                },
+                HandlerKind::Message {
+                    id: 0x200,
+                    bus: Some(1)
+                },
+                HandlerKind::Message {
+                    id: 0x300,
+                    bus: None
+                },
+                HandlerKind::Message {
+                    id: 0x400,
+                    bus: None
+                },
+            ]
+        );
+        assert!(compile("on message 0x100, 0x100 { }").is_err());
+    }
+
+    #[test]
+    fn signal_and_sysvar_change_handlers_compile() {
+        let script = compile(
+            r#"
+                on signal "EngineStatus.RPM" { print("rpm changed"); }
+                on sysvar "Demo::Setpoint" { print("sysvar changed"); }
+            "#,
+        )
+        .unwrap();
+        assert_eq!(
+            script
+                .handlers
+                .iter()
+                .map(|h| h.kind.clone())
+                .collect::<Vec<_>>(),
+            vec![
+                HandlerKind::Signal {
+                    name: "EngineStatus.RPM".into()
+                },
+                HandlerKind::SysVar {
+                    key: "Demo::Setpoint".into()
+                },
+            ]
+        );
+        assert!(compile("on signal \"A\" { } on signal \"A\" { }").is_err());
+    }
+
+    #[test]
+    fn state_helpers_and_expectations_run_in_the_vm() {
+        let script = compile(
+            r#"
+                expect_near("near", 1.5, 1.4, 0.2);
+                schmitt("h", 10, 2, 9);
+                moving_avg("m", 4, 2);
+                print(edge_count("e", true));
+                expect_frame("seen", 0x100, 1000);
+            "#,
+        )
+        .unwrap();
+        let mut vm = Vm::new(script);
+        vm.host_input.now_s = 1.0;
+        vm.frame_events.push((0x100, 0.5));
+        vm.run().unwrap();
+        assert_eq!(vm.tests.len(), 2);
+        assert!(vm.tests.iter().all(|t| t.failures == 0));
+        assert_eq!(vm.flags.get("h"), Some(&true));
+        assert!(vm.windows.contains_key("m"));
+        assert_eq!(vm.edge_counts.get("e"), Some(&1));
     }
 }

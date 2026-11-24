@@ -20,7 +20,7 @@ pub enum Item {
 /// A statement tagged with its source position: the compiler builds
 /// per-chunk line tables from these so runtime errors can name the line,
 /// and compile errors name the statement's column.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct SpannedStmt {
     pub line: u32,
     pub col: u32,
@@ -47,8 +47,10 @@ pub enum OnKind {
     /// The optional second argument names a local that receives the
     /// numeric value the control sent (`nil` when it sent none).
     PanelAction { name: String, arg: Option<String> },
-    /// A frame with this identifier arrived on the node's channel.
-    Message { id: u32 },
+    /// A frame with this identifier arrived. `bus` restricts the handler to
+    /// one CAN channel (`on can 1 message 0x100`); None is any channel the
+    /// node watches.
+    Message { id: u32, bus: Option<u8> },
     /// A frame whose DBC message name is `name` arrived. The node resolves
     /// the name (and its standard/extended class) from its channel's
     /// database at start, so the script does not repeat the numeric id.
@@ -69,6 +71,10 @@ pub enum OnKind {
     /// A named one-shot: idle until `set_timer(name, ms)` arms it from
     /// any handler, then fires once on its handler.
     Oneshot { name: String },
+    /// A named signal changed value (`on signal "Message.Signal"`).
+    Signal { name: String },
+    /// A system variable changed value (`on sysvar "ns::name"`).
+    SysVar { key: String },
     /// A FlexRay frame arrived in this slot (`on fr slot 13`), optionally on
     /// one named cluster (`on fr 0 slot 13`). The slot is the address because
     /// it is what the schedule and the received row agree on: a static slot is
@@ -84,7 +90,7 @@ pub struct FnDecl {
     pub body: Vec<SpannedStmt>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Stmt {
     Let(String, Expr),
     Assign(String, Expr),
@@ -179,7 +185,7 @@ pub fn parse(toks: Vec<Token>) -> Result<Program, ScriptError> {
         if p.at(&Tok::Fn) {
             items.push(Item::Fn(p.fn_decl()?));
         } else if p.at(&Tok::On) {
-            items.push(Item::On(p.on_decl()?));
+            items.extend(p.on_decls()?.into_iter().map(Item::On));
         } else {
             items.push(Item::Stmt(p.stmt()?));
         }
@@ -504,7 +510,7 @@ impl P {
     /// `on start { }` / `on message 0x100 { }` / `on timer 100 { }` -- a
     /// node's event handlers. The event word is matched by text so that
     /// `message` and `timer` stay usable as ordinary variable names.
-    fn on_decl(&mut self) -> Result<OnDecl, ScriptError> {
+    fn on_decls(&mut self) -> Result<Vec<OnDecl>, ScriptError> {
         let at = self.toks.get(self.pos);
         let line = at.map_or(1, |t| t.line);
         let col = at.map_or(1, |t| t.col);
@@ -512,6 +518,9 @@ impl P {
         let word = self.ident(
             "'start', 'stop', 'panel_action', 'message', 'timer', 'extended', 'errorFrame' or 'fr'",
         )?;
+        // `on message 0x100, 0x200` compiles to one handler per id, sharing
+        // the same body. The same applies to `on can N message ...`.
+        let mut more: Vec<OnKind> = Vec::new();
         let kind = match word.as_str() {
             "start" => OnKind::Start,
             "stop" => OnKind::Stop,
@@ -540,6 +549,38 @@ impl P {
                     id: self.id_literal()?,
                 }
             }
+            "signal" => OnKind::Signal {
+                name: self.string_literal()?,
+            },
+            "sysvar" => OnKind::SysVar {
+                key: self.string_literal()?,
+            },
+            "can" => {
+                // `on can <bus> message <id>[, <id>...]`: same matching as
+                // `on message <id>` but restricted to one CAN channel.
+                let bus = match self.toks.get(self.pos).map(|t| t.tok.clone()) {
+                    Some(Tok::Int(n)) if (0..=255).contains(&n) => {
+                        self.advance();
+                        n as u8
+                    }
+                    Some(Tok::Int(n)) => {
+                        return self.err(&format!("CAN channel {n} out of range (0..255)"));
+                    }
+                    _ => return self.err("expected a CAN channel after 'on can'"),
+                };
+                let word = self.ident("'message'")?;
+                if word != "message" {
+                    return self.err("expected 'message' after 'on can <bus>'");
+                }
+                let id = self.id_literal()?;
+                while self.eat(&Tok::Comma) {
+                    more.push(OnKind::Message {
+                        id: self.id_literal()?,
+                        bus: Some(bus),
+                    });
+                }
+                OnKind::Message { id, bus: Some(bus) }
+            }
             "message" => {
                 // `on message *`: every frame, whatever its id.
                 // `on message 0x100`: by numeric id.
@@ -549,9 +590,16 @@ impl P {
                     OnKind::AnyMessage
                 } else {
                     match self.toks.get(self.pos).map(|t| t.tok.clone()) {
-                        Some(Tok::Int(_)) => OnKind::Message {
-                            id: self.id_literal()?,
-                        },
+                        Some(Tok::Int(_)) => {
+                            let id = self.id_literal()?;
+                            while self.eat(&Tok::Comma) {
+                                more.push(OnKind::Message {
+                                    id: self.id_literal()?,
+                                    bus: None,
+                                });
+                            }
+                            OnKind::Message { id, bus: None }
+                        }
                         Some(Tok::Ident(name)) => {
                             self.advance();
                             OnKind::NamedMessage { name }
@@ -617,19 +665,23 @@ impl P {
             }
             other => {
                 return self.err(&format!(
-                    "unknown event '{other}' (start, stop, panel_action, message, extended message, timer, errorFrame, fr slot)"
+                    "unknown event '{other}' (start, stop, panel_action, message, can message, signal, sysvar, extended message, timer, errorFrame, fr slot)"
                 ));
             }
         };
         self.fn_depth += 1;
         let body = self.block()?;
         self.fn_depth -= 1;
-        Ok(OnDecl {
-            kind,
-            body,
-            line,
-            col,
-        })
+        let mut decls = Vec::new();
+        for kind in std::iter::once(kind).chain(more) {
+            decls.push(OnDecl {
+                kind,
+                body: body.clone(),
+                line,
+                col,
+            });
+        }
+        Ok(decls)
     }
 
     /// A CAN identifier. Within the standard range it names standard

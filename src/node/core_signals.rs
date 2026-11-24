@@ -77,7 +77,7 @@ impl ScriptNode {
             .handlers
             .iter()
             .filter_map(|handler| match handler.kind {
-                HandlerKind::Message { id } => Some((id, false)),
+                HandlerKind::Message { id, .. } => Some((id, false)),
                 HandlerKind::ExtendedMessage { id } => Some((id, true)),
                 _ => None,
             })

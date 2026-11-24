@@ -406,7 +406,11 @@ impl BusCore {
                     anode,
                 ) == NodeRole::Simulated
             });
-            for (id, ext, data, flags) in node.run_timers(now_us, &input) {
+            // Value-change handlers see this step's published inputs; their
+            // sends join the same buffer as timer-driven ones.
+            let mut sends = node.dispatch_changes(&input);
+            sends.extend(node.run_timers(now_us, &input));
+            for (id, ext, data, flags) in sends {
                 let frame = Self::node_frame(node.channel, id, ext, &data, flags, self.sim_t_us);
                 // Real bus 模式下脚本帧与生成器帧一样经已连接的通道发出。
                 if script_allowed {
