@@ -1072,11 +1072,11 @@ export function GeneratorModal({
                         accept=".asc,.blf"
                         onPick={(path) => setEditPath(path)}
                       />
-                      <button type="button" onClick={() => saveBlockEdit(block)}>
-                        Save
-                      </button>
                       <button type="button" onClick={() => setEditId(null)}>
                         Cancel
+                      </button>
+                      <button type="button" onClick={() => saveBlockEdit(block)}>
+                        Save
                       </button>
                       {editError && (
                         <span class="gen-block-error">{editError}</span>

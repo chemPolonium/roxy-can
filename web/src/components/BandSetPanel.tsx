@@ -119,11 +119,11 @@ export function BandSetPanel({ sets, theme, onSave, onDelete }: Props) {
               </span>
             )}
             <span class="spacer" />
-            <button type="submit" class="primary" disabled={!canApply}>
-              Apply
-            </button>
             <button type="button" onClick={() => setDraft(null)}>
               Cancel
+            </button>
+            <button type="submit" class="primary" disabled={!canApply}>
+              Apply
             </button>
           </div>
         </form>

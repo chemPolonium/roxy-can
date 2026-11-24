@@ -253,6 +253,8 @@ select {
 
 :root .help-body,
 :root .export-body,
+:root .reference-body,
+:root .confirm-body,
 :root .picker-tools,
 :root .buses-body,
 :root .gen-body,
@@ -260,8 +262,46 @@ select {
 :root .scripts-body,
 :root .state-rule-body,
 :root .event-body,
-:root .session-body {
+:root .session-body,
+:root .derived-panel {
   padding: 8px 10px;
+}
+
+/* Inner dialog sections use the same 10px inset as the compact body above;
+   the base stylesheet still keeps its roomier 12px for non-dialog surfaces. */
+:root .variables-tabs,
+:root .sv-tools,
+:root .sv-table,
+:root .picker-body,
+:root .picker-batch,
+:root .picker-copy,
+:root .picker-hint,
+:root .buses-tools,
+:root .buses-clusters,
+:root .bus-nodes,
+:root .trig-defaults,
+:root .trig-row,
+:root .trig-check,
+:root .confirm-actions,
+:root .file-browser-toolbar,
+:root .fb-new,
+:root .fb-row,
+:root .fb-footer,
+:root .fb-note,
+:root .script-new {
+  padding-left: 10px;
+  padding-right: 10px;
+}
+
+:root .sv-form {
+  width: calc(100% - 20px);
+  margin-left: 10px;
+  margin-right: 10px;
+}
+
+:root .trig-editor {
+  margin-left: 10px;
+  margin-right: 10px;
 }
 
 :root .spec-panel,

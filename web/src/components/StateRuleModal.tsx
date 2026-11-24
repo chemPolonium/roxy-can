@@ -71,6 +71,9 @@ export function StateRuleModal({
             </button>
             <span class="spacer" />
             {error && <span class="sv-error">{error}</span>}
+            <button type="button" onClick={onClose}>
+              Cancel
+            </button>
             <button
               type="button"
               class="primary"
@@ -78,9 +81,6 @@ export function StateRuleModal({
               onClick={() => onApply(bands, bandSetId || null)}
             >
               Apply
-            </button>
-            <button type="button" onClick={onClose}>
-              Cancel
             </button>
           </div>
         </div>

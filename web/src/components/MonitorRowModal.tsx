@@ -80,6 +80,9 @@ export function MonitorRowModal({ row, bandSets, onApply, onClose }: Props) {
           {error && <span class="sv-error">{error}</span>}
           <div class="state-rule-actions">
             <span class="spacer" />
+            <button type="button" onClick={onClose}>
+              Cancel
+            </button>
             <button
               type="button"
               class="primary"
@@ -87,9 +90,6 @@ export function MonitorRowModal({ row, bandSets, onApply, onClose }: Props) {
               onClick={() => onApply(digits, row.bands, bandSetId || null)}
             >
               Apply
-            </button>
-            <button type="button" onClick={onClose}>
-              Cancel
             </button>
           </div>
         </div>

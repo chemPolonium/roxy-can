@@ -372,11 +372,11 @@ export function VariablesModal({
                 </span>
               )}
               <span class="spacer" />
-              <button type="submit" class="primary" disabled={!!checked?.error}>
-                Apply
-              </button>
               <button type="button" onClick={() => setDraft(null)}>
                 Cancel
+              </button>
+              <button type="submit" class="primary" disabled={!!checked?.error}>
+                Apply
               </button>
             </div>
           </form>

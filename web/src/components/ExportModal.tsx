@@ -182,6 +182,9 @@ export function ExportModal({
           </p>
           {downloadError && <p class="modal-error">{downloadError}</p>}
           <div class="export-actions">
+            <button type="button" onClick={onClose}>
+              Cancel
+            </button>
             <button
               type="button"
               class="primary"
@@ -197,9 +200,6 @@ export function ExportModal({
               onClick={() => void exportAndDownload()}
             >
               {downloading ? "Waiting…" : "Export & download"}
-            </button>
-            <button type="button" onClick={onClose}>
-              Cancel
             </button>
           </div>
         </div>

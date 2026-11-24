@@ -351,6 +351,9 @@ export function SignalPicker({
               </strong>{" "}
               to the chart? Each one becomes a lane.
             </span>
+            <button type="button" onClick={() => setPendingBulk(null)}>
+              Cancel
+            </button>
             <button
               ref={bulkConfirm}
               type="button"
@@ -367,9 +370,6 @@ export function SignalPicker({
               }}
             >
               Add {pendingBulk.signals.length}
-            </button>
-            <button type="button" onClick={() => setPendingBulk(null)}>
-              Cancel
             </button>
           </div>
         )}
