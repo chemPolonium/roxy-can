@@ -364,8 +364,15 @@ fn one_u8_default() -> u8 {
 pub struct NodeCfg {
     pub name: String,
     pub channel: u8,
-    #[serde(default)]
+    /// Project-relative `.rxcan` path. Script source lives in this file, not
+    /// in the project JSON.
+    pub path: String,
+    /// Runtime-only copy loaded from `path`; never serialized.
+    #[serde(skip)]
     pub source: String,
+    /// Runtime-only reason why `path` could not be loaded; never serialized.
+    #[serde(skip)]
+    pub load_error: Option<String>,
     #[serde(default = "true_default")]
     pub enabled: bool,
     /// 绑定的 DBC 节点 (总线, 节点名)：绑定脚本的发帧受该节点角色开关
@@ -858,7 +865,7 @@ impl Default for ProjectSettings {
 }
 
 impl ProjectSettings {
-    pub fn from_app(app: &App, _base: Option<&Path>) -> Self {
+    pub fn from_app(app: &App, base: Option<&Path>) -> Self {
         ProjectSettings {
             // ∞ 存不成数，所以那一档走 `replay_fastest`，数本身留一个中性值。
             replay_fastest: !app.replay_speed.is_finite(),
@@ -1036,7 +1043,14 @@ impl ProjectSettings {
                 .map(|n| NodeCfg {
                     name: n.name.clone(),
                     channel: n.channel,
-                    source: n.source.clone(),
+                    path: n.file_path.as_deref().map_or_else(String::new, |path| {
+                        base.map_or_else(
+                            || path.to_string(),
+                            |base| crate::config::relativize(path, base),
+                        )
+                    }),
+                    source: String::new(),
+                    load_error: None,
                     enabled: n.enabled,
                     attached: n.attached.clone(),
                 })
@@ -1082,7 +1096,8 @@ impl ProjectSettings {
     /// the caller has to report: `apply` cannot say it itself, because the load
     /// path writes its own "project loaded" over the bar the moment this
     /// returns.
-    pub fn apply(self, app: &mut App) {
+    pub fn apply(self, app: &mut App) -> Vec<String> {
+        let mut problems = Vec::new();
         app.web_workspace = self.workspace;
         app.panel_pages = self.panel_pages;
         app.set_derived_defs(self.derived);
@@ -1285,9 +1300,23 @@ impl ProjectSettings {
         // and (when a measurement is running) starts every enabled node.
         // If measuring, the node source recompiles now -- a restore into a
         // running bus behaves like a live edit.
-        app.send(crate::bus::BusCommand::SetNodes {
-            nodes: self.nodes.clone(),
-        });
+        let nodes = self
+            .nodes
+            .into_iter()
+            .map(|mut node| {
+                match std::fs::read_to_string(&node.path) {
+                    Ok(source) => node.source = source,
+                    Err(error) => {
+                        let message = format!("script file not loaded: {} ({error})", node.path);
+                        node.load_error = Some(message.clone());
+                        node.enabled = false;
+                        problems.push(message);
+                    }
+                }
+                node
+            })
+            .collect();
+        app.send(crate::bus::BusCommand::SetNodes { nodes });
         // Legacy inline labels/bands are intentionally not migrated.
         let mut sysvars = self.sysvars.clone();
         for def in &mut sysvars {
@@ -1388,6 +1417,7 @@ impl ProjectSettings {
         for key in keys {
             app.subscribe(key);
         }
+        problems
     }
 }
 

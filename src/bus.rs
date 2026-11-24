@@ -542,6 +542,17 @@ pub enum BusCommand {
         id: u64,
         source: String,
     },
+    /// Update the script's file association/content without applying it.
+    SetNodeFile {
+        id: u64,
+        path: String,
+        file_source: String,
+    },
+    /// Compile/check a draft without changing the applied source.
+    CheckNodeSource {
+        id: u64,
+        source: String,
+    },
     /// Enabled nodes run with the measurement; disabled ones sit idle.
     SetNodeEnabled {
         id: u64,
@@ -872,6 +883,10 @@ pub struct NodeView {
     /// Optional file path if the node source was saved to or loaded from a
     /// standalone `.rxcan` file.
     pub file_path: Option<String>,
+    pub file_source: String,
+    pub checked_source: Option<String>,
+    pub check_issue: Option<crate::node::ScriptIssue>,
+    pub check_summary: Option<crate::node::ScriptCheckSummary>,
     /// 绑定的 DBC 节点 (总线, 节点名)（节点窗口按此聚合脚本）。
     pub attached: Option<(u8, String)>,
     /// Runtime present and error-free (while measuring).

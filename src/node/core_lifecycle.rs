@@ -12,6 +12,10 @@ impl ScriptNode {
             panel_actions: Vec::new(),
             enabled: true,
             file_path: None,
+            file_source: String::new(),
+            checked_source: None,
+            check_issue: None,
+            check_summary: None,
             attached: None,
             sysvar_keys: Vec::new(),
             runtime: None,
@@ -442,6 +446,71 @@ impl ScriptNode {
     /// Applies a source edit. While measuring a running node recompiles
     /// and restarts in place (globals reset -- a fresh start of that
     /// node); while stopped the edit simply waits for the next start.
+    /// Marks a node whose project-referenced file could not be read. It stays
+    /// linked and disabled, with the reason shown beside the editor.
+    pub fn mark_load_error(&mut self, message: String) {
+        self.enabled = false;
+        self.errored = true;
+        self.runtime = None;
+        self.issue = Some(ScriptIssue {
+            line: 1,
+            col: None,
+            message,
+        });
+    }
+
+    /// Updates the on-disk file association without compiling or applying.
+    pub fn set_file(&mut self, path: String, file_source: String) {
+        self.file_path = Some(path);
+        self.file_source = file_source;
+    }
+
+    /// Compiles and runs the same static checks as node start, but leaves the
+    /// applied source and runtime untouched.
+    pub fn check_source(
+        &mut self,
+        source: String,
+        dbc: Option<std::sync::Arc<crate::dbc::SymbolTable>>,
+        fr_dbs: Option<&std::collections::BTreeMap<u8, std::sync::Arc<crate::fr_db::FrDb>>>,
+        eth_dbs: Option<&std::collections::BTreeMap<u8, std::sync::Arc<crate::eth::db::EthDb>>>,
+    ) {
+        self.checked_source = None;
+        self.check_issue = None;
+        self.check_summary = None;
+        let mut script = match compile(&source) {
+            Ok(script) => script,
+            Err(error) => {
+                self.check_issue = Some(ScriptIssue {
+                    line: error.line,
+                    col: error.col,
+                    message: error.msg,
+                });
+                self.check_summary = Some(ScriptCheckSummary::default());
+                return;
+            }
+        };
+        if let Some(db) = &dbc {
+            resolve_frame_send_refs(&mut script, db);
+        }
+        let mut lines = Vec::new();
+        if let Some(db) = &dbc {
+            let attached = self.attached.as_ref().map(|(_, name)| name.as_str());
+            lines.extend(dbc_checks(&script, db, attached));
+        }
+        lines.extend(frame_checks(&script, dbc.as_deref(), fr_dbs, eth_dbs));
+        self.check_summary = Some(ScriptCheckSummary {
+            handlers: script.handlers.len(),
+            sends: script
+                .send_refs
+                .iter()
+                .map(|(_, id, ext)| (*id, *ext))
+                .collect(),
+            receives: script.recv_refs.clone(),
+            lines,
+        });
+        self.checked_source = Some(source);
+    }
+
     pub fn set_source(
         &mut self,
         source: String,
@@ -455,6 +524,11 @@ impl ScriptNode {
         self.panel_actions.clear();
         self.issue = None;
         self.tests.clear();
+        if self.checked_source.as_deref() != Some(self.source.as_str()) {
+            self.checked_source = None;
+            self.check_issue = None;
+            self.check_summary = None;
+        }
         if measuring && self.enabled {
             self.start_with(dbc, fr_dbs, eth_dbs, can_codec);
         } else if let Ok(script) = compile(&self.source) {

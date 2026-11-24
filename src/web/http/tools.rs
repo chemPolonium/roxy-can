@@ -131,6 +131,22 @@ fn scripts_signature(app: &App) -> u64 {
         node.id.hash(&mut hasher);
         node.name.hash(&mut hasher);
         node.source.hash(&mut hasher);
+        node.file_path.hash(&mut hasher);
+        node.file_source.hash(&mut hasher);
+        node.checked_source.hash(&mut hasher);
+        if let Some(issue) = &node.check_issue {
+            issue.line.hash(&mut hasher);
+            issue.col.hash(&mut hasher);
+            issue.message.hash(&mut hasher);
+        } else {
+            0u8.hash(&mut hasher);
+        }
+        if let Some(summary) = &node.check_summary {
+            summary.handlers.hash(&mut hasher);
+            summary.sends.hash(&mut hasher);
+            summary.receives.hash(&mut hasher);
+            summary.lines.hash(&mut hasher);
+        }
         node.enabled.hash(&mut hasher);
         node.running.hash(&mut hasher);
         node.errored.hash(&mut hasher);
@@ -176,7 +192,24 @@ fn scripts_snapshot(app: &App) -> Vec<WebScript> {
                 message: issue.message.clone(),
             }),
             file_path: node.file_path.clone().unwrap_or_default(),
+            file_source: node.file_source.clone(),
             source: node.source.clone(),
+            checked_source: node.checked_source.clone(),
+            check_issue: node.check_issue.as_ref().map(|issue| WebScriptIssue {
+                line: issue.line,
+                col: issue.col,
+                message: issue.message.clone(),
+            }),
+            check_summary: node.check_summary.as_ref().map(|summary| WebScriptCheckSummary {
+                handlers: summary.handlers,
+                sends: summary.sends.iter().map(|(id, ext)| {
+                    format!("{id:#x}{}", if *ext { " ext" } else { "" })
+                }).collect(),
+                receives: summary.receives.iter().map(|(id, ext)| {
+                    format!("{id:#x}{}", if *ext { " ext" } else { "" })
+                }).collect(),
+                lines: summary.lines.clone(),
+            }),
             tests: node
                 .tests
                 .iter()

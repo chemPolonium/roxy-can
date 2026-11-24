@@ -1,5 +1,18 @@
+fn script_fixture_dir(name: &str) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!("roxy_can_{name}_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("script fixture dir");
+    dir
+}
+
 #[test]
-fn a_script_node_round_trips_through_a_project() {
+fn a_script_node_round_trips_through_an_external_file() {
+    let dir = script_fixture_dir("script_project");
+    let script_path = dir.join("gen.rxcan");
+    let project_path = dir.join("node.rxproj");
+    let source = "on timer 100 { print(1); }";
+    std::fs::write(&script_path, source).expect("script file");
+
     let mut app = App::headless();
     app.send(crate::bus::BusCommand::AddNode {
         name: "gen".into(),
@@ -7,21 +20,41 @@ fn a_script_node_round_trips_through_a_project() {
         attached: Some((0, "EngineECU".to_string())),
     });
     let id = app.snap.nodes[0].id;
-    let source = "on timer 100 { print(1); }";
+    // Save As and Apply are independent: linking the file alone must not
+    // install its contents into the node.
+    app.send(crate::bus::BusCommand::SetNodeFile {
+        id,
+        path: script_path.to_string_lossy().to_string(),
+        file_source: source.to_string(),
+    });
+    app.settle();
+    assert!(app.snap.nodes[0].source.is_empty());
     app.send(crate::bus::BusCommand::SetNodeSource {
         id,
         source: source.to_string(),
     });
-    let path = std::env::temp_dir().join("roxy_can_node.rxproj");
-    assert!(app.save_project(Some(path.clone())));
+    app.settle();
+    assert_eq!(app.snap.nodes[0].source, source);
+
+    assert!(app.save_project(Some(project_path.clone())));
+    let json = std::fs::read_to_string(&project_path).expect("project json");
+    let value: serde_json::Value = serde_json::from_str(&json).expect("valid project json");
+    let cfg = &value["nodes"][0];
+    assert_eq!(cfg["path"], "gen.rxcan", "project stores a relative file ref");
+    assert!(cfg.get("source").is_none(), "no inline source in the project");
 
     let mut restored = App::headless();
-    restored.open_project_path(&path);
+    restored.open_project_path(&project_path);
     assert_eq!(restored.snap.nodes.len(), 1);
     let node = &restored.snap.nodes[0];
     assert_eq!(node.name, "gen");
     assert_eq!(node.channel, 0);
-    assert_eq!(node.source, source);
+    assert_eq!(node.source, source, "source loads from the referenced file");
+    assert_eq!(
+        node.file_path.as_deref(),
+        Some(script_path.to_str().expect("utf8 script path")),
+        "runtime path resolves against the project directory"
+    );
     assert!(node.enabled, "enabled defaults ride the round trip");
     // The binding must survive the restore: a lost binding would flag a
     // perfectly bound script as an orphan for adoption.
@@ -30,7 +63,108 @@ fn a_script_node_round_trips_through_a_project() {
         Some((0, "EngineECU".to_string())),
         "the node binding rides the round trip"
     );
-    std::fs::remove_file(&path).ok();
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_missing_script_file_is_reported_and_fails_closed() {
+    let dir = script_fixture_dir("missing_script");
+    let script_path = dir.join("gone.rxcan");
+    let project_path = dir.join("node.rxproj");
+    std::fs::write(&script_path, "on start { print(1); }").expect("script file");
+
+    let mut app = App::headless();
+    app.send(crate::bus::BusCommand::AddNode {
+        name: "gone".into(),
+        channel: 0,
+        attached: None,
+    });
+    let id = app.snap.nodes[0].id;
+    app.send(crate::bus::BusCommand::SetNodeFile {
+        id,
+        path: script_path.to_string_lossy().to_string(),
+        file_source: "on start { print(1); }".to_string(),
+    });
+    assert!(app.save_project(Some(project_path.clone())));
+    std::fs::remove_file(&script_path).expect("remove script");
+
+    let mut restored = App::headless();
+    restored.open_project_path(&project_path);
+    assert_eq!(restored.snap.nodes.len(), 1);
+    assert!(!restored.snap.nodes[0].enabled, "a missing file must not run");
+    let issue = restored.snap.nodes[0]
+        .issue
+        .as_ref()
+        .expect("the editor gets the load error");
+    assert!(issue.message.contains("gone.rxcan"), "{}", issue.message);
+    assert!(
+        restored.status.contains("failed to load"),
+        "the load bar reports the missing file"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn check_and_apply_keep_separate_sources() {
+    let mut app = App::headless();
+    app.send(crate::bus::BusCommand::AddNode {
+        name: "check".into(),
+        channel: 0,
+        attached: None,
+    });
+    let id = app.snap.nodes[0].id;
+    let draft = "on timer 100 { print(1); }";
+
+    app.send(crate::bus::BusCommand::CheckNodeSource {
+        id,
+        source: draft.to_string(),
+    });
+    app.settle();
+    let node = &app.snap.nodes[0];
+    assert_eq!(node.source, "", "a check never changes runtime source");
+    assert_eq!(node.checked_source.as_deref(), Some(draft));
+    assert!(node.check_issue.is_none());
+    assert_eq!(node.check_summary.as_ref().expect("summary").handlers, 1);
+
+    // Saving a file also leaves the applied source and check result alone.
+    app.send(crate::bus::BusCommand::SetNodeFile {
+        id,
+        path: "C:/tmp/check.rxcan".to_string(),
+        file_source: draft.to_string(),
+    });
+    app.settle();
+    let node = &app.snap.nodes[0];
+    assert_eq!(node.source, "");
+    assert_eq!(node.checked_source.as_deref(), Some(draft));
+
+    app.send(crate::bus::BusCommand::SetNodeSource {
+        id,
+        source: draft.to_string(),
+    });
+    app.settle();
+    let node = &app.snap.nodes[0];
+    assert_eq!(node.source, draft);
+    assert_eq!(node.checked_source.as_deref(), Some(draft));
+}
+
+#[test]
+fn a_failed_check_stays_out_of_the_runtime() {
+    let mut app = App::headless();
+    app.send(crate::bus::BusCommand::AddNode {
+        name: "check".into(),
+        channel: 0,
+        attached: None,
+    });
+    let id = app.snap.nodes[0].id;
+    app.send(crate::bus::BusCommand::CheckNodeSource {
+        id,
+        source: "on timer 100 {".to_string(),
+    });
+    app.settle();
+    let node = &app.snap.nodes[0];
+    assert_eq!(node.source, "");
+    assert_eq!(node.checked_source, None);
+    assert!(node.check_issue.is_some(), "syntax error is shown in the editor");
 }
 
 #[test]

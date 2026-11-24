@@ -176,7 +176,8 @@ export function TraceTable({
   onJumpDone,
   leading,
   meta,
-  tools,
+  actions,
+  trailing,
   empty,
   filtered = false,
   onQuery,
@@ -202,7 +203,10 @@ export function TraceTable({
   leading?: ComponentChildren;
   /// Right-aligned count, formatted like every other panel header.
   meta?: ComponentChildren;
-  tools?: ComponentChildren;
+  /// Header controls, sized and scrolled like every other panel header.
+  actions?: ComponentChildren;
+  /// Fixed far-right control (slot maximize), outside the scrolling actions.
+  trailing?: ComponentChildren;
   /// Replaces the plain "No frames yet" state, e.g. with workspace actions.
   empty?: ComponentChildren;
   /// Distinguishes an empty bus from a filter that hid every frame.
@@ -489,9 +493,10 @@ export function TraceTable({
   const head = (
     <div class="panel-head dock-head">
       {leading}
-      <div class="dock-head-spacer" />
+      <span class="dock-head-spacer" />
       {meta && <span class="meta">{meta}</span>}
-      <div class="panel-tools">{tools}</div>
+      {actions && <div class="dock-head-actions">{actions}</div>}
+      {trailing}
     </div>
   );
 

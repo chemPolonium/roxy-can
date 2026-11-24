@@ -325,13 +325,45 @@ select {
   min-width: 0;
 }
 
+:root .chart-cursor-tools {
+  max-width: calc(100% - 12px);
+  flex-wrap: wrap;
+}
+
+:root .record-settings {
+  align-items: start;
+}
+
+:root .session-body {
+  gap: 10px;
+}
+
+:root .transport-button.icon-btn svg {
+  width: 13px;
+  height: 13px;
+}
+
+:root .script-file-path {
+  max-width: 190px;
+}
+
 @media (max-width: 1100px) {
+  :root .script-file-path {
+    max-width: 130px;
+  }
+
   :root .actions {
     gap: 3px;
   }
 
   :root .topbar {
     gap: 8px;
+  }
+
+  /* Keep the connection dot and drop only the word, so the indicator
+     survives a narrow header without pushing the view switch off-screen. */
+  :root .presence-word {
+    display: none;
   }
 }
 

@@ -206,6 +206,9 @@ impl ProjectV2 {
                 }
             }
         }
+        for node in &mut self.settings.nodes {
+            node.path = crate::config::resolve_dbc(&node.path, base);
+        }
     }
 
     /// Replaces the live workspace with this project. Buses are created in
@@ -337,7 +340,7 @@ impl ProjectV2 {
         restore_triggers(&self, app);
         restore_replay(&self, app);
 
-        self.settings.apply(app);
+        problems.extend(self.settings.apply(app));
         app.settle();
 
         // Hardware is part of the project now. Resolve cluster ids against
@@ -1107,6 +1110,14 @@ impl App {
                 return false;
             }
         };
+        if self.snap.nodes.iter().any(|node| {
+            node.file_path
+                .as_deref()
+                .is_none_or(|path| path.trim().is_empty())
+        }) {
+            self.fail("project save needs a .rxcan file for every script");
+            return false;
+        }
         let base = path.parent().map(|d| d.to_path_buf());
         let project = ProjectV2::from_app(self, base.as_deref());
         let written = serde_json::to_string_pretty(&project)

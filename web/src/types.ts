@@ -492,8 +492,21 @@ export interface ScriptTest {
   timeS: number;
 }
 
+export interface ScriptCheckSummary {
+  handlers: number;
+  sends: string[];
+  receives: string[];
+  lines: string[];
+}
+
 export interface Script extends ScriptInfo {
+  /// Content currently applied to the runtime node.
   source: string;
+  /// Content last saved to / loaded from the linked .rxcan file.
+  fileSource: string;
+  checkedSource: string | null;
+  checkIssue: ScriptIssue | null;
+  checkSummary: ScriptCheckSummary | null;
   tests: ScriptTest[];
   log: string[];
   issue: ScriptIssue | null;
@@ -820,10 +833,13 @@ export type Command =
       attached_node: string | null;
     }
   | { type: "set_script_name"; id: number; name: string }
-  | { type: "set_script_source"; id: number; source: string }
   | { type: "set_script_enabled"; id: number; on: boolean }
   | { type: "remove_script"; id: number }
-  | { type: "save_script_file"; path: string; source: string }
+  | { type: "load_script"; id: number; path: string }
+  | { type: "save_script"; id: number; source: string }
+  | { type: "save_script_as"; id: number; path: string; source: string }
+  | { type: "check_script"; id: number; source: string }
+  | { type: "apply_script"; id: number; source: string }
   | { type: "set_spec_tolerance"; value: number }
   | { type: "set_spec_grace"; value: number }
   | { type: "clear_spec" }

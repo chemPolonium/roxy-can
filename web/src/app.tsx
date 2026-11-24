@@ -3615,7 +3615,9 @@ export function App() {
                 }
               >
                 <span class="dot" />
-                {online ? "connected" : "reconnecting"}
+                <span class="presence-word">
+                  {online ? "connected" : "reconnecting"}
+                </span>
               </span>
               {recordActive && <span class="rec-badge">REC</span>}
             </h1>
@@ -3687,7 +3689,7 @@ export function App() {
             pageRename?.id === entry.id ? (
               <input
                 key={entry.id}
-                class="page-tab-rename view-tab-rename"
+                class="view-tab-rename"
                 autoFocus
                 value={pageRename.name}
                 maxLength={40}
@@ -4287,7 +4289,7 @@ export function App() {
         >
           {measuring ? (state?.tracePaused ? "PAUSED" : "MEASURING") : "STOPPED"}
         </span>
-        <span>
+        <span class="status-message">
           {replayText ||
             (measuring
               ? state?.log

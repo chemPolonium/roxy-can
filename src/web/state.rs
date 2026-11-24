@@ -721,6 +721,15 @@ struct WebScriptTest {
 
 #[derive(Clone, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
+struct WebScriptCheckSummary {
+    handlers: usize,
+    sends: Vec<String>,
+    receives: Vec<String>,
+    lines: Vec<String>,
+}
+
+#[derive(Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
 struct WebScript {
     id: u64,
     name: String,
@@ -732,7 +741,11 @@ struct WebScript {
     errored: bool,
     issue: Option<WebScriptIssue>,
     file_path: String,
+    file_source: String,
     source: String,
+    checked_source: Option<String>,
+    check_issue: Option<WebScriptIssue>,
+    check_summary: Option<WebScriptCheckSummary>,
     tests: Vec<WebScriptTest>,
     /// `on panel_action("…")` names this script declares.
     panel_actions: Vec<String>,

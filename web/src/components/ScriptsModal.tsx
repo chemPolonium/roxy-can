@@ -17,7 +17,7 @@ import type {
   ScriptFunctionHelp,
   SysVar,
 } from "../types";
-import { FilePick } from "./FilePick";
+import { useFileBrowser } from "./FileBrowser";
 import { ConfirmDialog } from "./ConfirmDialog";
 import type { ScriptEditorApi } from "../scriptEditor";
 import type { Theme } from "../theme";
@@ -90,7 +90,8 @@ export function ScriptsModal({
 }: Props) {
   const [scripts, setScripts] = useState<Script[]>([]);
   const [drafts, setDrafts] = useState<Record<number, string>>({});
-  const [dirty, setDirty] = useState<Set<number>>(new Set());
+  const [checkedDrafts, setCheckedDrafts] = useState<Record<number, string>>({});
+  const pickHost = useFileBrowser();
   const [selected, setSelected] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -102,7 +103,6 @@ export function ScriptsModal({
   const editing = useRef<Set<number>>(new Set());
   const selectNewest = useRef(false);
   const [name, setName] = useState("");
-  const [savePath, setSavePath] = useState("");
   const [newOpen, setNewOpen] = useState(false);
   const [confirmRemove, setConfirmRemove] = useState(false);
   const [newName, setNewName] = useState("");
@@ -252,15 +252,18 @@ export function ScriptsModal({
 
   const current = scripts.find((script) => script.id === selected) ?? null;
   const draft = selected != null ? (drafts[selected] ?? current?.source ?? "") : "";
+  const fileDirty = !!current && draft !== current.fileSource;
+  const applyDirty = !!current && draft !== current.source;
+  const checked = !!current && current.checkedSource === draft && !current.checkIssue;
+  const checkAttempt = !!current && checkedDrafts[current.id] === draft;
+  const checkIssue = checkAttempt ? (current?.checkIssue ?? null) : null;
+  const checkSummary = checked ? current?.checkSummary ?? null : null;
+  const activeIssue = checkIssue ?? (!applyDirty ? (current?.issue ?? null) : null);
   const breakpoints = selected != null ? (breakpointMap[selected] ?? []) : [];
   const debugPaused =
     debugArmed && debugView?.paused === true && debugView.node === current?.id;
   const debugLine = debugPaused ? (debugView?.line ?? null) : null;
-
-  const issueLine =
-    current?.issue && selected != null && !dirty.has(selected)
-      ? current.issue.line
-      : null;
+  const issueLine = activeIssue?.line ?? null;
 
   useEffect(() => {
     if (debugLine != null) editorApi.current?.revealLine(debugLine);
@@ -320,9 +323,8 @@ export function ScriptsModal({
 
   useEffect(() => {
     setName(current?.name ?? "");
-    setSavePath(current?.filePath || (current ? `${current.name}.rxcan` : ""));
     // Only reset when the selection changes; polling must not overwrite
-    // the name or path boxes while the user types.
+    // the name box while the user types.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selected]);
 
@@ -330,7 +332,11 @@ export function ScriptsModal({
     if (selected == null) return;
     editing.current.add(selected);
     setDrafts((currentDrafts) => ({ ...currentDrafts, [selected]: value }));
-    setDirty((currentDirty) => new Set(currentDirty).add(selected));
+    setCheckedDrafts((current) => {
+      const next = { ...current };
+      delete next[selected];
+      return next;
+    });
   };
 
   const complete = (text: string, caret: number, explicit: boolean) =>
@@ -379,38 +385,78 @@ export function ScriptsModal({
   };
 
   const jumpToIssue = () => {
-    const issue = current?.issue;
-    if (!issue) return;
-    editorApi.current?.revealLine(issue.line, issue.col ?? 1);
+    if (!activeIssue) return;
+    editorApi.current?.revealLine(activeIssue.line, activeIssue.col ?? 1);
+  };
+
+  const check = () => {
+    if (!current || debugPaused) return;
+    setCheckedDrafts((previous) => ({ ...previous, [current.id]: draft }));
+    onCommand({ type: "check_script", id: current.id, source: draft });
+  };
+
+  const load = async () => {
+    if (!current || debugPaused) return;
+    try {
+      const path = await pickHost({
+        mode: "file",
+        title: "Load .rxcan script",
+        accept: [".rxcan"],
+        initialPath: current.filePath || null,
+      });
+      if (!path) return;
+      editing.current.delete(current.id);
+      setCheckedDrafts((previous) => {
+        const next = { ...previous };
+        delete next[current.id];
+        return next;
+      });
+      onCommand({ type: "load_script", id: current.id, path });
+    } catch (e) {
+      setError(String(e));
+    }
   };
 
   const apply = () => {
-    if (!current) return;
-    onCommand({ type: "set_script_source", id: current.id, source: draft });
+    if (!current || !current.filePath || !checked || debugPaused) return;
+    onCommand({ type: "apply_script", id: current.id, source: draft });
     editing.current.delete(current.id);
-    setDirty((currentDirty) => {
-      const next = new Set(currentDirty);
-      next.delete(current.id);
-      return next;
-    });
-    setScripts((list) =>
-      list.map((script) =>
-        script.id === current.id
-          ? { ...script, source: draft, issue: null }
-          : script,
-      ),
-    );
+  };
+
+  const save = () => {
+    if (!current?.filePath || !fileDirty || debugPaused) return;
+    onCommand({ type: "save_script", id: current.id, source: draft });
+  };
+
+  const saveAs = async () => {
+    if (!current || debugPaused) return;
+    try {
+      const path = await pickHost({
+        mode: "save",
+        title: "Save script as",
+        accept: [".rxcan"],
+        initialPath: current.filePath || null,
+        initialName: `${current.name}.rxcan`,
+      });
+      if (!path) return;
+      onCommand({
+        type: "save_script_as",
+        id: current.id,
+        path,
+        source: draft,
+      });
+    } catch (e) {
+      setError(String(e));
+    }
   };
 
   const revert = () => {
     if (!current) return;
     editing.current.delete(current.id);
-    setDrafts((currentDrafts) => ({ ...currentDrafts, [current.id]: current.source }));
-    setDirty((currentDirty) => {
-      const next = new Set(currentDirty);
-      next.delete(current.id);
-      return next;
-    });
+    setDrafts((currentDrafts) => ({
+      ...currentDrafts,
+      [current.id]: current.fileSource || current.source,
+    }));
   };
 
   const add = () => {
@@ -431,8 +477,6 @@ export function ScriptsModal({
     setTimeout(() => setReload((tick) => tick + 1), 700);
   };
 
-  const issue = current?.issue ?? null;
-  const showIssue = !!issue && selected != null && !dirty.has(selected);
   const debugStatus = debugError
     ? debugError
     : debugPaused
@@ -443,7 +487,7 @@ export function ScriptsModal({
         ? "Armed — waiting for a breakpoint. Start or restart the measurement."
         : current && !current.enabled
           ? "Enable the script to debug it."
-          : current && dirty.has(current.id)
+          : current && applyDirty
             ? "Apply changes before debugging."
             : "F9 toggles a breakpoint on the caret line.";
   const scriptTests = current?.tests ?? [];
@@ -542,7 +586,7 @@ export function ScriptsModal({
               >
                 <strong>
                   {script.name}
-                  {dirty.has(script.id) && <i>•</i>}
+                  {script.id === selected && fileDirty && <i>•</i>}
                 </strong>
                 <span>
                   {busName(buses, script.channel)}
@@ -665,11 +709,11 @@ export function ScriptsModal({
                     <button
                       type="button"
                       class="primary"
-                      disabled={!current.enabled || dirty.has(current.id)}
+                      disabled={!current.enabled || applyDirty}
                       title={
                         !current.enabled
                           ? "Enable the script first"
-                          : dirty.has(current.id)
+                          : applyDirty
                             ? "Apply changes before debugging"
                             : "Pause on breakpoints; F9 toggles one"
                       }
@@ -709,13 +753,9 @@ export function ScriptsModal({
                       onChange={edit}
                       onToggleBreakpoint={toggleBreakpoint}
                       onApply={() => {
-                        if (
-                          selected != null &&
-                          dirty.has(selected) &&
-                          !debugPaused
-                        ) {
-                          apply();
-                        }
+                        if (selected == null || debugPaused) return;
+                        if (current?.filePath) save();
+                        else void saveAs();
                       }}
                       onCursor={updateSignature}
                       apiRef={editorApi}
@@ -760,22 +800,29 @@ export function ScriptsModal({
                     aria-label="编辑器帮助"
                   >
                     <div class="script-help-head">
-                      <strong>编辑器帮助</strong>
+                      <strong>Editor help</strong>
                       <button
                         type="button"
                         onClick={() => setHelpOpen(false)}
                       >
-                        关闭
+                        Close
                       </button>
                     </div>
                     <p>
-                      脚本是类 C 语言，每次启动都会重新编译；测量中点击 Apply
-                      会重启该节点。Tab 缩进，Shift+Tab 反缩进。补全跟随光标，Tab
-                      接受选中项；Alt+/ 打开列表，方向键选择后 Enter
-                      接受。已知函数会显示参数。括号和双引号自动配对，Backspace
-                      删除整级缩进。Ctrl+/ 注释行，Alt+↑/↓ 移动行，Shift+Alt+↓
-                      复制行，Ctrl+F 查找，Ctrl+S 应用。F9 切换断点；Debug
-                      会暂停节点，方便检查局部变量和调用栈。
+                      Scripts use a C-like language. Check only compiles and
+                      reports diagnostics; Apply installs a checked draft into
+                      the node and restarts it during a measurement. Save and
+                      Save As only write the linked .rxcan file, without
+                      applying. Load links an existing file without applying;
+                      Enabled is a separate runtime switch. Tab indents,
+                      Shift+Tab outdents, and Tab accepts a completion. Alt+/
+                      opens the completion list; Enter accepts a selection.
+                      Known functions show their arguments. Brackets and quotes
+                      pair automatically, Backspace removes one indent level,
+                      Ctrl+/ comments a line, Alt+↑/↓ moves a line,
+                      Shift+Alt+↓ duplicates it, Ctrl+F searches and Ctrl+S
+                      saves. F9 toggles a breakpoint; Debug pauses the node so
+                      locals and the call stack can be inspected.
                     </p>
                   </div>
                 )}
@@ -835,24 +882,78 @@ export function ScriptsModal({
                     </section>
                   </div>
                 )}
-                {showIssue && issue && (
-                  <button type="button" class="script-issue" onClick={jumpToIssue}>
+                {activeIssue && (
+                  <button
+                    type="button"
+                    class="script-issue"
+                    onClick={jumpToIssue}
+                  >
                     <strong>
-                      line {issue.line}
-                      {issue.col ? `:${issue.col}` : ""}
+                      line {activeIssue.line}
+                      {activeIssue.col ? `:${activeIssue.col}` : ""}
                     </strong>
-                    <span>{issue.message}</span>
+                    <span>{activeIssue.message}</span>
                   </button>
                 )}
+                <div class="script-state-row">
+                  <span class={!current?.filePath || fileDirty ? "warn" : "ok"}>
+                    {!current?.filePath
+                      ? "No .rxcan linked — use Save As"
+                      : fileDirty
+                        ? "File not saved"
+                        : "File saved"}
+                  </span>
+                  <span class={checked ? "ok" : "muted"}>
+                    {checked ? "Checked" : "Not checked"}
+                  </span>
+                  <span class={applyDirty ? "warn" : "ok"}>
+                    {applyDirty ? "Not applied" : "Applied"}
+                  </span>
+                  {checkSummary && (
+                    <span class="script-check-summary">
+                      {checkSummary.handlers} handlers · sends{" "}
+                      {checkSummary.sends.join(", ") || "—"} · receives{" "}
+                      {checkSummary.receives.join(", ") || "—"}
+                    </span>
+                  )}
+                </div>
+                {checkSummary?.lines.map((line, index) => (
+                  <div class="script-check-line" key={index}>
+                    {line}
+                  </div>
+                ))}
                 <div class="script-actions">
                   <button
                     type="button"
-                    class="primary"
-                    disabled={!dirty.has(current.id) || debugPaused}
+                    disabled={!current || debugPaused}
                     title={
                       debugPaused
                         ? "Continue or stop the debugger first"
                         : undefined
+                    }
+                    onClick={check}
+                  >
+                    Check
+                  </button>
+                  <button
+                    type="button"
+                    class="primary"
+                    disabled={
+                      !current?.filePath ||
+                      !checked ||
+                      !applyDirty ||
+                      debugPaused
+                    }
+                    title={
+                      debugPaused
+                        ? "Continue or stop the debugger first"
+                        : !current?.filePath
+                          ? "Save As a .rxcan file before applying"
+                          : !checked
+                            ? "Check the script before applying"
+                            : !applyDirty
+                              ? "Already applied"
+                              : undefined
                     }
                     onClick={apply}
                   >
@@ -860,30 +961,31 @@ export function ScriptsModal({
                   </button>
                   <button
                     type="button"
-                    disabled={!dirty.has(current.id)}
+                    disabled={!fileDirty}
+                    title={fileDirty ? undefined : "No unsaved file changes"}
                     onClick={revert}
                   >
                     Revert
                   </button>
-                  <button
-                    type="button"
-                    onClick={() => edit(TEMPLATE)}
-                  >
+                  <button type="button" onClick={() => edit(TEMPLATE)}>
                     Template
                   </button>
-                  <FilePick
-                    label="Load file…"
-                    accept=".rxcan,.txt"
-                    onText={(text, name) => {
-                      edit(text);
-                      setSavePath(name);
-                    }}
-                    onError={setError}
-                  />
+                  <button
+                    type="button"
+                    disabled={!current || debugPaused}
+                    title={
+                      debugPaused
+                        ? "Continue or stop the debugger first"
+                        : "Link an existing .rxcan file; this does not apply it"
+                    }
+                    onClick={() => void load()}
+                  >
+                    Load…
+                  </button>
                   <button
                     type="button"
                     class="danger"
-                    disabled={debugPaused}
+                    disabled={!current || debugPaused}
                     title={
                       debugPaused
                         ? "Continue or stop the debugger first"
@@ -894,26 +996,31 @@ export function ScriptsModal({
                     Remove
                   </button>
                   <span class="spacer" />
-                  <input
-                    class="script-path"
-                    value={savePath}
-                    placeholder="save path (.rxcan)"
-                    onInput={(event) =>
-                      setSavePath((event.target as HTMLInputElement).value)
-                    }
-                  />
+                  <span class="script-file-path" title={current?.filePath ?? ""}>
+                    {current?.filePath || "No file linked"}
+                  </span>
                   <button
                     type="button"
-                    disabled={!savePath.trim()}
-                    onClick={() =>
-                      onCommand({
-                        type: "save_script_file",
-                        path: savePath.trim(),
-                        source: draft,
-                      })
+                    disabled={!current?.filePath || !fileDirty || debugPaused}
+                    title={
+                      !current?.filePath
+                        ? "Use Save As to choose a file"
+                        : !fileDirty
+                          ? "No unsaved file changes"
+                          : debugPaused
+                            ? "Continue or stop the debugger first"
+                            : undefined
                     }
+                    onClick={save}
                   >
-                    Save file
+                    Save
+                  </button>
+                  <button
+                    type="button"
+                    disabled={!current || debugPaused}
+                    onClick={() => void saveAs()}
+                  >
+                    Save As…
                   </button>
                 </div>
                 {scriptTests.length > 0 && (

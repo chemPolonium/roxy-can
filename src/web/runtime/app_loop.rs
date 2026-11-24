@@ -662,23 +662,85 @@ fn app_loop(
                 WebCommand::SetScriptName { id, name } => {
                     app.send(BusCommand::SetNodeName { id, name });
                 }
-                WebCommand::SetScriptSource { id, source } => {
-                    app.send(BusCommand::SetNodeSource { id, source });
-                }
                 WebCommand::SetScriptEnabled { id, on } => {
                     app.send(BusCommand::SetNodeEnabled { id, on });
                 }
                 WebCommand::RemoveScript { id } => {
                     app.send(BusCommand::RemoveNode { id });
                 }
-                WebCommand::SaveScriptFile { path, source } => {
+                WebCommand::LoadScript { id, path } => {
+                    if path.trim().is_empty() {
+                        app.fail("script load needs a path");
+                        continue;
+                    }
+                    match std::fs::read_to_string(&path) {
+                        Ok(source) => {
+                            app.status = format!("script loaded: {path}");
+                            app.send(BusCommand::SetNodeFile {
+                                id,
+                                path,
+                                file_source: source,
+                            });
+                        }
+                        Err(error) => app.fail(format!("script load failed: {error}")),
+                    }
+                }
+                WebCommand::SaveScript { id, source } => {
+                    let path = app
+                        .snap
+                        .nodes
+                        .iter()
+                        .find(|node| node.id == id)
+                        .and_then(|node| node.file_path.clone());
+                    let Some(path) = path.filter(|path| !path.trim().is_empty()) else {
+                        app.fail("script has no file; use Save As");
+                        continue;
+                    };
+                    match std::fs::write(&path, &source) {
+                        Ok(()) => {
+                            app.status = format!("script saved: {path}");
+                            app.send(crate::bus::BusCommand::SetNodeFile {
+                                id,
+                                path,
+                                file_source: source,
+                            });
+                        }
+                        Err(error) => app.fail(format!("script save failed: {error}")),
+                    }
+                }
+                WebCommand::SaveScriptAs { id, path, source } => {
                     if path.trim().is_empty() {
                         app.fail("script save needs a path");
-                    } else {
-                        match std::fs::write(&path, source) {
-                            Ok(()) => app.status = format!("script saved: {path}"),
-                            Err(error) => app.fail(format!("script save failed: {error}")),
+                        continue;
+                    }
+                    match std::fs::write(&path, &source) {
+                        Ok(()) => {
+                            app.status = format!("script saved: {path}");
+                            app.send(BusCommand::SetNodeFile {
+                                id,
+                                path,
+                                file_source: source,
+                            });
                         }
+                        Err(error) => app.fail(format!("script save failed: {error}")),
+                    }
+                }
+                WebCommand::CheckScript { id, source } => {
+                    app.send(BusCommand::CheckNodeSource { id, source });
+                }
+                WebCommand::ApplyScript { id, source } => {
+                    let linked = app
+                        .snap
+                        .nodes
+                        .iter()
+                        .find(|node| node.id == id)
+                        .is_some_and(|node| {
+                            node.file_path.as_deref().is_some_and(|path| !path.trim().is_empty())
+                        });
+                    if linked {
+                        app.send(BusCommand::SetNodeSource { id, source });
+                    } else {
+                        app.fail("script has no .rxcan file; use Save As before Apply");
                     }
                 }
                 WebCommand::SetSpecTolerance { value } => {

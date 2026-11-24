@@ -35,6 +35,13 @@ pub struct ScriptNode {
     /// the user saves or loads a node script from disk. Persisted with
     /// the project so the user can find their files again.
     pub file_path: Option<String>,
+    /// Last content saved to / loaded from `file_path`; separate from the
+    /// applied runtime source so Save and Apply remain independent.
+    pub file_source: String,
+    /// Source that passed the last explicit check, plus its diagnostics.
+    pub checked_source: Option<String>,
+    pub check_issue: Option<ScriptIssue>,
+    pub check_summary: Option<ScriptCheckSummary>,
     /// `on panel_action("…")` names declared by the last successful compile.
     /// Kept after stop so the editor can still offer them; cleared when the
     /// source changes or fails to compile.
@@ -72,6 +79,15 @@ pub struct ScriptIssue {
     pub line: u32,
     pub col: Option<u32>,
     pub message: String,
+}
+
+/// Result of a read-only compile/check. It never changes the running source.
+#[derive(Clone, Debug, Default)]
+pub struct ScriptCheckSummary {
+    pub handlers: usize,
+    pub sends: Vec<(u32, bool)>,
+    pub receives: Vec<(u32, bool)>,
+    pub lines: Vec<String>,
 }
 
 /// Runtime failures are formatted by the VM as `line N: message`; the

@@ -1314,10 +1314,6 @@ enum WebCommand {
         id: u64,
         name: String,
     },
-    SetScriptSource {
-        id: u64,
-        source: String,
-    },
     SetScriptEnabled {
         id: u64,
         on: bool,
@@ -1325,8 +1321,25 @@ enum WebCommand {
     RemoveScript {
         id: u64,
     },
-    SaveScriptFile {
+    LoadScript {
+        id: u64,
         path: String,
+    },
+    SaveScript {
+        id: u64,
+        source: String,
+    },
+    SaveScriptAs {
+        id: u64,
+        path: String,
+        source: String,
+    },
+    CheckScript {
+        id: u64,
+        source: String,
+    },
+    ApplyScript {
+        id: u64,
         source: String,
     },
     SetSpecTolerance {

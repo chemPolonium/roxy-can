@@ -289,8 +289,14 @@
 }
 
 .page-inspector input,
-.page-inspector select {
+.page-inspector select,
+.page-inspector .bandset-picker-search {
   width: 100%;
+  height: 24px;
+}
+
+.page-inspector .bandset-picker-trigger,
+.page-inspector .page-suggest-menu button {
   height: 24px;
 }
 
@@ -970,7 +976,7 @@ button.icon-btn svg {
 .someip-detail-row > td {
   white-space: normal;
   padding: 8px 12px 10px;
-  background: var(--panel-soft);
+  background: var(--panel-2);
   border-bottom: 1px solid var(--line);
 }
 
@@ -998,7 +1004,7 @@ button.icon-btn svg {
   flex-wrap: wrap;
   gap: 4px 14px;
   margin-top: 6px;
-  color: var(--fg);
+  color: var(--text);
 }
 
 .someip-service-row {
@@ -1640,6 +1646,12 @@ body.row-resizing {
   color: var(--error);
 }
 
+.statusbar .status-message {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .statusbar .toast {
   min-width: 0;
   max-width: min(460px, 45vw);
@@ -1701,11 +1713,21 @@ body.row-resizing {
     .picker-name
   ):not(.grouped-select-option):not(.palette-swatch):not(
     .monitor-style-button
+  ):not(.bandset-picker-trigger):not(.bandset-picker-search):not(
+    .page-suggest-menu *
   ),
 .modal-backdrop > :not(.palette) select,
 .modal-backdrop
   > :not(.palette)
   input:not([type="checkbox"]):not([type="radio"]):not([type="file"]):not([type="hidden"]) {
+  height: 26px;
+}
+
+/* Searchable pickers are exempt from the blanket rule above so their own
+   context can size them like the controls they sit beside. */
+.modal-backdrop .bandset-picker-trigger,
+.modal-backdrop .bandset-picker-search,
+.modal-backdrop .page-suggest-menu button {
   height: 26px;
 }
 

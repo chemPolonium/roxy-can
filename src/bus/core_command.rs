@@ -453,6 +453,26 @@ impl BusCore {
                     self.nodes_dirty = true;
                 }
             }
+            BusCommand::SetNodeFile {
+                id,
+                path,
+                file_source,
+            } => {
+                if let Some(node) = self.nodes.iter_mut().find(|node| node.id == id) {
+                    node.set_file(path, file_source);
+                    self.nodes_dirty = true;
+                }
+            }
+            BusCommand::CheckNodeSource { id, source } => {
+                if let Some(node) = self.nodes.iter_mut().find(|node| node.id == id) {
+                    let dbc = self
+                        .model_dbs
+                        .get(node.channel as usize)
+                        .and_then(|db| db.clone());
+                    node.check_source(source, dbc, Some(&self.fr_dbs), Some(&self.eth_dbs));
+                    self.nodes_dirty = true;
+                }
+            }
             BusCommand::SetNodeEnabled { id, on } => {
                 let keys = self.sysvar_keys();
                 let codec = self
@@ -486,8 +506,13 @@ impl BusCore {
                         self.node_counter += 1;
                         let mut n =
                             crate::node::ScriptNode::new(self.node_counter, cfg.name, cfg.channel);
-                        n.source = cfg.source;
+                        n.source = cfg.source.clone();
+                        n.file_path = Some(cfg.path.clone());
+                        n.file_source = cfg.source;
                         n.enabled = cfg.enabled;
+                        if let Some(message) = cfg.load_error {
+                            n.mark_load_error(message);
+                        }
                         // The saved binding is the whole point: without it
                         // every restored script would look like an orphan
                         // and get adopted by an arbitrary node.

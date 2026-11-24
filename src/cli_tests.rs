@@ -667,13 +667,18 @@ fn convert_refuses_broken_inputs() {
 /// stats export -- no window, no user, full fidelity.
 #[test]
 fn a_project_node_script_drives_a_headless_simulation() {
+    let script = std::env::temp_dir().join("roxy_can_cli_node.rxcan");
+    let source = "on timer 50 { send(0x555, 1); }";
+    std::fs::write(&script, source).expect("script file");
     let mut app = crate::app::App::headless();
     app.tx_list.retain(|t| t.channel != 0);
     app.send(crate::bus::BusCommand::SetNodes {
         nodes: vec![crate::config::NodeCfg {
             name: "beacon".to_string(),
             channel: 0,
-            source: "on timer 50 { send(0x555, 1); }".to_string(),
+            path: script.to_string_lossy().to_string(),
+            source: source.to_string(),
+            load_error: None,
             enabled: true,
             attached: None,
         }],

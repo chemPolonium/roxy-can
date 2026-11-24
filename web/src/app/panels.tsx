@@ -482,7 +482,7 @@ export function createPanelRenderers(ctx: PanelRenderContext) {
         onJumpDone={() => setTraceJump(null)}
         leading={slotMenu(slot, "trace")}
         meta={panelMeta("frame", visibleRows.length, traceRows.length)}
-        tools={
+        actions={
           <>
             <button
               type="button"
@@ -558,9 +558,9 @@ export function createPanelRenderers(ctx: PanelRenderContext) {
                 </span>
               )}
             </button>
-            {slotMax(slot)}
           </>
         }
+        trailing={slotMax(slot)}
         onQuery={setQuery}
         empty={state && state.buses.length === 0 ? emptyWorkspace : undefined}
         onChartCursor={placeChartCursor}
