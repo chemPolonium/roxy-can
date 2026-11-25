@@ -1,4 +1,5 @@
 import type { ComponentChildren } from "preact";
+import { UiIcon } from "./icons";
 
 interface Props {
   title: ComponentChildren;
@@ -7,7 +8,7 @@ interface Props {
   children?: ComponentChildren;
 }
 
-/// Shared modal header: title on the left, extra actions then Close.
+/// Shared modal header: title on the left, extra actions then an icon-only close.
 export function ModalHeader({
   title,
   onClose,
@@ -18,8 +19,14 @@ export function ModalHeader({
     <header class="modal-head">
       <h2>{title}</h2>
       {children && <div class="modal-head-actions">{children}</div>}
-      <button type="button" onClick={onClose}>
-        {closeLabel}
+      <button
+        type="button"
+        class="mini icon-btn"
+        aria-label={closeLabel}
+        title={closeLabel}
+        onClick={onClose}
+      >
+        <UiIcon name="close" />
       </button>
     </header>
   );
