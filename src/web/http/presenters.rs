@@ -1707,6 +1707,8 @@ enum WebCommand {
         path: String,
     },
     ClearReference,
+    /// Quit the local web server from the UI; same path as Ctrl+C.
+    Shutdown,
     /// Replace the derived-channel definitions. The core samples the curves;
     /// the snapshot carries the definitions back to the editor.
     SetDerived {

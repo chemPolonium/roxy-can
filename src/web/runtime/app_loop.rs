@@ -18,6 +18,7 @@ fn app_loop(
     project: Option<String>,
     replay: Option<String>,
     profile: Option<String>,
+    shutdown: ShutdownSignal,
 ) {
     let SharedStores {
         shared,
@@ -57,6 +58,10 @@ fn app_loop(
     loop {
         while let Ok(cmd) = inbox.try_recv() {
             match cmd {
+                WebCommand::Shutdown => {
+                    shutdown.request();
+                    return;
+                }
                 WebCommand::Start => {
                     if !app.snap.measuring {
                         if app.snap.run_mode == Mode::Replay && app.log_path.is_empty() {

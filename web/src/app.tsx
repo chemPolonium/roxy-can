@@ -44,6 +44,7 @@ import { BusesModal } from "./components/BusesModal";
 import { CommandPalette } from "./components/CommandPalette";
 import { ContextMenu } from "./components/ContextMenu";
 import { ModalHeader } from "./components/ModalHeader";
+import { ConfirmDialog } from "./components/ConfirmDialog";
 import { MenuButton } from "./components/MenuButton";
 import type { PaletteCommand } from "./components/CommandPalette";
 import { EmptyState } from "./components/EmptyState";
@@ -300,6 +301,7 @@ export function App() {
 
   const [theme, setTheme] = useState<Theme>(loadTheme);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [confirmExit, setConfirmExit] = useState(false);
   const [runModeOpen, setRunModeOpen] = useState(false);
   const brandMenuRef = useRef<HTMLDivElement>(null);
   const runModeMenuRef = useRef<HTMLDivElement>(null);
@@ -3600,6 +3602,22 @@ export function App() {
                     {theme === "dark" ? "On" : "Off"}
                   </span>
                 </button>
+                <div class="brand-menu-sep" />
+                <button
+                  type="button"
+                  role="menuitem"
+                  title="Stop the roxy-can web server and exit"
+                  onClick={() => {
+                    setMenuOpen(false);
+                    setConfirmExit(true);
+                  }}
+                >
+                  <svg viewBox="0 0 16 16" aria-hidden="true">
+                    <path d="M8 2v5" />
+                    <path d="M4.8 4.8a4.5 4.5 0 1 0 6.4 0" />
+                  </svg>
+                  <span>Exit</span>
+                </button>
               </div>
             )}
           </div>
@@ -5254,6 +5272,23 @@ export function App() {
           maxS={traceRows.length > 0 ? traceRows[0].tUs / 1e6 : null}
           onGo={(seconds) => goToTimeUs(Math.round(seconds * 1e6))}
           onClose={() => setTimeJumpOpen(false)}
+        />
+      )}
+      {confirmExit && (
+        <ConfirmDialog
+          title="Exit roxy-can"
+          message={
+            dirty
+              ? "Unsaved project changes will not be saved. Stop the web server and exit?"
+              : "Stop the web server and exit roxy-can?"
+          }
+          confirmLabel="Exit"
+          danger
+          onConfirm={() => {
+            setConfirmExit(false);
+            void run({ type: "shutdown" });
+          }}
+          onClose={() => setConfirmExit(false)}
         />
       )}
     </div>

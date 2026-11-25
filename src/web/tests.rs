@@ -4,6 +4,33 @@ mod tests {
     use crate::test_assets::TestBusLoad;
 
     #[test]
+    fn shutdown_command_stops_the_web_core_and_signals_the_server() {
+        let cmd: WebCommand = serde_json::from_value(serde_json::json!({
+            "type": "shutdown",
+        }))
+        .expect("shutdown command");
+        assert!(matches!(cmd, WebCommand::Shutdown));
+
+        let (tx, rx) = std::sync::mpsc::channel();
+        let stores = SharedStores {
+            shared: Arc::new(Mutex::new(WebState::default())),
+            trace: Arc::new(Mutex::new(TraceStore::default())),
+            signals: Arc::new(Mutex::new(SignalStore::default())),
+            catalog: Arc::new(Mutex::new(WebCatalog::default())),
+            scripts: Arc::new(Mutex::new(Vec::new())),
+        };
+        let shutdown = ShutdownSignal::default();
+        let observed = shutdown.clone();
+        tx.send(cmd).expect("command channel open");
+        let core = std::thread::Builder::new()
+            .name("roxy-shutdown-test".to_string())
+            .spawn(move || app_loop(rx, stores, None, None, None, shutdown))
+            .expect("core thread");
+        core.join().expect("the core loop exits on shutdown");
+        assert!(observed.requested(), "the HTTP server is woken too");
+    }
+
+    #[test]
     fn panel_action_commands_deserialize_for_the_core() {
         let cmd: WebCommand = serde_json::from_value(serde_json::json!({
             "type": "run_panel_action",

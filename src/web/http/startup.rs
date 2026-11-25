@@ -1,6 +1,7 @@
 
 use std::collections::VecDeque;
 use std::hash::{Hash, Hasher};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -13,6 +14,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use rust_embed::RustEmbed;
+use tokio::sync::Notify;
 use serde::{Deserialize, Serialize};
 use std::io::IsTerminal;
 
@@ -23,6 +25,36 @@ use crate::hw::HwDriver;
 use crate::observe::SigKey;
 use crate::sim::{SrcKind, ValueSrc};
 use crate::trigger::{TriggerAction, TriggerCmd, TriggerCond, TriggerKind};
+
+/// Shared exit request. The core thread sets it when the UI asks to quit;
+/// the Tokio server waits on the notification alongside Ctrl+C so both paths
+/// use the same graceful shutdown instead of killing the process.
+#[derive(Clone)]
+struct ShutdownSignal {
+    requested: Arc<AtomicBool>,
+    wake: Arc<Notify>,
+}
+
+impl Default for ShutdownSignal {
+    fn default() -> Self {
+        Self {
+            requested: Arc::new(AtomicBool::new(false)),
+            wake: Arc::new(Notify::new()),
+        }
+    }
+}
+
+impl ShutdownSignal {
+    fn request(&self) {
+        self.requested.store(true, Ordering::Release);
+        self.wake.notify_one();
+    }
+
+    #[cfg(test)]
+    fn requested(&self) -> bool {
+        self.requested.load(Ordering::Acquire)
+    }
+}
 
 const PORT: u16 = 2010;
 const SERIES_POINTS: usize = 120;
@@ -175,6 +207,7 @@ pub fn run(args: &[String], open: bool) -> Result<(), String> {
     }
 
     let (tx, rx) = std::sync::mpsc::channel();
+    let shutdown = ShutdownSignal::default();
     let shared = Arc::new(Mutex::new(WebState::default()));
     let trace = Arc::new(Mutex::new(TraceStore::default()));
     let signals = Arc::new(Mutex::new(SignalStore::default()));
@@ -182,6 +215,7 @@ pub fn run(args: &[String], open: bool) -> Result<(), String> {
     let hardware = Arc::new(Mutex::new(HardwareCache::default()));
     let scripts = Arc::new(Mutex::new(Vec::new()));
     {
+        let shutdown = shutdown.clone();
         let shared = shared.clone();
         let trace = trace.clone();
         let signals = signals.clone();
@@ -202,6 +236,7 @@ pub fn run(args: &[String], open: bool) -> Result<(), String> {
                     project,
                     replay,
                     profile,
+                    shutdown,
                 )
             })
             .map_err(|error| format!("Could not start the core thread: {error}"))?;
@@ -243,6 +278,7 @@ pub fn run(args: &[String], open: bool) -> Result<(), String> {
                 commands: tx,
             });
         let app = Router::new().nest("/api", api).fallback(static_file);
+        let http_shutdown = shutdown.clone();
         let listener = tokio::net::TcpListener::bind(("127.0.0.1", port))
             .await
             .map_err(|error| {
@@ -291,8 +327,11 @@ pub fn run(args: &[String], open: bool) -> Result<(), String> {
             println!("Open {url} in your browser. Press Ctrl+C to stop.");
         }
         axum::serve(listener, app)
-            .with_graceful_shutdown(async {
-                let _ = tokio::signal::ctrl_c().await;
+            .with_graceful_shutdown(async move {
+                tokio::select! {
+                    _ = tokio::signal::ctrl_c() => {}
+                    _ = http_shutdown.wake.notified() => {}
+                }
             })
             .await
             .map_err(|error| format!("HTTP server stopped: {error}"))

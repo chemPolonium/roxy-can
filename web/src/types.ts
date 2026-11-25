@@ -1227,6 +1227,7 @@ export type Command =
   | { type: "set_web_workspace"; rev: number; workspace: unknown }
   | { type: "load_reference"; path: string }
   | { type: "clear_reference" }
+  | { type: "shutdown" }
   | { type: "set_derived"; defs: DerivedDef[] };
 
 export interface DebugValue {
