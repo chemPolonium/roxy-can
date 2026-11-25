@@ -321,8 +321,26 @@ mod tests {
         let databases = project.parent().expect("project folder").join("databases");
         assert!(databases.join("sample.dbc").exists());
         assert!(databases.join("motbus.dbc").exists());
+        let scripts = databases.parent().expect("project folder").join("scripts");
+        assert!(scripts.join("engine_beacon.rxcan").exists());
         let json = std::fs::read_to_string(&project).expect("project json");
         let parsed: crate::model::ProjectV2 = serde_json::from_str(&json).expect("project parses");
+        assert_eq!(parsed.settings.nodes.len(), 1, "sample ships one script node");
+        let node = &parsed.settings.nodes[0];
+        assert_eq!(
+            std::path::Path::new(&node.path),
+            std::path::Path::new("scripts/engine_beacon.rxcan")
+        );
+        assert_eq!(node.attached.as_ref().map(|(_, name)| name.as_str()), Some("EngineECU"));
+        assert!(
+            parsed
+                .settings
+                .band_sets
+                .iter()
+                .any(|set| set.id == SAMPLE_SCRIPT_BAND_SET),
+            "sample ships a reusable band set"
+        );
+        assert_eq!(parsed.settings.panel_pages.len(), 1, "sample ships one panel page");
         let paths: Vec<&str> = parsed
             .clusters
             .iter()
@@ -364,6 +382,10 @@ mod tests {
             "the loaded buses point at files"
         );
         assert_eq!(app.graphics[0].signals.len(), 8, "sample lanes carry over");
+        assert_eq!(app.snap.nodes.len(), 1, "the linked script reopens");
+        assert_eq!(app.snap.nodes[0].source, SAMPLE_SCRIPT);
+        assert!(app.band_sets.iter().any(|set| set.id == SAMPLE_SCRIPT_BAND_SET));
+        assert_eq!(app.panel_pages.len(), 1, "the panel page reopens");
         assert!(
             app.snap.tx.iter().any(|entry| entry.active),
             "generators stay armed for the Start button"
@@ -374,7 +396,21 @@ mod tests {
         );
 
         app.start_virtual();
-        for now in [50_000, 100_000, 150_000, 200_000] {
+        assert!(
+            app.snap.nodes[0]
+                .panel_actions
+                .iter()
+                .any(|name| name == "Beacon"),
+            "the script's Panel action is declared once the node runs"
+        );
+        assert!(
+            app.snap.nodes[0]
+                .log
+                .iter()
+                .all(|line| !line.starts_with("[check]")),
+            "the sample script has no assembly warnings"
+        );
+        for now in [50_000, 100_000, 150_000, 200_000, 250_000, 300_000, 350_000, 400_000] {
             app.advance_clock(now);
             app.tick(now);
         }

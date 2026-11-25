@@ -54,6 +54,24 @@ fn seed_sample_entries(app: &mut App) {
 }
 
 const SAMPLE_PROJECT_FILE: &str = "roxy-can-sample.rxproj";
+const SAMPLE_SCRIPT_BAND_SET: &str = "speed-bands";
+const SAMPLE_SCRIPT: &str = r#"let ticks = 0;
+
+fn send_beacon(value) {
+    let msg = frame(EngineStatus);
+    msg.EngineSpeed = value;
+    send_frame(msg);
+}
+
+on timer 200 {
+    ticks = (ticks + 1) % 16;
+    send_beacon(1000 + ticks * 400);
+}
+
+on panel_action("Beacon") {
+    send_beacon(7400);
+}
+"#;
 
 /// Writes the built-in starter databases next to a fresh project file, so
 /// the sample behaves like any other file-based project. Picking a folder
@@ -79,6 +97,9 @@ fn write_sample_project(parent: &std::path::Path) -> Result<std::path::PathBuf, 
     replace_can_dbc(&mut app, 0, "builtin:sample.dbc", &sample_dbc);
     replace_can_dbc(&mut app, 1, "builtin:motbus.dbc", &motbus_dbc);
     seed_sample_entries(&mut app);
+    seed_sample_script(&mut app, &dir.join("scripts"))?;
+    seed_sample_band_set(&mut app);
+    seed_sample_panel(&mut app);
     for spec in &SAMPLE_SIGNALS {
         let key = app.can_key(spec.ch, spec.id, false, spec.name.to_string());
         chart_select_key(&mut app, key);
@@ -92,6 +113,114 @@ fn write_sample_project(parent: &std::path::Path) -> Result<std::path::PathBuf, 
 fn replace_can_dbc(app: &mut App, bus: u8, builtin: &str, path: &std::path::Path) {
     app.remove_can_dbc(bus, builtin);
     app.add_can_dbc(bus, &path.to_string_lossy());
+}
+
+/// One linked script bound to an already-simulated sample node. The project
+/// saves only the relative path; the source itself lives in the `.rxcan`.
+fn seed_sample_script(app: &mut App, scripts: &std::path::Path) -> Result<(), String> {
+    std::fs::create_dir_all(scripts)
+        .map_err(|error| format!("sample scripts: {error}"))?;
+    let path = scripts.join("engine_beacon.rxcan");
+    std::fs::write(&path, SAMPLE_SCRIPT)
+        .map_err(|error| format!("engine_beacon.rxcan: {error}"))?;
+    app.send(crate::bus::BusCommand::AddNode {
+        name: "Engine Beacon".to_string(),
+        channel: 0,
+        attached: Some((0, "EngineECU".to_string())),
+    });
+    let id = app
+        .snap
+        .nodes
+        .last()
+        .expect("the sample script node")
+        .id;
+    app.send(crate::bus::BusCommand::SetNodeFile {
+        id,
+        path: path.to_string_lossy().into_owned(),
+        file_source: SAMPLE_SCRIPT.to_string(),
+    });
+    app.send(crate::bus::BusCommand::SetNodeSource {
+        id,
+        source: SAMPLE_SCRIPT.to_string(),
+    });
+    Ok(())
+}
+
+fn seed_sample_band_set(app: &mut App) {
+    app.band_sets.push(crate::band::BandSet {
+        id: SAMPLE_SCRIPT_BAND_SET.to_string(),
+        name: "Engine speed bands".to_string(),
+        bands: vec![
+            crate::band::Band {
+                upper: Some(2_000.0),
+                inclusive: false,
+                text: "idle".to_string(),
+                color: Some(1),
+            },
+            crate::band::Band {
+                upper: Some(5_000.0),
+                inclusive: false,
+                text: "cruise".to_string(),
+                color: Some(2),
+            },
+            crate::band::Band::final_band(Some(3)),
+        ],
+    });
+}
+
+fn seed_sample_panel(app: &mut App) {
+    let speed = app
+        .can_key(0, 0x100, false, "EngineSpeed".to_string())
+        .text();
+    let vehicle = app
+        .can_key(0, 0x200, false, "VehicleSpeed".to_string())
+        .text();
+    let brake = app
+        .can_key(0, 0x320, false, "BrakePressure".to_string())
+        .text();
+    app.panel_pages = vec![serde_json::json!({
+        "format": "roxy-can.panel-page",
+        "version": 1,
+        "page": {
+            "name": "Overview",
+            "width": 160,
+            "height": 90,
+            "widgets": [
+                {
+                    "kind": "value",
+                    "label": "Engine speed",
+                    "source": speed,
+                    "digits": 0,
+                    "labelSet": SAMPLE_SCRIPT_BAND_SET,
+                    "x": 2, "y": 2, "w": 18, "h": 6
+                },
+                {
+                    "kind": "bar",
+                    "label": "Vehicle speed",
+                    "source": vehicle,
+                    "min": 0,
+                    "max": 300,
+                    "digits": 1,
+                    "x": 24, "y": 2, "w": 20, "h": 7
+                },
+                {
+                    "kind": "lamp",
+                    "label": "Brake",
+                    "source": brake,
+                    "threshold": 20,
+                    "color": 2,
+                    "x": 2, "y": 10, "w": 14, "h": 4
+                },
+                {
+                    "kind": "button",
+                    "label": "Beacon",
+                    "action": "script",
+                    "script": "Beacon",
+                    "x": 24, "y": 11, "w": 16, "h": 5
+                }
+            ]
+        }
+    })];
 }
 
 /// A dedicated `roxy-can-sample` folder under the chosen parent; an existing

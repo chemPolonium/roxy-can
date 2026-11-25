@@ -74,7 +74,7 @@ cargo test
 
 ## 上手
 
-1. 品牌菜单 **Open project…**（Ctrl+O）打开工程，或 **Sample project** 生成示例；在 **Buses…** 里加总线、加载 DBC
+1. 品牌菜单 **Open project…**（Ctrl+O）打开工程，或 **Sample project** 生成示例（带一条会发帧的 `.rxcan` 脚本、一组 BandSet 和一个有控件的 Panel 页）；在 **Buses…** 里加总线、加载 DBC
 2. 顶栏 **Run mode** 选 **Simulation** 或 **Replay** 后点 **▶**；Replay 先在 **Setup → Replay…** 勾选录制
 3. **Buses…** 里把 DBC 节点切到 **Simulated**，在 **Setup → Generator…** 里逐条打开发送的报文、调数值、加激励
 4. **Setup → Recording…** 配好文件名与格式，点顶栏 **Record** 开始/停止；项目名旁的 **Save**（或 Ctrl+S）保存工程

@@ -3,7 +3,7 @@
 各面板能做什么、数字按什么口径算、出错时说什么。界面是固定的 Web 外壳：
 Standard 工作区可选 Focus / Split / Main + side / Quad 四种布局，每个槽位用页眉菜单
 选面板；顶栏 Standard / 页名切换工作区与 Panel 页。文中“窗口”指对应的 core 观测模型与页面。
-总览与快速上手见 `README.md`，脚本语法见 `docs/script_language.md`。左上角 **R** 菜单的 **Exit**（Ctrl+Q）会先确认，再停止本地 Web 服务并退出程序（终端 Ctrl+C 同效）；未保存的工程改动不会自动写入磁盘。
+总览与快速上手见 `README.md`，脚本语法见 `docs/script_language.md`。左上角 **R** 菜单的 **Sample project** 会生成一份带两条 DBC、一条会周期发帧并响应 Panel 按钮的 `.rxcan` 脚本、一组可复用 BandSet 和一个含数值/条形/指示灯/按钮的 Panel 页的工程，可用来直接查看各功能。左上角 **R** 菜单的 **Exit**（Ctrl+Q）会先确认，再停止本地 Web 服务并退出程序（终端 Ctrl+C 同效）；未保存的工程改动不会自动写入磁盘。
 
 ## 布局与槽位
 
