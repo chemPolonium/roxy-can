@@ -1768,6 +1768,10 @@ export function App() {
       } else if (mod && key === "g") {
         event.preventDefault();
         setTimeJumpOpen(true);
+      } else if (mod && key === "q") {
+        event.preventDefault();
+        setMenuOpen(false);
+        setConfirmExit(true);
       } else if (event.key === "?") {
         setHelpOpen(true);
       }

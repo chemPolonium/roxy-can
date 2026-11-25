@@ -3,7 +3,7 @@
 各面板能做什么、数字按什么口径算、出错时说什么。界面是固定的 Web 外壳：
 Standard 工作区可选 Focus / Split / Main + side / Quad 四种布局，每个槽位用页眉菜单
 选面板；顶栏 Standard / 页名切换工作区与 Panel 页。文中“窗口”指对应的 core 观测模型与页面。
-总览与快速上手见 `README.md`，脚本语法见 `docs/script_language.md`。左上角 **R** 菜单的 **Exit** 会先确认，再停止本地 Web 服务并退出程序（终端 Ctrl+C 同效）；未保存的工程改动不会自动写入磁盘。
+总览与快速上手见 `README.md`，脚本语法见 `docs/script_language.md`。左上角 **R** 菜单的 **Exit**（Ctrl+Q）会先确认，再停止本地 Web 服务并退出程序（终端 Ctrl+C 同效）；未保存的工程改动不会自动写入磁盘。
 
 ## 布局与槽位
 
@@ -288,7 +288,7 @@ string/union 的 length-field 宽度与 alignment 会读取 SOMEIP-TRANSFORMATIO
 - **表里的两条游标 A/B**：行右键 → **Set cursor A / B** 把游标落在这一行的时刻（两种总线都放，一次右键只动一条），被标的行带底色（A 琥珀、B 青蓝，与 Signals 曲线同两色），表头读 `A … B … Δt +221.433 ms`（时刻给到微秒）。垃圾桶图标（Clear cursors）只在有东西可清时出现。
 - **垃圾桶图标（Clear）** 清空显示与归档，测量照常进行（录制与逐报文计数都不动），过滤器不重置。
 - FR 子行是否展开是会话状态；Trace 选中行、Trace 光标位置与高级 filter 随工程保存。
-- **快捷键**：F9 启动/停止，F10 暂停/继续，F2 聚焦当前过滤框（Esc 清空），Alt+1…4 切布局（Standard），Alt+Shift+1…2 在聚焦槽位显示 Trace / Messages，Alt+Shift+P 切 Standard / Panel 模式（避开浏览器占用的 Ctrl+1…3）。
+- **快捷键**：F9 启动/停止，F10 暂停/继续，F2 聚焦当前过滤框（Esc 清空），Alt+1…4 切布局（Standard），Alt+Shift+1…2 在聚焦槽位显示 Trace / Messages，Alt+Shift+P 切 Standard / Panel 模式（避开浏览器占用的 Ctrl+1…3），Ctrl+Q 打开退出确认。
 - **拖放**：DBC Explorer 的信号可拖到 Signals / Monitor / Data 页；目标页当前是哪个面板就加到哪个观察器。工程、ASC/BLF/PCAP/PCAPNG 与 `.rxpanel` 可直接拖进窗口；DBC/ARXML/FIBEX 拖到 Buses 弹窗。
 
 ## 工程文件
