@@ -8,6 +8,8 @@ export type UiIconName =
   | "funnel"
   | "columns"
   | "clipboard"
+  | "collapse"
+  | "expand"
   | "chevrons-down"
   | "chevrons-up"
   | "arrow-up"
@@ -65,6 +67,18 @@ export function UiIcon({ name }: { name: UiIconName }) {
         <svg viewBox="0 0 16 16" aria-hidden="true">
           <rect x="3.5" y="3" width="9" height="10.5" />
           <path d="M6 3V1.8h4V3M6 6.5h4M6 9h4" />
+        </svg>
+      );
+    case "collapse":
+      return (
+        <svg viewBox="0 0 16 16" aria-hidden="true">
+          <path d="M6 2v4H2M10 2v4h4M6 14v-4H2M10 14v-4h4" />
+        </svg>
+      );
+    case "expand":
+      return (
+        <svg viewBox="0 0 16 16" aria-hidden="true">
+          <path d="M2 6V2h4M14 6V2h-4M2 10v4h4M14 10v4h-4" />
         </svg>
       );
     case "chevrons-down":

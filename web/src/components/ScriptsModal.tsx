@@ -19,6 +19,7 @@ import type {
 } from "../types";
 import { useFileBrowser } from "./FileBrowser";
 import { ConfirmDialog } from "./ConfirmDialog";
+import { UiIcon } from "./icons";
 import type { ScriptEditorApi } from "../scriptEditor";
 import type { Theme } from "../theme";
 import {
@@ -510,7 +511,10 @@ export function ScriptsModal({
           </button>
           <button
             type="button"
-            class="mini"
+            class="mini icon-btn"
+            aria-label={
+              fullscreen ? "Collapse the editor" : "Expand the editor"
+            }
             title={
               fullscreen
                 ? "Leave the full-screen editor (Esc)"
@@ -518,7 +522,7 @@ export function ScriptsModal({
             }
             onClick={() => setFullscreen((value) => !value)}
           >
-            {fullscreen ? "Collapse" : "Expand"}
+            <UiIcon name={fullscreen ? "collapse" : "expand"} />
           </button>
         </ModalHeader>
 
