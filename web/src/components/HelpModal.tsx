@@ -78,15 +78,14 @@ export function HelpModal({ onClose }: Props) {
         class="help-modal"
         role="dialog"
         aria-modal="true"
-        aria-label="Help"
+        aria-label="Keyboard shortcuts"
         onMouseDown={(event) => event.stopPropagation()}
       >
-        <ModalHeader title="Roxy CAN" onClose={onClose} />
+        <ModalHeader title="Keyboard shortcuts" onClose={onClose} />
         <div class="help-body">
           <p class="hint">
-            Roxy CAN is a CAN / FlexRay / Ethernet simulation and analysis tool
-            running entirely in this local web UI. Files and hardware live on
-            the host.
+            Press <strong>?</strong> at any time outside a dialog or editor to
+            reopen this list. Keys are grouped by the context where they apply.
           </p>
           {SHORTCUT_GROUPS.map((group) => (
             <section class="help-shortcut-group" key={group.title}>

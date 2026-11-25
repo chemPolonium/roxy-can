@@ -288,7 +288,7 @@ string/union 的 length-field 宽度与 alignment 会读取 SOMEIP-TRANSFORMATIO
 - **表里的两条游标 A/B**：行右键 → **Set cursor A / B** 把游标落在这一行的时刻（两种总线都放，一次右键只动一条），被标的行带底色（A 琥珀、B 青蓝，与 Signals 曲线同两色），表头读 `A … B … Δt +221.433 ms`（时刻给到微秒）。垃圾桶图标（Clear cursors）只在有东西可清时出现。
 - **垃圾桶图标（Clear）** 清空显示与归档，测量照常进行（录制与逐报文计数都不动），过滤器不重置。
 - FR 子行是否展开是会话状态；Trace 选中行、Trace 光标位置与高级 filter 随工程保存。
-- **快捷键**：全局 F9 启动/停止，F10 暂停/继续，F2 聚焦当前过滤框（Esc 清空），Alt+1…4 切布局（Standard），Alt+Shift+1…2 在聚焦槽位显示 Trace / Messages，Alt+Shift+P 切 Standard / Panel 模式（避开浏览器占用的 Ctrl+1…3）；Ctrl+K 命令面板、Ctrl+O 打开工程、Ctrl+S 保存工程、Ctrl+Shift+S 另存、Ctrl+E 导出、Ctrl+G 跳时间、Ctrl+Q 退出确认。**弹窗或菜单打开时全局快捷键暂停**；脚本编辑器内 F9 是断点、Ctrl+S 保存 `.rxcan`，与全局含义不同。
+- **快捷键**：全局 F9 启动/停止，F10 暂停/继续，F2 聚焦当前过滤框（Esc 清空），Alt+1…4 切布局（Standard），Alt+Shift+1…2 在聚焦槽位显示 Trace / Messages，Alt+Shift+P 切 Standard / Panel 模式（避开浏览器占用的 Ctrl+1…3）；Ctrl+K 命令面板、Ctrl+O 打开工程、Ctrl+S 保存工程、Ctrl+Shift+S 另存、Ctrl+E 导出、Ctrl+G 跳时间、Ctrl+Q 退出确认，**?** 打开完整快捷键列表。**弹窗或菜单打开时全局快捷键暂停**；脚本编辑器内 F9 是断点、Ctrl+S 保存 `.rxcan`，与全局含义不同。
 - **拖放**：DBC Explorer 的信号可拖到 Signals / Monitor / Data 页；目标页当前是哪个面板就加到哪个观察器。工程、ASC/BLF/PCAP/PCAPNG 与 `.rxpanel` 可直接拖进窗口；DBC/ARXML/FIBEX 拖到 Buses 弹窗。
 
 ## 工程文件

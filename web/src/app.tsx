@@ -1622,7 +1622,7 @@ export function App() {
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
-      if (event.defaultPrevented) return;
+      if (event.defaultPrevented || event.isComposing) return;
       const target = event.target as HTMLElement | null;
       // App-wide shortcuts belong to the workspace. Dialogs, menus and their
       // editors own the keyboard while they are open: in particular F9 is a
@@ -1632,7 +1632,18 @@ export function App() {
           ".modal-backdrop, .app-menu, .row-menu, .filter-popover",
         ),
       );
-      if (globalShortcutsBlocked(target, overlayOpen)) return;
+      // Check both the event target and the focused element. A synthetic or
+      // bubbled event must not turn a literal "?" in a name or script into
+      // help while an editable surface still owns the caret.
+      const active = document.activeElement;
+      if (
+        globalShortcutsBlocked(target, overlayOpen) ||
+        (active instanceof HTMLElement &&
+          active !== target &&
+          globalShortcutsBlocked(active, false))
+      ) {
+        return;
+      }
       const mod = event.ctrlKey || event.metaKey;
       const key = event.key.toLowerCase();
       if (event.altKey && event.shiftKey && key === "p") {
@@ -1710,7 +1721,11 @@ export function App() {
       } else if (mod && key === "q") {
         event.preventDefault();
         setConfirmExit(true);
-      } else if (event.key === "?") {
+      } else if (
+        event.key === "?" ||
+        (!mod && event.shiftKey && event.key === "/")
+      ) {
+        event.preventDefault();
         setHelpOpen(true);
       }
     };
@@ -3505,6 +3520,7 @@ export function App() {
                     <path d="M4 6.5h.01M6.5 6.5h.01M9 6.5h.01M11.5 6.5h.01M4 9.5h8" />
                   </svg>
                   <span>Shortcuts</span>
+                  <span class="brand-menu-state">?</span>
                 </button>
                 <button
                   type="button"
