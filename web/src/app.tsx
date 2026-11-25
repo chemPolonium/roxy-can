@@ -5284,6 +5284,7 @@ export function App() {
           }
           confirmLabel="Exit"
           danger
+          dismissable={false}
           onConfirm={() => {
             setConfirmExit(false);
             void run({ type: "shutdown" });
