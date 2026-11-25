@@ -153,6 +153,7 @@ import {
   baseName,
   clamp,
   fileNameOf,
+  globalShortcutsBlocked,
   loadLocalRecentProjects,
   loadView,
   mapReferenceColumns,
@@ -1621,16 +1622,17 @@ export function App() {
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
+      if (event.defaultPrevented) return;
       const target = event.target as HTMLElement | null;
-      if (
-        target &&
-        (target.tagName === "INPUT" ||
-          target.tagName === "TEXTAREA" ||
-          target.tagName === "SELECT" ||
-          target.isContentEditable)
-      ) {
-        return;
-      }
+      // App-wide shortcuts belong to the workspace. Dialogs, menus and their
+      // editors own the keyboard while they are open: in particular F9 is a
+      // breakpoint and Ctrl+S saves the .rxcan in the script editor.
+      const overlayOpen = Boolean(
+        document.querySelector(
+          ".modal-backdrop, .app-menu, .row-menu, .filter-popover",
+        ),
+      );
+      if (globalShortcutsBlocked(target, overlayOpen)) return;
       const mod = event.ctrlKey || event.metaKey;
       const key = event.key.toLowerCase();
       if (event.altKey && event.shiftKey && key === "p") {

@@ -80,7 +80,7 @@ roxy-can -h                               完整帮助
 - 每个节点脚本的源码都存在独立的 `.rxcan` 文件里，`.rxproj` 只保存工程相对路径；源码不写进工程 JSON。**Load…** 链接已有文件，**Save As…** 另存并链接，**Save** 写回已链接文件；三者都只动文件，不会把源码应用到节点。未链接文件的节点不能 Apply，保存工程也会拒绝并说明原因；文件丢失时工程照常打开，节点停用并在编辑器里显示带路径的错误。
 - **Check** 只编译并列出静态收发事实与装配层诊断；**Apply** 才把检查通过的源码应用到节点（测量中即时重编译重启该节点）。**Enabled** 是单独的运行时开关，不随保存或检查变化。状态行常驻显示文件/检查/应用三种状态，按钮禁用原因写在附近。
 - 编辑器三栏：左栏**大纲**（每个处理器一行，点击跳转）与**收发**（静态事实表：发送集按 DBC 归属标 `*` 本节点 / `!` 他节点 / `-` 不在库，接收集、系统变量、响应映射）；中栏源码与日志；右栏**函数 / SysVar / 报文 / FlexRay** 四个插入页——FlexRay 单独一页是因为它长（一个真实集群动辄上百个槽），每行写成"`名字 (FRn)` slot N · 帧名"，点选插入 `fr_sig(n, N, "名")`，三个参数都不用另开窗口去查。输入 `Message.`、`FR0.`、`FR.集群名.`、`ETH0.`、`ETH0.帧名.` 或 `ETH.集群名.帧名.` 会自动列出名字；**Alt+/** 手动唤出补全（Ctrl+Space 在中文输入法下是切换中英文的快捷键，所以不用它）。
-- 源码区基于 CodeMirror 6：行号、语法高亮、搜索/替换（Ctrl+F）、括号匹配与自动闭合、代码折叠、撤销/重做，并跟随应用的明暗主题；**Tab 接受选中的补全项，没有补全时缩进**，Shift+Tab 反缩进，F9 断点，Alt+/ 补全，Enter 接受选中的补全项。右上角 **?** 打开快捷键说明；编辑区内 **Ctrl+S** 保存脚本文件，未链接文件时走 Save As；保存工程仍用顶栏 **Save** 或编辑区外的 Ctrl+S。
+- 源码区基于 CodeMirror 6：行号、语法高亮、搜索/替换（Ctrl+F）、括号匹配与自动闭合、代码折叠、撤销/重做，并跟随应用的明暗主题；**Tab 接受选中的补全项，没有补全时缩进**，Shift+Tab 反缩进，F9 断点，Alt+/ 补全，Enter 接受选中的补全项。右上角 **?** 打开快捷键说明；编辑区内 **F9** 只切换断点，不会启动/停止测量；**Ctrl+S** 只保存脚本文件（未链接时走 Save As），不会保存工程。保存工程用顶栏 **Save**，或关闭脚本窗口后在普通工作区按 Ctrl+S；弹窗或菜单打开时全局快捷键暂停，由当前窗口自己处理按键。
 - 事件：`on start`、`on message <id>`（`*` 收所有数据帧）、`on extended message <id>`、`on fr slot <槽>` / `on fr <路> slot <槽>`（FlexRay 帧到达；不写路号就是所有路）、`on errorFrame`、`on timer <ms>`（周期）、`on timer "名"`（一次性，`set_timer` 武装、`cancel_timer` 取消）。
 - **FlexRay 事件里的帧上下文**：`frame_id()` 是槽号、`frame_dlc()` 是字节数、`frame_byte(i)` 读载荷、`fr_cycle()` 是这次到达的通信周期号。一个静态槽按周期相位轮流排好几帧，处理器读到的是**实际到达那一帧**。`send(frame_id())` 在这种处理器里是编译错误——把槽号当 CAN id 发出去是两套编号混用最典型的错。
 - 节点会收到**自己发出的帧**：通配或同 ID 处理器里无条件发帧会自激成环，用 `frame_id()` 过滤。
@@ -288,7 +288,7 @@ string/union 的 length-field 宽度与 alignment 会读取 SOMEIP-TRANSFORMATIO
 - **表里的两条游标 A/B**：行右键 → **Set cursor A / B** 把游标落在这一行的时刻（两种总线都放，一次右键只动一条），被标的行带底色（A 琥珀、B 青蓝，与 Signals 曲线同两色），表头读 `A … B … Δt +221.433 ms`（时刻给到微秒）。垃圾桶图标（Clear cursors）只在有东西可清时出现。
 - **垃圾桶图标（Clear）** 清空显示与归档，测量照常进行（录制与逐报文计数都不动），过滤器不重置。
 - FR 子行是否展开是会话状态；Trace 选中行、Trace 光标位置与高级 filter 随工程保存。
-- **快捷键**：F9 启动/停止，F10 暂停/继续，F2 聚焦当前过滤框（Esc 清空），Alt+1…4 切布局（Standard），Alt+Shift+1…2 在聚焦槽位显示 Trace / Messages，Alt+Shift+P 切 Standard / Panel 模式（避开浏览器占用的 Ctrl+1…3），Ctrl+Q 打开退出确认。
+- **快捷键**：全局 F9 启动/停止，F10 暂停/继续，F2 聚焦当前过滤框（Esc 清空），Alt+1…4 切布局（Standard），Alt+Shift+1…2 在聚焦槽位显示 Trace / Messages，Alt+Shift+P 切 Standard / Panel 模式（避开浏览器占用的 Ctrl+1…3）；Ctrl+K 命令面板、Ctrl+O 打开工程、Ctrl+S 保存工程、Ctrl+Shift+S 另存、Ctrl+E 导出、Ctrl+G 跳时间、Ctrl+Q 退出确认。**弹窗或菜单打开时全局快捷键暂停**；脚本编辑器内 F9 是断点、Ctrl+S 保存 `.rxcan`，与全局含义不同。
 - **拖放**：DBC Explorer 的信号可拖到 Signals / Monitor / Data 页；目标页当前是哪个面板就加到哪个观察器。工程、ASC/BLF/PCAP/PCAPNG 与 `.rxpanel` 可直接拖进窗口；DBC/ARXML/FIBEX 拖到 Buses 弹窗。
 
 ## 工程文件

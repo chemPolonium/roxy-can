@@ -26,6 +26,22 @@ export const VIEW_KEY = "roxy-can-web.view";
 export const TRACE_CAP = 50_000;
 export const SIGNAL_CAP = 12_000;
 
+/// App-wide shortcuts stay out of typing fields and overlays. The script
+/// editor and dialogs then own their own keymaps (F9 breakpoint, Ctrl+S file).
+export function globalShortcutsBlocked(
+  target: Pick<HTMLElement, "tagName" | "isContentEditable"> | null,
+  overlayOpen: boolean,
+): boolean {
+  if (overlayOpen) return true;
+  if (!target) return false;
+  return (
+    target.isContentEditable ||
+    target.tagName === "INPUT" ||
+    target.tagName === "TEXTAREA" ||
+    target.tagName === "SELECT"
+  );
+}
+
 interface LegacyView {
   mainView?: unknown;
   tab?: unknown;

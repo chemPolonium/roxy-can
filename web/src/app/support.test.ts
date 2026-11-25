@@ -1,5 +1,27 @@
 import { describe, expect, it } from "vitest";
-import { panelMeta } from "./support";
+import { globalShortcutsBlocked, panelMeta } from "./support";
+
+describe("global shortcut context", () => {
+  it("ignores fields, contenteditable and open overlays", () => {
+    expect(globalShortcutsBlocked(null, false)).toBe(false);
+    expect(
+      globalShortcutsBlocked({ tagName: "DIV", isContentEditable: false }, false),
+    ).toBe(false);
+    expect(
+      globalShortcutsBlocked({ tagName: "INPUT", isContentEditable: false }, false),
+    ).toBe(true);
+    expect(
+      globalShortcutsBlocked({ tagName: "TEXTAREA", isContentEditable: false }, false),
+    ).toBe(true);
+    expect(
+      globalShortcutsBlocked({ tagName: "SELECT", isContentEditable: false }, false),
+    ).toBe(true);
+    expect(
+      globalShortcutsBlocked({ tagName: "DIV", isContentEditable: true }, false),
+    ).toBe(true);
+    expect(globalShortcutsBlocked(null, true)).toBe(true);
+  });
+});
 
 describe("panel header counts", () => {
   it("uses one noun form for zero, one and many", () => {

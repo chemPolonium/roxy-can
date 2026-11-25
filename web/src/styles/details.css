@@ -836,6 +836,15 @@ button.danger:hover:not(:disabled) {
   padding: 12px;
 }
 
+.help-shortcut-group h3 {
+  margin: 0 0 3px;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
 .help-keys {
   width: 100%;
   border-collapse: collapse;
