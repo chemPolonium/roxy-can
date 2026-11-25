@@ -421,9 +421,18 @@
 [data-theme="light"] .state-band-range,
 [data-theme="light"] .spec-periodic,
 [data-theme="light"] .sv-range,
-[data-theme="light"] .script-log,
 [data-theme="light"] .sv-meta em {
   color: #526174;
+}
+
+[data-theme="light"] .script-log {
+  border-color: var(--line);
+  background: var(--panel-2);
+  color: #526174;
+}
+
+[data-theme="light"] .script-log.bad {
+  border-color: var(--error);
 }
 
 [data-theme="light"] .proto-row em,
