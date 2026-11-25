@@ -8,9 +8,9 @@ interface Props {
   confirmLabel?: string;
   cancelLabel?: string;
   danger?: boolean;
-  /// False for confirmations with only one safe outcome (e.g. Exit): no X,
-  /// no Cancel, and no backdrop/Escape dismissal.
-  dismissable?: boolean;
+  /// The X in the header duplicates Cancel; hide it when a dialog already
+  /// has a Cancel button in the footer.
+  showClose?: boolean;
   onConfirm: () => void;
   onClose: () => void;
 }
@@ -23,7 +23,7 @@ export function ConfirmDialog({
   confirmLabel = "Remove",
   cancelLabel = "Cancel",
   danger = false,
-  dismissable = true,
+  showClose = true,
   onConfirm,
   onClose,
 }: Props) {
@@ -32,14 +32,14 @@ export function ConfirmDialog({
       if (event.key !== "Escape") return;
       event.preventDefault();
       event.stopImmediatePropagation();
-      if (dismissable) onClose();
+      onClose();
     };
     window.addEventListener("keydown", close, true);
     return () => window.removeEventListener("keydown", close, true);
-  }, [dismissable, onClose]);
+  }, [onClose]);
 
   return (
-    <div class="modal-backdrop" onMouseDown={dismissable ? onClose : undefined}>
+    <div class="modal-backdrop" onMouseDown={onClose}>
       <div
         class="confirm-modal"
         role="dialog"
@@ -47,14 +47,12 @@ export function ConfirmDialog({
         aria-label={title}
         onMouseDown={(event) => event.stopPropagation()}
       >
-        <ModalHeader title={title} onClose={onClose} showClose={dismissable} />
+        <ModalHeader title={title} onClose={onClose} showClose={showClose} />
         <div class="confirm-body">{message}</div>
         <footer class="confirm-actions">
-          {dismissable && (
-            <button type="button" onClick={onClose}>
-              {cancelLabel}
-            </button>
-          )}
+          <button type="button" onClick={onClose}>
+            {cancelLabel}
+          </button>
           <button
             type="button"
             class={danger ? "danger" : "primary"}
