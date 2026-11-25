@@ -163,7 +163,12 @@ fn seed_sample_band_set(app: &mut App) {
                 text: "cruise".to_string(),
                 color: Some(2),
             },
-            crate::band::Band::final_band(Some(3)),
+            crate::band::Band {
+                upper: None,
+                inclusive: false,
+                text: "boost".to_string(),
+                color: Some(3),
+            },
         ],
     });
 }

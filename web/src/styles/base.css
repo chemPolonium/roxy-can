@@ -1724,6 +1724,8 @@ body.col-resizing {
 }
 
 .page-value {
+  /* Numbers and BandSet text share one size; only the typeface differs. */
+  --value-font-size: clamp(12px, min(calc(85cqh - 15.3px), 25cqw), 72px);
   display: flex;
   width: 100%;
   height: 100%;
@@ -1772,9 +1774,7 @@ body.col-resizing {
   overflow: hidden;
   color: #cdd8e4;
   font-family: "Cascadia Mono", Consolas, "Courier New", monospace;
-  /* Leave the label/unit row and padding, then use 85% of the remaining
-     height; cap by width so long values still fit. */
-  font-size: clamp(12px, min(calc(85cqh - 15.3px), 25cqw), 72px);
+  font-size: var(--value-font-size);
   font-weight: 600;
   line-height: 1;
   text-overflow: ellipsis;
@@ -1784,7 +1784,7 @@ body.col-resizing {
 
 .page-value strong.state {
   font-family: "Segoe UI", sans-serif;
-  font-size: clamp(11px, min(calc(52cqh - 8px), 7cqw), 22px);
+  font-size: var(--value-font-size);
   font-weight: 600;
   letter-spacing: 0.01em;
   font-variant-numeric: normal;
