@@ -13,6 +13,8 @@ interface Props {
   /// keeps a menu opened inside an overflow-clipped panel usable, and flips
   /// it above the trigger when there is more room there.
   fixed?: boolean;
+  /// Preferred width for a fixed menu; defaults to the standard dropdown width.
+  fixedWidth?: number;
   buttonClass?: string;
   ariaLabel?: string;
   title?: string;
@@ -29,6 +31,7 @@ export function MenuButton({
   className = "",
   menuClass = "",
   fixed = false,
+  fixedWidth,
   buttonClass,
   ariaLabel,
   title,
@@ -48,7 +51,9 @@ export function MenuButton({
     const place = () => {
       const rect = trigger.current?.getBoundingClientRect();
       if (!rect) return;
-      const width = Math.min(300, Math.max(200, window.innerWidth - 16));
+      const width = fixedWidth
+        ? Math.min(fixedWidth, Math.max(120, window.innerWidth - 16))
+        : Math.min(300, Math.max(200, window.innerWidth - 16));
       const left = Math.max(
         8,
         Math.min(rect.left, window.innerWidth - width - 8),
@@ -71,7 +76,7 @@ export function MenuButton({
     place();
     window.addEventListener("resize", place);
     return () => window.removeEventListener("resize", place);
-  }, [open, fixed]);
+  }, [open, fixed, fixedWidth]);
 
   useEffect(() => {
     if (!open) return;

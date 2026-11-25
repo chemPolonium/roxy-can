@@ -153,7 +153,6 @@ import {
   baseName,
   clamp,
   fileNameOf,
-  handleMenuKey,
   loadLocalRecentProjects,
   loadView,
   mapReferenceColumns,
@@ -300,10 +299,7 @@ export function App() {
   const [hardwareError, setHardwareError] = useState("");
 
   const [theme, setTheme] = useState<Theme>(loadTheme);
-  const [menuOpen, setMenuOpen] = useState(false);
   const [confirmExit, setConfirmExit] = useState(false);
-  const brandMenuRef = useRef<HTMLDivElement>(null);
-  const brandTriggerRef = useRef<HTMLButtonElement | null>(null);
   const [signalView, setSignalView] = useState<SignalView>(
     savedView.signalView ?? { windowS: 30, endS: null },
   );
@@ -704,34 +700,6 @@ export function App() {
     },
     [],
   );
-
-  useEffect(() => {
-    if (!menuOpen) return;
-    const close = (event: PointerEvent) => {
-      if (
-        !(event.target instanceof Element) ||
-        !event.target.closest(".brand-menu")
-      ) {
-        setMenuOpen(false);
-      }
-    };
-    const escape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setMenuOpen(false);
-    };
-    window.addEventListener("pointerdown", close);
-    window.addEventListener("keydown", escape);
-    return () => {
-      window.removeEventListener("pointerdown", close);
-      window.removeEventListener("keydown", escape);
-    };
-  }, [menuOpen]);
-
-  useEffect(() => {
-    if (!menuOpen) return;
-    brandMenuRef.current
-      ?.querySelector<HTMLButtonElement>("button:not(:disabled)")
-      ?.focus();
-  }, [menuOpen]);
 
   const syncPageOverflow = () => {
     const el = pageSwitchRef.current;
@@ -1739,7 +1707,6 @@ export function App() {
         setTimeJumpOpen(true);
       } else if (mod && key === "q") {
         event.preventDefault();
-        setMenuOpen(false);
         setConfirmExit(true);
       } else if (event.key === "?") {
         setHelpOpen(true);
@@ -3425,43 +3392,23 @@ export function App() {
     <div class={`app ${state && !online ? "offline" : ""}`}>
       <header class="topbar">
         <div class="brand">
-          <div class="brand-menu">
-            <button
-              type="button"
-              class="logo"
-              aria-label="Roxy CAN menu"
-              aria-haspopup="menu"
-              aria-expanded={menuOpen}
-              aria-controls="brand-menu-panel"
-              title="Menu"
-              onClick={(event) => {
-                brandTriggerRef.current = event.currentTarget;
-                setMenuOpen((open) => !open);
-              }}
-            >
-              R
-            </button>
-            {menuOpen && (
-              <div
-                class="app-menu app-menu-brand"
-                id="brand-menu-panel"
-                role="menu"
-                ref={brandMenuRef}
-                onKeyDown={(event) =>
-                  handleMenuKey(
-                    event,
-                    brandMenuRef.current,
-                    () => setMenuOpen(false),
-                    brandTriggerRef.current,
-                  )
-                }
-              >
+          <MenuButton
+            className="brand-menu"
+            buttonClass="logo"
+            ariaLabel="Roxy CAN menu"
+            title="Menu"
+            menuClass="app-menu-brand"
+            menuLabel="Roxy CAN"
+            label="R"
+          >
+            {(close) => (
+              <>
                 <button
                   type="button"
                   role="menuitem"
                   title="Pick a .rxproj on this machine"
                   onClick={() => {
-                    setMenuOpen(false);
+                    close();
                     void openProjectPicker();
                   }}
                 >
@@ -3482,7 +3429,7 @@ export function App() {
                         title={path}
                         onClick={() => {
                           loadProject(path);
-                          setMenuOpen(false);
+                          close();
                         }}
                       >
                         <svg viewBox="0 0 16 16" aria-hidden="true">
@@ -3499,7 +3446,7 @@ export function App() {
                   role="menuitem"
                   title="Write a file-based sample project to a folder and open it"
                   onClick={() => {
-                    setMenuOpen(false);
+                    close();
                     void createSampleProject();
                   }}
                 >
@@ -3515,7 +3462,7 @@ export function App() {
                   role="menuitem"
                   title="Save the current project; asks for a file when untitled"
                   onClick={() => {
-                    setMenuOpen(false);
+                    close();
                     if (state?.projectPath) void saveProject(null);
                     else void saveProjectAs();
                   }}
@@ -3532,7 +3479,7 @@ export function App() {
                   role="menuitem"
                   title="Save the current project under a new name"
                   onClick={() => {
-                    setMenuOpen(false);
+                    close();
                     void saveProjectAs();
                   }}
                 >
@@ -3548,7 +3495,7 @@ export function App() {
                   role="menuitem"
                   onClick={() => {
                     setHelpOpen(true);
-                    setMenuOpen(false);
+                    close();
                   }}
                 >
                   <svg viewBox="0 0 16 16" aria-hidden="true">
@@ -3563,7 +3510,7 @@ export function App() {
                   aria-checked={theme === "dark"}
                   onClick={() => {
                     setTheme(theme === "dark" ? "light" : "dark");
-                    setMenuOpen(false);
+                    close();
                   }}
                 >
                   <svg viewBox="0 0 16 16" aria-hidden="true">
@@ -3580,7 +3527,7 @@ export function App() {
                   role="menuitem"
                   title="Stop the roxy-can web server and exit"
                   onClick={() => {
-                    setMenuOpen(false);
+                    close();
                     setConfirmExit(true);
                   }}
                 >
@@ -3590,9 +3537,9 @@ export function App() {
                   </svg>
                   <span>Exit</span>
                 </button>
-              </div>
+              </>
             )}
-          </div>
+          </MenuButton>
           <div class="brand-text">
             <h1>
               Roxy CAN
