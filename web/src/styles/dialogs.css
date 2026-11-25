@@ -1735,11 +1735,18 @@ button.mini.on {
   align-items: center;
   gap: 8px;
   margin-left: auto;
-  overflow: hidden;
+  /* Drop-downs from this row must be able to leave the header; truncation
+     belongs on the text span instead of the whole action row. */
+  overflow: visible;
   color: var(--muted);
   font-size: 10.5px;
-  text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.modal-head-actions > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .modal-head > button {
