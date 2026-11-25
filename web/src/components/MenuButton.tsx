@@ -62,8 +62,8 @@ export function MenuButton({
         position: "fixed",
         left,
         width,
-        top: up ? "auto" : rect.bottom + 4,
-        bottom: up ? window.innerHeight - rect.top + 4 : "auto",
+        top: up ? "auto" : rect.bottom,
+        bottom: up ? window.innerHeight - rect.top : "auto",
         maxHeight: Math.max(160, up ? above : below),
         overflow: "auto",
       });

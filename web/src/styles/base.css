@@ -650,20 +650,20 @@ select:disabled {
 }
 
 .app-menu-brand {
-  top: 34px;
+  top: 100%;
   left: 0;
   z-index: 90;
   min-width: 178px;
 }
 
 .app-menu-top {
-  top: 30px;
+  top: 100%;
   right: 0;
   min-width: 150px;
 }
 
 .app-menu-trig {
-  top: calc(100% + 6px);
+  top: 100%;
   right: 0;
   z-index: 60;
   min-width: 232px;

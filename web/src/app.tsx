@@ -302,11 +302,8 @@ export function App() {
   const [theme, setTheme] = useState<Theme>(loadTheme);
   const [menuOpen, setMenuOpen] = useState(false);
   const [confirmExit, setConfirmExit] = useState(false);
-  const [runModeOpen, setRunModeOpen] = useState(false);
   const brandMenuRef = useRef<HTMLDivElement>(null);
-  const runModeMenuRef = useRef<HTMLDivElement>(null);
   const brandTriggerRef = useRef<HTMLButtonElement | null>(null);
-  const runModeTriggerRef = useRef<HTMLButtonElement | null>(null);
   const [signalView, setSignalView] = useState<SignalView>(
     savedView.signalView ?? { windowS: 30, endS: null },
   );
@@ -730,39 +727,11 @@ export function App() {
   }, [menuOpen]);
 
   useEffect(() => {
-    if (!runModeOpen) return;
-    const close = (event: PointerEvent) => {
-      if (
-        !(event.target instanceof Element) ||
-        !event.target.closest(".run-mode-menu")
-      ) {
-        setRunModeOpen(false);
-      }
-    };
-    const escape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setRunModeOpen(false);
-    };
-    window.addEventListener("pointerdown", close);
-    window.addEventListener("keydown", escape);
-    return () => {
-      window.removeEventListener("pointerdown", close);
-      window.removeEventListener("keydown", escape);
-    };
-  }, [runModeOpen]);
-
-  useEffect(() => {
     if (!menuOpen) return;
     brandMenuRef.current
       ?.querySelector<HTMLButtonElement>("button:not(:disabled)")
       ?.focus();
   }, [menuOpen]);
-
-  useEffect(() => {
-    if (!runModeOpen) return;
-    runModeMenuRef.current
-      ?.querySelector<HTMLButtonElement>("button:not(:disabled)")
-      ?.focus();
-  }, [runModeOpen]);
 
   const syncPageOverflow = () => {
     const el = pageSwitchRef.current;
@@ -2396,7 +2365,6 @@ export function App() {
     });
   const busLive = !replaying && Boolean(state?.realBus) && attachedBuses > 0;
   const chooseRunMode = (offline: boolean) => {
-    setRunModeOpen(false);
     const target = offline ? "replay" : "simulation";
     if (state?.runMode !== target) {
       void run({ type: "set_run_mode", mode: target });
@@ -3885,47 +3853,35 @@ export function App() {
           >
             Buses
           </button>
-          <div class="top-menu run-mode-menu">
-            <button
-              type="button"
-              disabled={!online}
-              aria-haspopup="menu"
-              aria-expanded={runModeOpen}
-              title={
-                replaying
-                  ? "Replay plays the active recording; choose files in Setup"
-                  : "Simulation runs generators and follows the bus mode"
-              }
-              onClick={(event) => {
-                runModeTriggerRef.current = event.currentTarget;
-                setRunModeOpen((open) => !open);
-              }}
-            >
-              {runModeLabel}
-              <span class="top-menu-caret" aria-hidden="true">
-                ▾
-              </span>
-            </button>
-            {runModeOpen && (
-              <div
-                class="app-menu app-menu-top mode-panel"
-                role="menu"
-                aria-label="Run mode"
-                ref={runModeMenuRef}
-                onKeyDown={(event) =>
-                  handleMenuKey(
-                    event,
-                    runModeMenuRef.current,
-                    () => setRunModeOpen(false),
-                    runModeTriggerRef.current,
-                  )
-                }
-              >
+          <MenuButton
+            className="top-menu run-mode-menu"
+            menuClass="app-menu-top mode-panel"
+            menuLabel="Run mode"
+            disabled={!online}
+            title={
+              replaying
+                ? "Replay plays the active recording; choose files in Setup"
+                : "Simulation runs generators and follows the bus mode"
+            }
+            label={
+              <>
+                {runModeLabel}
+                <span class="top-menu-caret" aria-hidden="true">
+                  ▾
+                </span>
+              </>
+            }
+          >
+            {(close) => (
+              <>
                 <button
                   type="button"
                   role="menuitemradio"
                   aria-checked={!replaying}
-                  onClick={() => chooseRunMode(false)}
+                  onClick={() => {
+                    chooseRunMode(false);
+                    close();
+                  }}
                 >
                   <span class="menu-check" aria-hidden="true">
                     {!replaying ? "✓" : ""}
@@ -3939,7 +3895,10 @@ export function App() {
                   type="button"
                   role="menuitemradio"
                   aria-checked={replaying}
-                  onClick={() => chooseRunMode(true)}
+                  onClick={() => {
+                    chooseRunMode(true);
+                    close();
+                  }}
                 >
                   <span class="menu-check" aria-hidden="true">
                     {replaying ? "✓" : ""}
@@ -3949,9 +3908,9 @@ export function App() {
                     <small>Play the active recording; choose files in Setup.</small>
                   </span>
                 </button>
-              </div>
+              </>
             )}
-          </div>
+          </MenuButton>
           <button
             type="button"
             class={`record-button ${
