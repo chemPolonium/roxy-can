@@ -2876,7 +2876,7 @@ export function App() {
     },
     {
       id: "show-signals",
-      label: "Show Signals",
+      label: "Show Graphic",
       group: "Pages",
       hint: "Focused slot",
       run: () => revealPanel("signals"),

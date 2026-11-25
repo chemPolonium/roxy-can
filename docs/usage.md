@@ -149,7 +149,7 @@ roxy-can -h                               完整帮助
 - **E2E**：受保护的 CAN/FlexRay/Ethernet 行显示 `E2E Pn`；当 ARXML/DBC 给出 profile、Data ID 和 CRC 位置时，同时校验 CRC（Profile 1/2/4/5/7/11/22/44，Profile 4/5/7/44 需显式 CRC 位置），失败标红并写 `✗`；没有 CRC 位置时只保留计数连续性与 Data ID。
 - **Messages stats**：FR 槽位与 CAN 报文并列（计数、间隔 min/avg/max、占比）。页眉 FilterBar 支持 Label / Bus / Count / Avg cycle / Jitter / Length（数值条件），条件随工程保存；列宽可拖、双击分隔线恢复默认、随工程保存；点表头按该列排序（点击时拍快照，新行仍在最上面）；页宽不够时 Bus（<480px）与 Min/Max（<700px）自动收起，和 Messages 用同一套按槽位宽度的规则。
 - **作用域**下拉有 `FlexRay: <路名>` 一档（与 `Bus: CAN{n}` 分列，因为两套编号不互解）：只看这一路，占比也算这一路的。**Manual 手动勾选的集合**同样能勾槽，与 CAN 报文共用同一份勾选集合。
-- **信号可订阅**：Signals / Data / State / Monitor 都能选 FlexRay 信号，身份就是 `(路, 槽, 信号名)`。
+- **信号可订阅**：Graphic / Data / State / Monitor 都能选 FlexRay 信号，身份就是 `(路, 槽, 信号名)`。
 - **录与放对称**：CANoe 录的 BLF 与 ASC 里的 FlexRay 收帧一并读入；本工具自己录的文件也写同类对象/行，录完再放回来是同一批帧。`--convert` 与 Trace 的 ASC 导出保留 FlexRay 流量。
 - 负载与规格另有口径，见下面"总线统计与规格监视"。
 
@@ -162,7 +162,7 @@ roxy-can -h                               完整帮助
 - **Trace**：以太网帧与 CAN/FlexRay 按时间混排。Bus 列 `ETHn`，ID 列 EtherType，Name 列矩阵帧名（无唯一匹配时是 MAC 对）；右键可把该 L2 flow 加入本窗口的 Manual 选择。作用域多一档 `Ethernet: ETHn`。
 - **实时 vs 会话**：没有挂实时口时，Panel 的 **Send message** 只注入本会话并进入当前录制；挂了实时口且 Real bus 打开时，帧走线上，Trace 里由 Npcap 回读。
 - **Messages stats**：每个 L2 flow 一行，MAC、VLAN、EtherType、计数与周期；CSV 导出同样包含。
-- **订阅**：以太网信号进 Signals / Data / State / Monitor，身份是 `(ETH 路, 帧名, 信号名)`，随工程保存；作用域为某个 Ethernet 路或 Manual flow 时 Messages stats 也按同一规则收窄。
+- **订阅**：以太网信号进 Graphic / Data / State / Monitor，身份是 `(ETH 路, 帧名, 信号名)`，随工程保存；作用域为某个 Ethernet 路或 Manual flow 时 Messages stats 也按同一规则收窄。
 - **Channel map**：抓包工具的以太网 channel 有单独一张表，先映射到工程的 `ETHn` 再匹配矩阵、解码和聚合。
 - **导出**：Trace 窗口的下载图标（Export）按扩展名选格式——`.asc` 写 CAN/FlexRay；`.pcap` 写经典 PCAP（LINKTYPE_ETHERNET，保留 MAC、VLAN TPID（含 0x88A8）、EtherType 和载荷，不写 FCS；经典 PCAP 没有方向位，Rx/Tx 都按线上帧导出）。Messages stats 的 CSV 里以太网行把 EtherType 放在 `id` 列、VLAN 写进 `name` 列。
 
@@ -186,7 +186,7 @@ roxy-can -h                               完整帮助
 - **游标 A/B**（曲线区的旗标图标）：点一下在可见数据中点放一条游标（依次标 A、B、C…，Δt 取 A/B 两条），按住游标线拖动微调，垃圾桶图标（Clear）二次确认后清掉全部。右上角读数给 `A`/`B` 两个时刻与 **Δt**（自动换单位，B 在 A 前就读负数），下面每个 **Plot** 或 **Read** 信号一行 `名字 A值 → B值 Δ差值`。
 - **Read 信号**：Signals 选择器里每个信号都有 **Plot / Read** 两段式模式开关。Read 只订阅、不画 lane，但读数表始终存在：没有游标时显示 **Live values** 与最新值（列头 `Now`），有游标时切到游标值，A/B 时一起显示 A/B/Δ 与区间统计。点当前模式可取消，切换另一段直接换模式，Ctrl-click 信号名也能切换 Read。图上一个 lane 都没有时仍可拖游标读数，Read 集合随工程 workspace 保存。
 - **大库选择**：选择器默认按报文收起，只先列出 bus / frame；点报文头展开信号，搜索时自动展开命中的报文。展开后的帧头有 **All / None**，按当前可见信号批量加入或移除；曲线选择器一次加入超过 8 条时先确认，避免误开一屏 lane。顶部 **Selected** 区汇总已选信号和只读信号，点一下可移除，**Selected only** 只显示当前已选/已读项。DBC Explorer 同样默认收起报文，并提供 **In use only** 过滤已加入曲线或 Monitor 的信号。
-- **Maximize 读数**：Signals 页最大化时读数表变成左侧竖栏，信号名与 A/B/Δ 值同行紧挨，图表占右侧；未最大化仍保留图下方的读数表。
+- **Maximize 读数**：Graphic 页最大化时读数表变成左侧竖栏，信号名与 A/B/Δ 值同行紧挨，图表占右侧；未最大化仍保留图下方的读数表。
 - 游标记的是**时间**：平移、缩放、实时推进都让线跟着视图走，标的点不动；跑出视野的游标不画线，时刻仍留在读数里。没打上的那条印 `-`，没有样本的时刻也印 `-`——不把 0 当成一个读数显示。
 - **导出图片**（页眉相机图标）：把当前图表区按原分辨率存成 PNG——曲线、lane 名、游标与 Δt 读数、LIVE/HOLD 标记都在图里，写报告或提报障单直接贴；文件名带时间戳。
 - **过滤**：页眉 FilterBar 按 Signal / Label / Bus / Frame / PDU / Unit 过滤当前曲线 lane 和 Read 读数；只影响显示，不取消订阅。条件随工程保存，命名 filter 复用 Signal 族。
@@ -209,7 +209,7 @@ roxy-can -h                               完整帮助
 - 对订阅信号的历史做状态分段：值不变的最长区段为一条带，带内标值。
 - **右键一行 → Remove** 删除状态行；行内 **bands** 编辑分段。
 - 页眉 FilterBar 按 Signal / Bus / Frame 等条件过滤状态带；只影响显示，不取消订阅；条件随工程保存，命名 filter 复用 Signal 族。
-- Signals 页的 lane 菜单或 Data 页里**右键任一信号**即可加入 State Tracker。
+- Graphic 页的 lane 菜单或 Data 页里**右键任一信号**即可加入 State Tracker。
 - 恒定贴实时边缘（回放中跟随播放头）；时间窗 5 秒到 30 分钟预设；**Min ms** 把更短的区段并入前一段（0 = 全部显示）。
 - 默认模式取 VAL_ 值表标签（显示枚举名而非数字）；每个状态可固定颜色，未固定的按会话槽位自动配色。自定义模式用 `<` / `≤` 区段，每段自定义名字与颜色。
 - 可见状态只有 {0,1} 时自动画成二进制方波。
@@ -217,7 +217,7 @@ roxy-can -h                               完整帮助
 
 ## Monitor（轻量监控面板）
 
-- **Monitor 页**（可从任意页眉菜单放到任意槽位）：一行一个信号 `[状态点] 标签 值 单位`，从与 Data/Signals 同一棵选择树里挑（数据库信号 / 派生信号 / 系统变量通吃）。
+- **Monitor 页**（可从任意页眉菜单放到任意槽位）：一行一个信号 `[状态点] 标签 值 单位`，从与 Data/Graphic 同一棵选择树里挑（数据库信号 / 派生信号 / 系统变量通吃）。
 - 页眉搜索框按信号名、帧、PDU、总线或单位过滤（F2 聚焦、Esc 清空），过滤时标题区显示匹配数；旁边的漏斗打开高级 filter：AND/OR 组、NOT，条件可按 Signal / Label / Bus / Frame / PDU / Unit 做 contains、equals 或否定；空条件忽略，和搜索框同时生效，条件随工程保存。行下副行给出 `总线 · Frame / PDU` 路径（信号名就是上面的标题），ARXML 中同名但不同 PDU 的信号可直接分辨。DBC 的 PDU 与帧同名时省略 PDU。
 - **右键一行打开菜单**：**Settings…** 里改小数位 0–3、断点与每段颜色；断点按升序切分值域，每个区间选一个调色板颜色，值落在哪一段就用该段颜色。**Remove** 删除这一行；不再有行内 rule / × 按钮。设置随工程保存。
 - **单列 / 双列**：页眉的 `1 col` / `2 col` 按钮切换每行排一个还是两个信号；双列适合大屏扫读。列数随工程保存。
@@ -233,7 +233,7 @@ roxy-can -h                               完整帮助
 ## 过滤器
 
 - Trace / Messages / Monitor / Data 页眉搜索框旁的 **漏斗** 共用同一套 filter：AND / OR 组、NOT、最多三层嵌套；空条件忽略，搜索框和高级 filter 叠加。
-- 字段按面板族区分：Signal 族（Signal/Label/Bus/Frame/PDU/Unit；Monitor、Data、Signals、State）、Message 族（Name/ID/Kind/Data；Messages）、Message stats 族（Label/Bus/Count/Avg cycle/Jitter/Length）、Trace 族（Direction/Name/ID/Data/Kind/Decoded/Time）。操作符为 contains / does not contain / equals / is not；数值字段（如 Trace 的 Time）另有 `=`、`≥`、`≤`、`>`、`<`。
+- 字段按面板族区分：Signal 族（Signal/Label/Bus/Frame/PDU/Unit；Monitor、Data、Graphic、State）、Message 族（Name/ID/Kind/Data；Messages）、Message stats 族（Label/Bus/Count/Avg cycle/Jitter/Length）、Trace 族（Direction/Name/ID/Data/Kind/Decoded/Time）。操作符为 contains / does not contain / equals / is not；数值字段（如 Trace 的 Time）另有 `=`、`≥`、`≤`、`>`、`<`。
 - **Saved filters**：弹层顶部的下拉列出同族已保存 filter，选中即载入草稿；**Save as…** 起名保存，选中后 **Save** 更新，**Delete** 删除。命名 filter 只作为模板，载入后仍需 **Apply** 才作用到当前面板。
 - 各面板当前高级 filter 与命名 filter 库都随工程保存，并在 `localStorage` 留一份；快速搜索框仍是会话状态。
 

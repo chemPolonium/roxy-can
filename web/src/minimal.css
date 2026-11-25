@@ -334,6 +334,12 @@ select {
   align-items: start;
 }
 
+:root .generator-modal .gen-line button,
+:root .generator-modal .gen-line input {
+  height: 20px;
+  padding: 0 6px;
+}
+
 :root .session-body {
   gap: 10px;
 }

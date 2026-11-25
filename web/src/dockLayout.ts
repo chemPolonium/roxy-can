@@ -48,7 +48,7 @@ export const PANELS: PanelInfo[] = [
   { id: "trace", label: "Trace", group: "Stream", hint: "Raw frames and decoded rows" },
   { id: "messages", label: "Messages", group: "Stream", hint: "Per-ID counts, cycle and payload" },
   { id: "rate", label: "Rate", group: "Live", hint: "Frame rate and bus load, last 12 s" },
-  { id: "signals", label: "Signals", group: "Live", hint: "Signal curves and cursor readout" },
+  { id: "signals", label: "Graphic", group: "Live", hint: "Signal curves and cursor readout" },
   { id: "monitor", label: "Monitor", group: "Live", hint: "Glanceable values with thresholds" },
   { id: "data", label: "Data", group: "Live", hint: "Raw, scaled, min/avg/max per signal" },
   { id: "state", label: "State", group: "Live", hint: "Signal history as state bands" },

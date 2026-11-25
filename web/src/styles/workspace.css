@@ -1736,11 +1736,13 @@ body.row-resizing {
     .monitor-style-button
   ):not(.bandset-picker-trigger):not(.bandset-picker-search):not(
     .page-suggest-menu *
-  ),
+  ):not(.gen-line *),
 .modal-backdrop > :not(.palette) select,
 .modal-backdrop
   > :not(.palette)
-  input:not([type="checkbox"]):not([type="radio"]):not([type="file"]):not([type="hidden"]) {
+  input:not([type="checkbox"]):not([type="radio"]):not([type="file"]):not(
+    [type="hidden"]
+  ):not(.gen-line *) {
   height: 26px;
 }
 

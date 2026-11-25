@@ -19,6 +19,10 @@ BO_ 512 VehicleState: 8 ChassisECU
 
 BO_ 800 BrakeInfo: 8 ChassisECU
  SG_ BrakePressure : 0|16@1+ (0.1,0) [0|100] "bar" Dashboard,EngineECU
+
+BO_ 1600 BeaconStatus: 3 EngineECU
+ SG_ BeaconCounter : 0|8@1+ (1,0) [0|255] "" Dashboard
+ SG_ BeaconMarker : 8|8@1+ (1,0) [0|255] "" Dashboard
 "#;
 
 pub const MOTBUS_DBC: &str = r#"VERSION "DNPBNNNYNNNNNNNNNNNNNNNNNNYYYNYNNNNNNNNNNN/4/%%%/4/'%**4NNN///"

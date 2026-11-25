@@ -57,19 +57,13 @@ const SAMPLE_PROJECT_FILE: &str = "roxy-can-sample.rxproj";
 const SAMPLE_SCRIPT_BAND_SET: &str = "speed-bands";
 const SAMPLE_SCRIPT: &str = r#"let ticks = 0;
 
-fn send_beacon(value) {
-    let msg = frame(EngineStatus);
-    msg.EngineSpeed = value;
-    send_frame(msg);
-}
-
 on timer 200 {
     ticks = (ticks + 1) % 16;
-    send_beacon(1000 + ticks * 400);
+    send(0x640, ticks, 0x5A);
 }
 
 on panel_action("Beacon") {
-    send_beacon(7400);
+    send(0x640, 0xFF, 0xA5);
 }
 "#;
 

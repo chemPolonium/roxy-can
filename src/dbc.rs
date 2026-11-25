@@ -1064,7 +1064,7 @@ BA_ "GenMsgCycleTime" BO_ 258 0;
     fn sample_dbc_parses() {
         let content = std::fs::read_to_string(crate::test_assets::path("sample.dbc")).unwrap();
         let table = load_dbc_str(&content).unwrap();
-        assert_eq!(table.order.len(), 3);
+        assert_eq!(table.order.len(), 4);
         let engine = table.messages.get(&(0x100, false)).unwrap();
         assert_eq!(engine.name, "EngineStatus");
         assert_eq!(engine.signals.len(), 3);
@@ -1086,7 +1086,7 @@ BA_ "GenMsgCycleTime" BO_ 258 0;
     fn node_tx_and_rx_lookups() {
         let content = std::fs::read_to_string(crate::test_assets::path("sample.dbc")).unwrap();
         let table = load_dbc_str(&content).unwrap();
-        assert_eq!(table.node_tx_ids("EngineECU"), vec![0x100]);
+        assert_eq!(table.node_tx_ids("EngineECU"), vec![0x100, 0x640]);
         assert_eq!(table.node_tx_ids("ChassisECU"), vec![0x200, 0x320]);
         assert!(table.node_tx_ids("Dashboard").is_empty());
         let rx = table.node_rx_signals("Dashboard");
@@ -1097,7 +1097,7 @@ BA_ "GenMsgCycleTime" BO_ 258 0;
             rx.iter()
                 .any(|((id, _), sig, _)| *id == 0x320 && sig == "BrakePressure")
         );
-        assert_eq!(rx.len(), 5, "Dashboard receives all five signals");
+        assert_eq!(rx.len(), 7, "Dashboard receives every sample signal");
         assert!(
             table
                 .node_rx_signals("ChassisECU")
